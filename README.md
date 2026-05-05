@@ -241,7 +241,14 @@ schema is available at `/openapi.json`.
 
 ## GitHub Action
 
-Use conda-presto directly in CI workflows:
+The action supports two modes: **local** (default) installs
+conda-presto on the runner via pixi and runs the CLI directly;
+**remote** calls a hosted conda-presto endpoint.
+
+### Local mode (default)
+
+No infrastructure required -- conda-presto is installed on the
+runner automatically:
 
 ```yaml
 - uses: jezdez/conda-presto@v1
@@ -249,7 +256,6 @@ Use conda-presto directly in CI workflows:
     command: solve
     file: environment.yml
     platforms: linux-64,osx-arm64
-    endpoint: ${{ vars.CONDA_PRESTO_URL }}
 ```
 
 Write a lockfile artifact:
@@ -262,13 +268,28 @@ Write a lockfile artifact:
     platforms: linux-64
     format: pixi-lock-v6
     output: pixi.lock
+```
+
+### Remote mode
+
+Calls a hosted conda-presto deployment (faster, shared cache, but
+requires infrastructure):
+
+```yaml
+- uses: jezdez/conda-presto@v1
+  with:
+    mode: remote
     endpoint: ${{ vars.CONDA_PRESTO_URL }}
+    command: solve
+    file: environment.yml
+    platforms: linux-64
 ```
 
 ### Inputs
 
 | Input | Required | Default | Description |
 |---|---|---|---|
+| `mode` | no | `local` | `local` (install + CLI) or `remote` (HTTP API) |
 | `command` | yes | `solve` | Action to perform |
 | `file` | no | | Path to an environment file |
 | `specs` | no | | Comma-separated package specs |
@@ -276,7 +297,7 @@ Write a lockfile artifact:
 | `platforms` | no | | Comma-separated target platforms |
 | `format` | no | | Output format name |
 | `output` | no | | Path to write the response body to |
-| `endpoint` | yes | | conda-presto base URL |
+| `endpoint` | remote only | | conda-presto base URL (required when `mode: remote`) |
 
 ### Outputs
 

@@ -1,10 +1,14 @@
 name: conda-presto
-description: Resolve conda environments via the conda-presto HTTP API
+description: Resolve conda environments locally via the CLI or remotely via the HTTP API
 branding:
   icon: package
   color: green
 
 inputs:
+  mode:
+    description: "Run mode: 'local' installs conda-presto on the runner, 'remote' calls a hosted endpoint"
+    required: false
+    default: local
   command:
     description: Action to perform (solve is the only supported command today)
     required: true
@@ -29,22 +33,35 @@ inputs:
     description: Path to write the response body to (omit for stdout)
     required: false
   endpoint:
-    description: conda-presto base URL (e.g. http://localhost:8000 or your deployment)
-    required: true
+    description: "conda-presto base URL (required when mode: remote)"
+    required: false
 
 outputs:
   result:
     description: The response body from conda-presto
-    value: ${{ steps.solve.outputs.result }}
+    value: ${{ steps.output.outputs.result }}
   solved:
     description: Whether the solve succeeded without errors ("true" or "false")
-    value: ${{ steps.solve.outputs.solved }}
+    value: ${{ steps.output.outputs.solved }}
 
 runs:
   using: composite
   steps:
-    - name: Resolve environment
-      id: solve
+    # ── Local mode: install pixi + conda-presto, run CLI ──
+    - name: Install pixi
+      if: inputs.mode == 'local'
+      uses: prefix-dev/setup-pixi@19eac09b398e3d0c747adc7921926a6d802df4da # v0.8.8
+      with:
+        run-install: false
+
+    - name: Install conda-presto
+      if: inputs.mode == 'local'
+      shell: bash
+      run: pixi global install --git https://github.com/jezdez/conda-presto.git
+
+    - name: Resolve (local)
+      id: local
+      if: inputs.mode == 'local'
       shell: bash
       env:
         INPUT_COMMAND: ${{ inputs.command }}
@@ -53,7 +70,67 @@ runs:
         INPUT_CHANNELS: ${{ inputs.channels }}
         INPUT_PLATFORMS: ${{ inputs.platforms }}
         INPUT_FORMAT: ${{ inputs.format }}
-        INPUT_OUTPUT: ${{ inputs.output }}
+      run: |
+        set -euo pipefail
+
+        if [[ "${INPUT_COMMAND}" != "solve" ]]; then
+          echo "::error::Unsupported command '${INPUT_COMMAND}'. Supported: solve"
+          exit 1
+        fi
+
+        args=()
+
+        if [[ -n "${INPUT_FILE:-}" ]]; then
+          if [[ ! -f "${INPUT_FILE}" ]]; then
+            echo "::error::File not found: ${INPUT_FILE}"
+            exit 1
+          fi
+          args+=(-f "${INPUT_FILE}")
+        fi
+
+        if [[ -n "${INPUT_CHANNELS:-}" ]]; then
+          IFS=',' read -ra channels <<< "${INPUT_CHANNELS}"
+          for ch in "${channels[@]}"; do args+=(-c "${ch}"); done
+        fi
+
+        if [[ -n "${INPUT_PLATFORMS:-}" ]]; then
+          IFS=',' read -ra platforms <<< "${INPUT_PLATFORMS}"
+          for pl in "${platforms[@]}"; do args+=(-p "${pl}"); done
+        fi
+
+        if [[ -n "${INPUT_FORMAT:-}" ]]; then
+          args+=(--format "${INPUT_FORMAT}")
+        fi
+
+        if [[ -n "${INPUT_SPECS:-}" ]]; then
+          IFS=',' read -ra specs <<< "${INPUT_SPECS}"
+          args+=("${specs[@]}")
+        fi
+
+        echo "::group::conda-presto solve (local)"
+        echo "args: ${args[*]}"
+        echo "::endgroup::"
+
+        tmpout="$(mktemp)"
+        if conda-presto "${args[@]}" > "${tmpout}" 2>&1; then
+          echo "exit_code=0" >> "$GITHUB_OUTPUT"
+        else
+          echo "exit_code=$?" >> "$GITHUB_OUTPUT"
+        fi
+        echo "tmpout=${tmpout}" >> "$GITHUB_OUTPUT"
+
+    # ── Remote mode: POST to hosted endpoint ──
+    - name: Resolve (remote)
+      id: remote
+      if: inputs.mode == 'remote'
+      shell: bash
+      env:
+        INPUT_COMMAND: ${{ inputs.command }}
+        INPUT_FILE: ${{ inputs.file }}
+        INPUT_SPECS: ${{ inputs.specs }}
+        INPUT_CHANNELS: ${{ inputs.channels }}
+        INPUT_PLATFORMS: ${{ inputs.platforms }}
+        INPUT_FORMAT: ${{ inputs.format }}
         INPUT_ENDPOINT: ${{ inputs.endpoint }}
       run: |
         set -euo pipefail
@@ -63,9 +140,13 @@ runs:
           exit 1
         fi
 
+        if [[ -z "${INPUT_ENDPOINT:-}" ]]; then
+          echo "::error::Input 'endpoint' is required when mode is 'remote'"
+          exit 1
+        fi
+
         url="${INPUT_ENDPOINT}/resolve"
 
-        # Build the JSON body
         body='{}'
 
         if [[ -n "${INPUT_FILE:-}" ]]; then
@@ -100,27 +181,65 @@ runs:
           url="${url}?format=${INPUT_FORMAT}"
         fi
 
-        echo "::group::conda-presto request"
+        echo "::group::conda-presto request (remote)"
         echo "URL: ${url}"
         echo "Body: $(echo "${body}" | jq -c '{specs, channels, platforms, filename}')"
         echo "::endgroup::"
 
-        response=$(curl -sS -w "\n%{http_code}" \
+        tmpout="$(mktemp)"
+        http_code=$(curl -sS -o "${tmpout}" -w "%{http_code}" \
           -X POST "${url}" \
           -H "Content-Type: application/json" \
           -d "${body}")
 
-        http_code=$(echo "${response}" | tail -1)
-        response_body=$(echo "${response}" | sed '$d')
-
         if [[ "${http_code}" -ge 400 ]]; then
+          echo "exit_code=1" >> "$GITHUB_OUTPUT"
           echo "::error::conda-presto returned HTTP ${http_code}"
-          echo "${response_body}" | jq . 2>/dev/null || echo "${response_body}"
+          cat "${tmpout}" | jq . 2>/dev/null || cat "${tmpout}"
+        else
+          echo "exit_code=0" >> "$GITHUB_OUTPUT"
+        fi
+        echo "tmpout=${tmpout}" >> "$GITHUB_OUTPUT"
+
+    # ── Shared output handling ──
+    - name: Process output
+      id: output
+      if: always()
+      shell: bash
+      env:
+        INPUT_MODE: ${{ inputs.mode }}
+        INPUT_FORMAT: ${{ inputs.format }}
+        INPUT_OUTPUT: ${{ inputs.output }}
+        LOCAL_EXIT: ${{ steps.local.outputs.exit_code }}
+        LOCAL_TMP: ${{ steps.local.outputs.tmpout }}
+        REMOTE_EXIT: ${{ steps.remote.outputs.exit_code }}
+        REMOTE_TMP: ${{ steps.remote.outputs.tmpout }}
+      run: |
+        set -euo pipefail
+
+        if [[ "${INPUT_MODE}" == "local" ]]; then
+          exit_code="${LOCAL_EXIT:-1}"
+          tmpout="${LOCAL_TMP:-}"
+        else
+          exit_code="${REMOTE_EXIT:-1}"
+          tmpout="${REMOTE_TMP:-}"
+        fi
+
+        if [[ -z "${tmpout}" || ! -f "${tmpout}" ]]; then
           echo "solved=false" >> "$GITHUB_OUTPUT"
+          echo "::error::No output produced"
           exit 1
         fi
 
-        # Check for per-platform errors in the default JSON response
+        response_body="$(cat "${tmpout}")"
+        rm -f "${tmpout}"
+
+        if [[ "${exit_code}" != "0" ]]; then
+          echo "solved=false" >> "$GITHUB_OUTPUT"
+          echo "${response_body}"
+          exit 1
+        fi
+
         solved="true"
         if [[ -z "${INPUT_FORMAT:-}" ]]; then
           error_count=$(echo "${response_body}" | jq '[.[] | select(.error != null)] | length' 2>/dev/null || echo "0")
@@ -139,10 +258,9 @@ runs:
           echo "${response_body}"
         fi
 
-        # Store result (truncate if too large for GH output)
         result_size=${#response_body}
         if [[ ${result_size} -gt 100000 ]]; then
-          echo "result=(output too large for action output, written to ${INPUT_OUTPUT:-stdout})" >> "$GITHUB_OUTPUT"
+          echo "result=(output too large, written to ${INPUT_OUTPUT:-stdout})" >> "$GITHUB_OUTPUT"
         else
           {
             echo "result<<CONDA_PRESTO_EOF"
