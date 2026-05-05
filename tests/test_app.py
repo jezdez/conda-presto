@@ -721,3 +721,21 @@ async def test_on_startup_initializes(monkeypatch):
     await on_startup(dummy_app)
     assert dummy_app.state.solver_limiter is not None
     assert len(warmup_calls) == 1
+
+
+def test_production_app_has_mcp_plugin():
+    from litestar_mcp import LitestarMCP
+
+    from conda_presto.app import app
+
+    mcp_plugins = [p for p in app.plugins if isinstance(p, LitestarMCP)]
+    assert len(mcp_plugins) == 1
+
+
+def test_resolve_handlers_have_mcp_tool_opt():
+    assert resolve_get.opt.get("mcp_tool") == "resolve"
+    assert resolve_post.opt.get("mcp_tool") == "resolve_file"
+
+
+def test_health_handler_has_mcp_resource_opt():
+    assert health.opt.get("mcp_resource") == "health"

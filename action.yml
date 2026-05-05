@@ -1,0 +1,152 @@
+name: conda-presto
+description: Resolve conda environments via the conda-presto HTTP API
+branding:
+  icon: package
+  color: green
+
+inputs:
+  command:
+    description: Action to perform (solve is the only supported command today)
+    required: true
+    default: solve
+  file:
+    description: Path to an environment file (environment.yml, pixi.lock, etc.)
+    required: false
+  specs:
+    description: Comma-separated package specs (e.g. "python=3.12,numpy")
+    required: false
+  channels:
+    description: Comma-separated channels (default conda-forge)
+    required: false
+    default: conda-forge
+  platforms:
+    description: Comma-separated target platforms (e.g. "linux-64,osx-arm64")
+    required: false
+  format:
+    description: Output format (explicit, environment-yaml, conda-lock-v1, pixi-lock-v6, etc.)
+    required: false
+  output:
+    description: Path to write the response body to (omit for stdout)
+    required: false
+  endpoint:
+    description: conda-presto base URL (e.g. http://localhost:8000 or your deployment)
+    required: true
+
+outputs:
+  result:
+    description: The response body from conda-presto
+    value: ${{ steps.solve.outputs.result }}
+  solved:
+    description: Whether the solve succeeded without errors ("true" or "false")
+    value: ${{ steps.solve.outputs.solved }}
+
+runs:
+  using: composite
+  steps:
+    - name: Resolve environment
+      id: solve
+      shell: bash
+      env:
+        INPUT_COMMAND: ${{ inputs.command }}
+        INPUT_FILE: ${{ inputs.file }}
+        INPUT_SPECS: ${{ inputs.specs }}
+        INPUT_CHANNELS: ${{ inputs.channels }}
+        INPUT_PLATFORMS: ${{ inputs.platforms }}
+        INPUT_FORMAT: ${{ inputs.format }}
+        INPUT_OUTPUT: ${{ inputs.output }}
+        INPUT_ENDPOINT: ${{ inputs.endpoint }}
+      run: |
+        set -euo pipefail
+
+        if [[ "${INPUT_COMMAND}" != "solve" ]]; then
+          echo "::error::Unsupported command '${INPUT_COMMAND}'. Supported: solve"
+          exit 1
+        fi
+
+        url="${INPUT_ENDPOINT}/resolve"
+
+        # Build the JSON body
+        body='{}'
+
+        if [[ -n "${INPUT_FILE:-}" ]]; then
+          if [[ ! -f "${INPUT_FILE}" ]]; then
+            echo "::error::File not found: ${INPUT_FILE}"
+            exit 1
+          fi
+          file_content="$(cat "${INPUT_FILE}")"
+          file_basename="$(basename "${INPUT_FILE}")"
+          body=$(echo "${body}" | jq \
+            --arg file "${file_content}" \
+            --arg filename "${file_basename}" \
+            '. + {file: $file, filename: $filename}')
+        fi
+
+        if [[ -n "${INPUT_SPECS:-}" ]]; then
+          specs_json=$(echo "${INPUT_SPECS}" | tr ',' '\n' | jq -R . | jq -s .)
+          body=$(echo "${body}" | jq --argjson specs "${specs_json}" '. + {specs: $specs}')
+        fi
+
+        if [[ -n "${INPUT_CHANNELS:-}" ]]; then
+          channels_json=$(echo "${INPUT_CHANNELS}" | tr ',' '\n' | jq -R . | jq -s .)
+          body=$(echo "${body}" | jq --argjson channels "${channels_json}" '. + {channels: $channels}')
+        fi
+
+        if [[ -n "${INPUT_PLATFORMS:-}" ]]; then
+          platforms_json=$(echo "${INPUT_PLATFORMS}" | tr ',' '\n' | jq -R . | jq -s .)
+          body=$(echo "${body}" | jq --argjson platforms "${platforms_json}" '. + {platforms: $platforms}')
+        fi
+
+        if [[ -n "${INPUT_FORMAT:-}" ]]; then
+          url="${url}?format=${INPUT_FORMAT}"
+        fi
+
+        echo "::group::conda-presto request"
+        echo "URL: ${url}"
+        echo "Body: $(echo "${body}" | jq -c '{specs, channels, platforms, filename}')"
+        echo "::endgroup::"
+
+        response=$(curl -sS -w "\n%{http_code}" \
+          -X POST "${url}" \
+          -H "Content-Type: application/json" \
+          -d "${body}")
+
+        http_code=$(echo "${response}" | tail -1)
+        response_body=$(echo "${response}" | sed '$d')
+
+        if [[ "${http_code}" -ge 400 ]]; then
+          echo "::error::conda-presto returned HTTP ${http_code}"
+          echo "${response_body}" | jq . 2>/dev/null || echo "${response_body}"
+          echo "solved=false" >> "$GITHUB_OUTPUT"
+          exit 1
+        fi
+
+        # Check for per-platform errors in the default JSON response
+        solved="true"
+        if [[ -z "${INPUT_FORMAT:-}" ]]; then
+          error_count=$(echo "${response_body}" | jq '[.[] | select(.error != null)] | length' 2>/dev/null || echo "0")
+          if [[ "${error_count}" -gt 0 ]]; then
+            solved="false"
+            echo "::warning::${error_count} platform(s) had solver errors"
+          fi
+        fi
+
+        echo "solved=${solved}" >> "$GITHUB_OUTPUT"
+
+        if [[ -n "${INPUT_OUTPUT:-}" ]]; then
+          echo "${response_body}" > "${INPUT_OUTPUT}"
+          echo "::notice::Output written to ${INPUT_OUTPUT}"
+        else
+          echo "${response_body}"
+        fi
+
+        # Store result (truncate if too large for GH output)
+        result_size=${#response_body}
+        if [[ ${result_size} -gt 100000 ]]; then
+          echo "result=(output too large for action output, written to ${INPUT_OUTPUT:-stdout})" >> "$GITHUB_OUTPUT"
+        else
+          {
+            echo "result<<CONDA_PRESTO_EOF"
+            echo "${response_body}"
+            echo "CONDA_PRESTO_EOF"
+          } >> "$GITHUB_OUTPUT"
+        fi

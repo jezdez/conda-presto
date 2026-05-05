@@ -7,6 +7,8 @@ Endpoints:
 - ``GET /health`` — returns ``{"status": "ok"}``
 - ``GET /`` — interactive Scalar API documentation
 - ``GET /openapi.json`` — OpenAPI 3.1 schema (auto-generated)
+- ``POST /mcp`` — MCP Streamable HTTP endpoint (via ``litestar-mcp``)
+- ``GET /.well-known/mcp-server.json`` — MCP server manifest
 
 Output formats:
     By default, ``/resolve`` returns a list of ``SolveResult`` objects
@@ -81,6 +83,7 @@ from litestar.status_codes import (
     HTTP_500_INTERNAL_SERVER_ERROR,
     HTTP_504_GATEWAY_TIMEOUT,
 )
+from litestar_mcp import LitestarMCP, MCPConfig
 
 from .config import (
     CORS_ORIGINS,
@@ -271,7 +274,21 @@ async def run_solve(
     return Response(body, media_type=media_type)
 
 
-@get("/resolve")
+@get(
+    "/resolve",
+    mcp_tool="resolve",
+    mcp_description=(
+        "Resolve conda package specs to fully pinned packages."
+    ),
+    mcp_when_to_use=(
+        "Use when you need to dry-run a conda solve "
+        "without installing anything."
+    ),
+    mcp_returns=(
+        "Resolved packages with versions, builds, "
+        "channels, and SHA256 hashes."
+    ),
+)
 async def resolve_get(
     request: Request,
     spec: list[str] | None = None,
@@ -306,7 +323,23 @@ async def resolve_get(
     )
 
 
-@post("/resolve", status_code=200)
+@post(
+    "/resolve",
+    status_code=200,
+    mcp_tool="resolve_file",
+    mcp_description=(
+        "Resolve a conda environment file or inline specs "
+        "to fully pinned packages."
+    ),
+    mcp_when_to_use=(
+        "Use when you have an environment.yml, pixi.lock, "
+        "or other environment file to resolve."
+    ),
+    mcp_returns=(
+        "Resolved packages or a rendered lockfile "
+        "in the requested format."
+    ),
+)
 async def resolve_post(
     request: Request,
     spec: list[str] | None = None,
@@ -431,7 +464,7 @@ async def resolve_post(
     )
 
 
-@get("/health")
+@get("/health", mcp_resource="health")
 async def health() -> dict[str, str]:
     """Liveness probe."""
     return {"status": "ok"}
@@ -465,6 +498,7 @@ if RATE_LIMIT:
 
 app = Litestar(
     route_handlers=[resolve_get, resolve_post, health],
+    plugins=[LitestarMCP(MCPConfig(name="conda-presto"))],
     openapi_config=OpenAPIConfig(
         title="conda-presto",
         version=pkg_version("conda-presto"),

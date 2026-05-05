@@ -239,6 +239,77 @@ Returns `{"status": "ok"}`.
 Interactive API documentation (Scalar UI). The raw OpenAPI 3.1
 schema is available at `/openapi.json`.
 
+## GitHub Action
+
+Use conda-presto directly in CI workflows:
+
+```yaml
+- uses: jezdez/conda-presto@v1
+  with:
+    command: solve
+    file: environment.yml
+    platforms: linux-64,osx-arm64
+    endpoint: ${{ vars.CONDA_PRESTO_URL }}
+```
+
+Write a lockfile artifact:
+
+```yaml
+- uses: jezdez/conda-presto@v1
+  with:
+    command: solve
+    file: environment.yml
+    platforms: linux-64
+    format: pixi-lock-v6
+    output: pixi.lock
+    endpoint: ${{ vars.CONDA_PRESTO_URL }}
+```
+
+### Inputs
+
+| Input | Required | Default | Description |
+|---|---|---|---|
+| `command` | yes | `solve` | Action to perform |
+| `file` | no | | Path to an environment file |
+| `specs` | no | | Comma-separated package specs |
+| `channels` | no | `conda-forge` | Comma-separated channels |
+| `platforms` | no | | Comma-separated target platforms |
+| `format` | no | | Output format name |
+| `output` | no | | Path to write the response body to |
+| `endpoint` | yes | | conda-presto base URL |
+
+### Outputs
+
+| Output | Description |
+|---|---|
+| `result` | The response body |
+| `solved` | `true` or `false` |
+
+## MCP (Model Context Protocol)
+
+When running with the `server` feature, conda-presto exposes an MCP
+endpoint at `/mcp` via [litestar-mcp](https://github.com/cofin/litestar-mcp).
+AI agents can discover and call the `resolve` and `resolve_file` tools
+through the standard MCP Streamable HTTP transport.
+
+```bash
+# The MCP endpoint is available alongside the REST API
+curl http://localhost:8000/.well-known/mcp-server.json
+```
+
+Available MCP tools:
+
+| Tool | Description |
+|---|---|
+| `resolve` | Resolve package specs to fully pinned packages (GET /resolve) |
+| `resolve_file` | Resolve an environment file or inline specs (POST /resolve) |
+
+Available MCP resources:
+
+| Resource | Description |
+|---|---|
+| `health` | Liveness probe (GET /health) |
+
 ## Docker
 
 Two image flavors are published to GitHub Container Registry on every
