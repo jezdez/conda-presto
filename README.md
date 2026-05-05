@@ -230,6 +230,15 @@ curl -sS --data-binary @environment.yml \
 conda env create -n demo -f pixi.lock
 ```
 
+### `GET /formats`
+
+Returns the list of registered output format names:
+
+```bash
+curl http://localhost:8000/formats
+# {"formats":["conda-lock-v1","environment-json","environment-yaml","explicit",...]}
+```
+
 ### `GET /health`
 
 Returns `{"status": "ok"}`.
@@ -329,6 +338,7 @@ Available MCP resources:
 
 | Resource | Description |
 |---|---|
+| `formats` | List supported output format names (GET /formats) |
 | `health` | Liveness probe (GET /health) |
 
 ## Docker

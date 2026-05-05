@@ -11,6 +11,7 @@ from litestar.openapi import OpenAPIConfig
 
 import conda_presto.app as app_module
 from conda_presto.app import (
+    formats,
     health,
     on_shutdown,
     on_startup,
@@ -22,7 +23,7 @@ from conda_presto.app import (
 @pytest.fixture()
 def test_app():
     app = Litestar(
-        route_handlers=[resolve_get, resolve_post, health],
+        route_handlers=[resolve_get, resolve_post, formats, health],
         openapi_config=OpenAPIConfig(
             title="conda-presto",
             version="test",
@@ -739,3 +740,18 @@ def test_resolve_handlers_have_mcp_tool_opt():
 
 def test_health_handler_has_mcp_resource_opt():
     assert health.opt.get("mcp_resource") == "health"
+
+
+def test_formats_handler_has_mcp_resource_opt():
+    assert formats.opt.get("mcp_resource") == "formats"
+
+
+@pytest.mark.anyio
+async def test_formats_endpoint(client):
+    resp = await client.get("/formats")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert "formats" in data
+    assert isinstance(data["formats"], list)
+    assert "explicit" in data["formats"]
+    assert "environment-yaml" in data["formats"]

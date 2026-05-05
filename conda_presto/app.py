@@ -4,6 +4,7 @@ Endpoints:
 
 - ``GET /resolve`` — resolve specs via query params
 - ``POST /resolve`` — resolve specs and/or file content via JSON body
+- ``GET /formats`` — list registered output format names
 - ``GET /health`` — returns ``{"status": "ok"}``
 - ``GET /`` — interactive Scalar API documentation
 - ``GET /openapi.json`` — OpenAPI 3.1 schema (auto-generated)
@@ -98,7 +99,7 @@ from .config import (
     SOLVE_TIMEOUT_S,
 )
 from .exceptions import UnknownFormatError
-from .exporter import render_envs
+from .exporter import available_formats, render_envs
 from .resolve import (
     shutdown_process_pool,
     solve,
@@ -491,6 +492,19 @@ async def resolve_post(
     )
 
 
+@get(
+    "/formats",
+    mcp_resource="formats",
+    mcp_description=(
+        "List all supported output format names for "
+        "the ?format= query parameter."
+    ),
+)
+async def formats() -> dict[str, list[str]]:
+    """Return the list of registered exporter format names."""
+    return {"formats": available_formats()}
+
+
 @get("/health", mcp_resource="health")
 async def health() -> dict[str, str]:
     """Liveness probe."""
@@ -524,7 +538,7 @@ if RATE_LIMIT:
     )
 
 app = Litestar(
-    route_handlers=[resolve_get, resolve_post, health],
+    route_handlers=[resolve_get, resolve_post, formats, health],
     plugins=[LitestarMCP(MCPConfig(name="conda-presto"))],
     openapi_config=OpenAPIConfig(
         title="conda-presto",
