@@ -288,6 +288,16 @@ async def run_solve(
         "Resolved packages with versions, builds, "
         "channels, and SHA256 hashes."
     ),
+    mcp_agent_instructions=(
+        "Pass specs as repeated ?spec= query params "
+        "(e.g. ?spec=python=3.12&spec=numpy). "
+        "Channels default to conda-forge. "
+        "Use ?platform= to solve for specific platforms "
+        "(linux-64, osx-arm64, win-64, etc.); omit for native. "
+        "Use ?format= to get output in a specific format: "
+        "explicit, environment-yaml, environment-json, "
+        "conda-lock-v1, pixi-lock-v6, or requirements."
+    ),
 )
 async def resolve_get(
     request: Request,
@@ -338,6 +348,23 @@ async def resolve_get(
     mcp_returns=(
         "Resolved packages or a rendered lockfile "
         "in the requested format."
+    ),
+    mcp_agent_instructions=(
+        "POST a JSON body with: "
+        "specs (list of strings), "
+        "file (string content of an environment file), "
+        "filename (e.g. 'environment.yml' or 'pixi.lock' — "
+        "controls which parser is used), "
+        "channels (list, default conda-forge), "
+        "platforms (list, e.g. ['linux-64', 'osx-arm64']). "
+        "Or POST the raw file as the body with "
+        "Content-Type: application/yaml. "
+        "Use ?format= for output format: "
+        "explicit, environment-yaml, environment-json, "
+        "conda-lock-v1, pixi-lock-v6, or requirements. "
+        "Supported input formats: environment.yml, "
+        "pyproject.toml, requirements.txt, pixi.lock, "
+        "conda-lock.yml, explicit lockfiles."
     ),
 )
 async def resolve_post(
