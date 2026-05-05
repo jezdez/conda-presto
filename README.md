@@ -239,6 +239,35 @@ curl http://localhost:8000/formats
 # {"formats":["conda-lock-v1","environment-json","environment-yaml","explicit",...]}
 ```
 
+### `GET /platforms`
+
+Returns the list of known conda platform subdirs:
+
+```bash
+curl http://localhost:8000/platforms
+# {"platforms":["linux-64","osx-arm64","osx-64","win-64",...]}
+```
+
+### `GET /version`
+
+Returns version info for conda-presto and its key dependencies:
+
+```bash
+curl http://localhost:8000/version
+# {"conda-presto":"0.4.0","conda":"26.3.2","conda-rattler-solver":"0.0.6",...}
+```
+
+### `POST /parse`
+
+Parse an environment file and extract its specs and channels without
+solving:
+
+```bash
+curl -sS http://localhost:8000/parse \
+  --json '{"file":"channels:\n  - conda-forge\ndependencies:\n  - numpy\n","filename":"environment.yml"}'
+# {"specs":["numpy"],"channels":["conda-forge"]}
+```
+
 ### `GET /health`
 
 Returns `{"status": "ok"}`.
@@ -333,12 +362,15 @@ Available MCP tools:
 |---|---|
 | `resolve` | Resolve package specs to fully pinned packages (GET /resolve) |
 | `resolve_file` | Resolve an environment file or inline specs (POST /resolve) |
+| `parse_file` | Extract specs and channels from a file without solving (POST /parse) |
 
 Available MCP resources:
 
 | Resource | Description |
 |---|---|
 | `formats` | List supported output format names (GET /formats) |
+| `platforms` | List known conda platform subdirs (GET /platforms) |
+| `version` | Version info for conda-presto and dependencies (GET /version) |
 | `health` | Liveness probe (GET /health) |
 
 ## Docker

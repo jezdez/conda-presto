@@ -46,6 +46,10 @@ Current tools/resources:
 |---|---|---|---|
 | `resolve` | tool | `GET /resolve` | Resolve specs to pinned packages |
 | `resolve_file` | tool | `POST /resolve` | Resolve an environment file or inline specs |
+| `parse_file` | tool | `POST /parse` | Extract specs/channels from a file without solving |
+| `formats` | resource | `GET /formats` | List supported output format names |
+| `platforms` | resource | `GET /platforms` | List known conda platform subdirs |
+| `version` | resource | `GET /version` | Version info for conda-presto and dependencies |
 | `health` | resource | `GET /health` | Liveness probe |
 
 New endpoints (lint, diff, transcode, etc.) automatically become

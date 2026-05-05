@@ -15,15 +15,26 @@ from conda_presto.app import (
     health,
     on_shutdown,
     on_startup,
+    parse,
+    platforms,
     resolve_get,
     resolve_post,
+    version,
 )
 
 
 @pytest.fixture()
 def test_app():
     app = Litestar(
-        route_handlers=[resolve_get, resolve_post, formats, health],
+        route_handlers=[
+            resolve_get,
+            resolve_post,
+            formats,
+            platforms,
+            version,
+            parse,
+            health,
+        ],
         openapi_config=OpenAPIConfig(
             title="conda-presto",
             version="test",
@@ -755,3 +766,76 @@ async def test_formats_endpoint(client):
     assert isinstance(data["formats"], list)
     assert "explicit" in data["formats"]
     assert "environment-yaml" in data["formats"]
+
+
+@pytest.mark.anyio
+async def test_platforms_endpoint(client):
+    resp = await client.get("/platforms")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert "platforms" in data
+    assert isinstance(data["platforms"], list)
+    assert "linux-64" in data["platforms"]
+    assert "osx-arm64" in data["platforms"]
+    assert "win-64" in data["platforms"]
+    assert data["platforms"] == sorted(data["platforms"])
+
+
+def test_platforms_handler_has_mcp_resource_opt():
+    assert platforms.opt.get("mcp_resource") == "platforms"
+
+
+@pytest.mark.anyio
+async def test_version_endpoint(client):
+    resp = await client.get("/version")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert "conda-presto" in data
+    assert "conda" in data
+
+
+def test_version_handler_has_mcp_resource_opt():
+    assert version.opt.get("mcp_resource") == "version"
+
+
+@pytest.mark.anyio
+async def test_parse_endpoint(client):
+    yml = (
+        "name: test\n"
+        "channels:\n"
+        "  - conda-forge\n"
+        "dependencies:\n"
+        "  - python=3.12\n"
+        "  - numpy\n"
+    )
+    resp = await client.post(
+        "/parse",
+        json={"file": yml, "filename": "environment.yml"},
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert "specs" in data
+    assert "channels" in data
+    assert "python=3.12" in data["specs"]
+    assert "numpy" in data["specs"]
+    assert "conda-forge" in data["channels"]
+
+
+@pytest.mark.anyio
+async def test_parse_endpoint_no_file(client):
+    resp = await client.post("/parse", json={})
+    assert resp.status_code == 400
+
+
+@pytest.mark.anyio
+async def test_parse_endpoint_empty_body(client):
+    resp = await client.post(
+        "/parse",
+        content=b"",
+        headers={"content-type": "application/json"},
+    )
+    assert resp.status_code == 400
+
+
+def test_parse_handler_has_mcp_tool_opt():
+    assert parse.opt.get("mcp_tool") == "parse_file"
