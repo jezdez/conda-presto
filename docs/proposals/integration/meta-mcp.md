@@ -3,7 +3,7 @@
 Status: native MCP implemented; conda-meta-mcp integration not yet started
 Owner: TBD
 Filed: 2026-04-16
-Depends on: [transcoder](01-transcoder.md) (optional), [diff](11-diff.md) (optional).
+Depends on: [transcoder](../capability/transcoder.md) (optional), [diff](../capability/diff.md) (optional).
 
 ## TL;DR
 
@@ -87,7 +87,7 @@ async def resolve(
     """
 ```
 
-### `transcode` (after [transcoder](01-transcoder.md) lands)
+### `transcode` (after [transcoder](../capability/transcoder.md) lands)
 
 ```python
 @register_tool
@@ -106,7 +106,7 @@ async def transcode(
     """
 ```
 
-### `diff` (after [diff](11-diff.md) lands)
+### `diff` (after [diff](../capability/diff.md) lands)
 
 ```python
 @register_tool
@@ -190,7 +190,7 @@ conda-meta-mcp wrappers (future):
 ## Out of scope
 
 - Bidirectional integration (conda-presto calling conda-meta-mcp
-  for spec validation suggestions). The [preflight](13-preflight.md) `/preflight`
+  for spec validation suggestions). The [preflight](../capability/preflight.md) `/preflight`
   endpoint could call conda-meta-mcp's `package_search` for
   "did you mean" — interesting cross-link, but defer.
 - Multi-source aggregation (conda-meta-mcp wrapping several

@@ -3,8 +3,8 @@
 Status: proposal, not yet implemented
 Owner: TBD
 Filed: 2026-04-16
-Depends on: [permalink](04-permalink.md), [attestation](06-attestation.md).
-Companion plans: [receipt](05-receipt.md), [cep-solve-attestation](14-cep-solve-attestation.md) (CEP draft for the
+Depends on: [permalink](../integration/permalink.md), [attestation](attestation.md).
+Companion plans: [receipt](receipt.md), [cep-solve-attestation](cep-solve-attestation.md) (CEP draft for the
 attestation predicate).
 Inspired directly by [conda/ceps#142] (Wolf Vollprecht / prefix.dev)
 — "CEP about serving sigstore attestations in Conda repositories".
@@ -20,7 +20,7 @@ JSON array of Sigstore bundles, plus an `attestations` SHA256 in
 `repodata.json` for change detection.
 
 We need the **mirror** of that convention for the **solve** world:
-how a service that produces *solve* attestations ([attestation](06-attestation.md)) serves
+how a service that produces *solve* attestations ([attestation](attestation.md)) serves
 them next to the *lockfile* itself, so that any client — pixi,
 conda, `cosign`, `gh attestation verify`, a custom CI script — can
 fetch and verify them with the same workflow they already use for
@@ -31,8 +31,8 @@ it for upstream submission as a follow-on CEP.
 
 ## Motivation
 
-- **Closes the missing seam in the trust track.** [receipt](05-receipt.md) produces
-  receipts. [attestation](06-attestation.md) produces attestations. [cep-solve-attestation](14-cep-solve-attestation.md) standardizes the
+- **Closes the missing seam in the trust track.** [receipt](receipt.md) produces
+  receipts. [attestation](attestation.md) produces attestations. [cep-solve-attestation](cep-solve-attestation.md) standardizes the
   predicate. Nothing yet says *where to put the attestation*.
   Without that, every consumer reinvents the discovery convention.
 - **Reuses an in-flight community decision.** CEP-PR-#142 has
@@ -76,17 +76,17 @@ The same shape, mapped to the lockfile world:
 | Format                 | JSON array of Sigstore bundles (CEP-27 / CEP-PR-#142 compatible)   |
 | Empty case (200)       | `[]` returned, not 404                                             |
 | 404 meaning            | The lockfile itself does not exist                                 |
-| Change detection       | `attestations_sha256` field on [permalink](04-permalink.md) metadata           |
-| Verification           | Per [cep-solve-attestation](14-cep-solve-attestation.md) predicate; `subject` matches lockfile sha256           |
+| Change detection       | `attestations_sha256` field on [permalink](../integration/permalink.md) metadata           |
+| Verification           | Per [cep-solve-attestation](cep-solve-attestation.md) predicate; `subject` matches lockfile sha256           |
 | Client config          | `enabled` / `require` / `trusted_identities` (mirror CEP-PR-#142)  |
 | Subject scope          | One bundle per produced lockfile artifact (per platform)           |
 
 ## API surface
 
-### Sidecar emission (next to [permalink](04-permalink.md) permalinks)
+### Sidecar emission (next to [permalink](../integration/permalink.md) permalinks)
 
-When [permalink](04-permalink.md) permalinks are enabled and a solve has an attestation
-([attestation](06-attestation.md)), the permalink endpoint also exposes a `.sigs` sidecar:
+When [permalink](../integration/permalink.md) permalinks are enabled and a solve has an attestation
+([attestation](attestation.md)), the permalink endpoint also exposes a `.sigs` sidecar:
 
 ```
 GET /r/<sha256>                  → 200 OK  body: <lockfile>
@@ -110,7 +110,7 @@ GET /r/<sha256>.sigs             → 404 Not Found
 ### Sidecar emission (inline with `/resolve`)
 
 For solves served directly (no permalink), the attestation is
-returned alongside the lockfile (existing [attestation](06-attestation.md) behavior):
+returned alongside the lockfile (existing [attestation](attestation.md) behavior):
 
 ```
 POST /resolve?attestation=true&format=conda-lock-v1
@@ -120,7 +120,7 @@ POST /resolve?attestation=true&format=conda-lock-v1
     body: <lockfile>
 ```
 
-When [permalink](04-permalink.md) is enabled, the same response also includes a
+When [permalink](../integration/permalink.md) is enabled, the same response also includes a
 `Location` (or `Link`) header pointing at the canonical permalink
 sidecar, so callers that prefer the standardized fetch path can
 use it:
@@ -131,11 +131,11 @@ Link: </r/<sha256>.sigs>; rel="attestations"
 
 ### Permalink metadata (the repodata equivalent)
 
-[permalink](04-permalink.md) permalinks already carry metadata. Add an
+[permalink](../integration/permalink.md) permalinks already carry metadata. Add an
 `attestations_sha256` field that mirrors CEP-PR-#142's
 `repodata.attestations`:
 
-```json
+```text
 GET /r/<sha256>/meta
 {
   "lockfile_sha256": "abc...",
@@ -147,7 +147,7 @@ GET /r/<sha256>/meta
 
 Mirrors / caches use `attestations_sha256` to detect when the
 attestation set for a permalink has changed (e.g. an additional
-attestation was added post-hoc via `POST /attest`, [attestation](06-attestation.md)).
+attestation was added post-hoc via `POST /attest`, [attestation](attestation.md)).
 
 ### Client configuration (mirroring CEP-PR-#142)
 
@@ -170,7 +170,7 @@ CEP-PR-#142 config understands ours.
 
 ### Sidecar format
 
-```json
+```text
 [
   {
     "mediaType": "application/vnd.dev.sigstore.bundle.v0.3+json",
@@ -182,7 +182,7 @@ CEP-PR-#142 config understands ours.
 
 Each element is a valid Sigstore Bundle (v0.2 or v0.3, per
 CEP-PR-#142's recommendation). The bundle's enclosed DSSE envelope
-contains the in-toto Statement v1 with [cep-solve-attestation](14-cep-solve-attestation.md)'s predicate type
+contains the in-toto Statement v1 with [cep-solve-attestation](cep-solve-attestation.md)'s predicate type
 (`https://schemas.conda.org/attestations-solve-1.schema.json`).
 
 ## Why a *separate* serving spec for solves (not just CEP-PR-#142)
@@ -206,12 +206,12 @@ upstream the CEP second.
 
 | Plan          | Composition                                                                 |
 |---------------|-----------------------------------------------------------------------------|
-| [permalink](04-permalink.md) | Primary anchor: `/r/<sha256>.sigs` is the canonical sidecar URL.         |
-| [attestation](06-attestation.md) | Generates the bundles that go into the sidecar.                       |
-| [cep-solve-attestation](14-cep-solve-attestation.md) CEP draft | The predicate type used inside the bundles.                             |
-| [receipt](05-receipt.md) | Independent. Receipts use a different (HMAC) trust path; no sidecar.       |
-| [github-action](09-github-action.md) GH Action | The action's "verify-on-CI" step fetches the sidecar from the upstream solver and verifies per CEP-PR-#142 client workflow. |
-| [meta-mcp](10-meta-mcp.md) MCP    | New tool `fetch_solve_attestations(permalink)` returning the sidecar contents. |
+| [permalink](../integration/permalink.md) | Primary anchor: `/r/<sha256>.sigs` is the canonical sidecar URL.         |
+| [attestation](attestation.md) | Generates the bundles that go into the sidecar.                       |
+| [cep-solve-attestation](cep-solve-attestation.md) CEP draft | The predicate type used inside the bundles.                             |
+| [receipt](receipt.md) | Independent. Receipts use a different (HMAC) trust path; no sidecar.       |
+| [github-action](../integration/github-action.md) GH Action | The action's "verify-on-CI" step fetches the sidecar from the upstream solver and verifies per CEP-PR-#142 client workflow. |
+| [meta-mcp](../integration/meta-mcp.md) MCP    | New tool `fetch_solve_attestations(permalink)` returning the sidecar contents. |
 
 ## Implementation outline
 
@@ -230,10 +230,10 @@ def sidecar_sha256(body: bytes) -> str:
     return hashlib.sha256(body).hexdigest()
 ```
 
-### 2. Permalink storage extension ([permalink](04-permalink.md) prerequisite)
+### 2. Permalink storage extension ([permalink](../integration/permalink.md) prerequisite)
 
 Permalink storage gains a sidecar slot per stored lockfile. Empty
-by default; populated by [attestation](06-attestation.md) when an attestation exists or is
+by default; populated by [attestation](attestation.md) when an attestation exists or is
 added post-hoc.
 
 ### 3. Litestar route additions
@@ -290,7 +290,7 @@ Provide a verification example using `cosign verify-blob` and
 - **Q1: Does the sidecar live with the permalink, or also next to
   every served lockfile (including non-permalink solves)?** v1
   proposal: only at the permalink path; non-permalink solves return
-  the bundle inline (header) as [attestation](06-attestation.md) specifies. Simplifies
+  the bundle inline (header) as [attestation](attestation.md) specifies. Simplifies
   semantics; permalinks become the canonical place for sigstore
   flows.
 - **Q2: Should lockfile *consumers* (e.g. pixi, conda) auto-discover
@@ -317,11 +317,11 @@ Provide a verification example using `cosign verify-blob` and
 
 ## Effort
 
-- Sidecar helpers + storage slot: ~½ day (after [permalink](04-permalink.md) lands)
+- Sidecar helpers + storage slot: ~½ day (after [permalink](../integration/permalink.md) lands)
 - `GET /r/<sha>.sigs` + `attestations_sha256` in meta: ~½ day
 - `POST /r/<sha>.sigs` post-hoc upload: ~1 day
 - Tests + docs + verification examples: ~1 day
-- Total: ~3 days *after* [permalink](04-permalink.md) and [attestation](06-attestation.md) land
+- Total: ~3 days *after* [permalink](../integration/permalink.md) and [attestation](attestation.md) land
 
 ## Future / out of scope
 
@@ -343,6 +343,6 @@ Provide a verification example using `cosign verify-blob` and
   the attestation schema we conform to.
 - [conda/ceps#142](https://github.com/conda/ceps/pull/142) — the
   channel-side serving convention this plan mirrors.
-- [permalink](04-permalink.md) — the storage anchor for sidecars.
-- [attestation](06-attestation.md) — the producer.
-- [cep-solve-attestation](14-cep-solve-attestation.md) CEP draft — the predicate type.
+- [permalink](../integration/permalink.md) — the storage anchor for sidecars.
+- [attestation](attestation.md) — the producer.
+- [cep-solve-attestation](cep-solve-attestation.md) CEP draft — the predicate type.
