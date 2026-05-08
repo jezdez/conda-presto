@@ -1,6 +1,6 @@
 # lint: `/lint` — environment-file linting without solving
 
-Status: proposal, not yet implemented
+Status: implemented (PR #28)
 Owner: TBD
 Filed: 2026-04-16
 Depends on: nothing ([preflight](preflight.md) is the closest neighbor;
@@ -143,3 +143,12 @@ conda presto lint --ignore PYP001,FMT002 environment.yml
 - [github-action](../integration/github-action.md) (GitHub Action) — primary consumer
 - [why-not](why-not.md) (`/why-not`) — sister "fast helper endpoint"
 - [admit](../trust/admit.md) (`/admit`) — shares the `Finding` output shape
+
+## Changelog
+
+- 2026-05-08: Implemented v1 with 10 rules (PIN001, PIN002, DUP001,
+  CHN001, CHN002, ORD001, FMT001, FMT002, ENV001, ENV002). HTTP
+  endpoint at `POST /lint` with `?ignore=` and `?severity=` filters.
+  MCP tool metadata included. 40 unit tests + 9 endpoint tests.
+  Deferred: PYP001, PLT001, DUP002, PIN003, auto-fix endpoint.
+- 2026-04-16: Initial proposal filed.

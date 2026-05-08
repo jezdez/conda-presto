@@ -7,6 +7,7 @@ Endpoints:
 - ``GET /formats`` — list registered output format names
 - ``GET /platforms`` — list known conda platform subdirs
 - ``GET /version`` — version info for conda-presto and dependencies
+- ``POST /lint`` — lint an environment file for common issues
 - ``POST /parse`` — extract specs/channels from a file without solving
 - ``GET /health`` — returns ``{"status": "ok"}``
 - ``GET /`` — interactive Scalar API documentation
@@ -593,6 +594,117 @@ async def parse(request: Request) -> Response:
     return Response({"specs": specs, "channels": channels})
 
 
+@post(
+    "/lint",
+    status_code=200,
+    mcp_tool="lint",
+    mcp_description=(
+        "Lint a conda environment file for common issues "
+        "without solving or making network calls."
+    ),
+    mcp_when_to_use=(
+        "Use to check an environment.yml for pinning issues, "
+        "duplicate packages, formatting problems, or missing "
+        "fields before solving."
+    ),
+    mcp_returns=(
+        "A list of findings with severity, line numbers, "
+        "machine-readable codes, and optional fix suggestions."
+    ),
+    mcp_agent_instructions=(
+        "POST a JSON body with: "
+        "file (string content of an environment.yml), "
+        "filename (optional, e.g. 'environment.yml'). "
+        "Optional query params: "
+        "?ignore=PIN001,FMT002 to skip specific rules, "
+        "?severity=warning to filter to >= severity. "
+        "Returns {findings: [...], summary: {errors, warnings, info}}."
+    ),
+)
+async def lint_endpoint(
+    request: Request,
+    ignore: str | None = None,
+    severity: str | None = None,
+) -> Response:
+    """Lint an environment file for common issues.
+
+    Pure-function check: no solver, no network, no conda imports.
+    Sub-50 ms for typical files.
+
+    Accepts the same JSON body format as ``/parse``
+    (``{"file": "...", "filename": "..."}``) or a raw file body
+    with an appropriate ``Content-Type``.
+
+    Pass ``?ignore=PIN001,FMT002`` to skip specific rules.
+    Pass ``?severity=warning`` to filter findings to that level
+    or higher (``info`` < ``warning`` < ``error``).
+    """
+    from .lint import lint
+
+    content_type = (
+        request.headers.get("content-type", "")
+        .split(";")[0]
+        .strip()
+        .lower()
+    )
+
+    file_content: str | None = None
+    file_name: str | None = None
+
+    if content_type in ("", "application/json"):
+        body = await request.body()
+        if body:
+            try:
+                data = msgspec.json.decode(body, type=ResolveRequest)
+            except (msgspec.DecodeError, msgspec.ValidationError) as exc:
+                return Response(
+                    {"error": f"Invalid JSON body: {exc}"},
+                    status_code=HTTP_400_BAD_REQUEST,
+                )
+            file_content = data.file
+            file_name = data.filename
+        else:
+            return Response(
+                {"error": "Provide a JSON body with 'file' content"},
+                status_code=HTTP_400_BAD_REQUEST,
+            )
+    elif content_type in RAW_CONTENT_TYPE_EXTENSIONS:
+        body = await request.body()
+        try:
+            file_content = body.decode("utf-8")
+        except UnicodeDecodeError as exc:
+            return Response(
+                {"error": f"Body is not valid UTF-8: {exc}"},
+                status_code=HTTP_400_BAD_REQUEST,
+            )
+        file_name = f"environment{RAW_CONTENT_TYPE_EXTENSIONS[content_type]}"
+    else:
+        return Response(
+            {"error": f"Unsupported Content-Type {content_type!r}"},
+            status_code=HTTP_400_BAD_REQUEST,
+        )
+
+    if not file_content:
+        return Response(
+            {"error": "Field 'file' is required"},
+            status_code=HTTP_400_BAD_REQUEST,
+        )
+
+    ignore_set = (
+        {c.strip() for c in ignore.split(",") if c.strip()}
+        if ignore
+        else None
+    )
+
+    result = lint(
+        file_content,
+        filename=file_name,
+        ignore=ignore_set,
+        min_severity=severity,
+    )
+    return Response(result)
+
+
 @get("/health", mcp_resource="health")
 async def health() -> dict[str, str]:
     """Liveness probe."""
@@ -633,6 +745,7 @@ app = Litestar(
         platforms,
         version,
         parse,
+        lint_endpoint,
         health,
     ],
     plugins=[LitestarMCP(MCPConfig(name="conda-presto"))],
