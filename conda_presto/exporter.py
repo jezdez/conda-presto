@@ -23,6 +23,48 @@ from conda.plugins.types import CondaEnvironmentExporter
 
 from .exceptions import UnknownFormatError
 
+EnvironmentFormat = None  # resolved lazily to avoid import cost at startup
+
+
+def _get_environment_format():
+    global EnvironmentFormat
+    if EnvironmentFormat is None:
+        from conda.plugins.types import EnvironmentFormat as _EF
+
+        EnvironmentFormat = _EF
+    return EnvironmentFormat
+
+
+def output_is_lockfile(format_name: str) -> bool:
+    """Return True if the named exporter produces lockfile-format output.
+
+    Used by the transcoder path to decide whether a solve can be
+    skipped (lockfile in, lockfile out).  Returns False for unknown
+    format names rather than raising, so the caller can fall through
+    to the normal solve path (which will raise on its own).
+    """
+    EF = _get_environment_format()
+    try:
+        exporter = (
+            context.plugin_manager.get_environment_exporter_by_format(
+                format_name
+            )
+        )
+    except Exception:
+        return False
+    return exporter.environment_format == EF.lockfile
+
+
+def input_is_lockfile(specifier: object) -> bool:
+    """Return True if a specifier plugin parses lockfile-format input.
+
+    *specifier* is a ``CondaEnvironmentSpecifier`` instance (the
+    plugin object, not the spec).
+    """
+    EF = _get_environment_format()
+    return getattr(specifier, "environment_format", None) == EF.lockfile
+
+
 EXTENSION_MEDIA_TYPES: dict[str, str] = {
     ".yml": "application/yaml",
     ".yaml": "application/yaml",

@@ -102,7 +102,12 @@ from .config import (
     SOLVE_TIMEOUT_S,
 )
 from .exceptions import UnknownFormatError
-from .exporter import available_formats, render_envs
+from .exporter import (
+    available_formats,
+    input_is_lockfile,
+    output_is_lockfile,
+    render_envs,
+)
 from .resolve import (
     shutdown_process_pool,
     solve,
@@ -143,15 +148,32 @@ class ResolveRequest:
     platforms: list[str] | None = None
 
 
+@dataclass
+class ParsedInput:
+    """Result of parsing a file through conda's env spec plugin system.
+
+    Carries the parsed ``Environment``, the specifier plugin (for
+    ``environment_format`` inspection), and the extracted specs and
+    channels.  The transcoder path uses ``env`` and ``specifier``
+    to skip the solver when both input and output are lockfiles.
+    """
+
+    env: object  # conda.models.environment.Environment
+    specifier: object  # conda.plugins.types.CondaEnvironmentSpecifier
+    specs: list[str]
+    channels: list[str]
+
+
 def parse_file_content(
     content: str,
     filename: str | None = None,
-) -> tuple[list[str], list[str]]:
+) -> ParsedInput:
     """Parse file content through conda's env spec plugin system.
 
     Writes *content* to a temp file and runs it through
     ``detect_environment_specifier``, the same codepath the CLI uses.
-    Returns ``(specs, channels)``.
+    Returns a :class:`ParsedInput` with the parsed environment,
+    specifier plugin, specs, and channels.
 
     The *filename* controls which parser conda selects (via extension).
     Only extensions in ``ALLOWED_EXTENSIONS`` are accepted.  Directory
@@ -160,7 +182,8 @@ def parse_file_content(
     The tempfile is kept alive for the entire duration of attribute
     access on the parsed environment, since some env-spec plugins read
     the file lazily on ``requested_packages`` / ``config.channels``
-    access.
+    access.  We eagerly materialize ``explicit_packages`` into a list
+    to ensure the data survives tempfile cleanup.
     """
     filename = os.path.basename(filename or "environment.yml")
     ext = os.path.splitext(filename)[1].lower()
@@ -190,7 +213,16 @@ def parse_file_content(
         channels: list[str] = []
         if env.config and env.config.channels:
             channels.extend(env.config.channels)
-    return specs, channels
+
+        if hasattr(env, "explicit_packages") and env.explicit_packages:
+            env.explicit_packages = list(env.explicit_packages)
+
+    return ParsedInput(
+        env=env,
+        specifier=spec_plugin,
+        specs=specs,
+        channels=channels,
+    )
 
 
 def validate_caps(
@@ -218,6 +250,39 @@ def validate_caps(
             status_code=HTTP_400_BAD_REQUEST,
         )
     return None
+
+
+SOLVE_MODES = ("auto", "always", "never")
+
+
+def can_transcode(
+    parsed: ParsedInput | None,
+    format_name: str | None,
+    platforms: list[str],
+) -> bool:
+    """Return True if the request can skip the solver entirely.
+
+    The fast path applies when the input is a lockfile, the output is
+    a lockfile format, and the requested platforms are a subset of
+    what the parsed environment already covers.
+    """
+    if parsed is None or format_name is None:
+        return False
+    if not input_is_lockfile(parsed.specifier):
+        return False
+    if not output_is_lockfile(format_name):
+        return False
+    if platforms:
+        env_platforms = set()
+        env = parsed.env
+        if hasattr(env, "platform") and env.platform:
+            env_platforms.add(env.platform)
+        for attr in ("platforms", "subdirs"):
+            for p in getattr(env, attr, None) or ():
+                env_platforms.add(p)
+        if not set(platforms) <= env_platforms:
+            return False
+    return True
 
 
 async def run_solve(
@@ -309,13 +374,31 @@ async def resolve_get(
     channel: list[str] | None = None,
     platform: list[str] | None = None,
     format: str | None = None,
+    solve: str | None = None,
 ) -> Response:
     """Resolve package specs via query params.
 
     Pass ``?format=<name>`` to route the response through conda's
     exporter plugin registry (e.g. ``explicit``, ``environment-yaml``,
     ``conda-lock-v1``).
+
+    Pass ``?solve=auto|always|never`` to control solver behaviour.
+    ``auto`` (default) skips the solver when both input and output are
+    lockfile formats.  ``always`` forces a solve.  ``never`` returns
+    400 if a solve would be needed.
     """
+    solve_mode = solve or "auto"
+    if solve_mode not in SOLVE_MODES:
+        return Response(
+            {
+                "error": (
+                    f"Invalid solve mode {solve_mode!r}, "
+                    f"allowed: {', '.join(SOLVE_MODES)}"
+                )
+            },
+            status_code=HTTP_400_BAD_REQUEST,
+        )
+
     specs = spec or []
     channels = channel or []
     platforms = platform or []
@@ -378,6 +461,7 @@ async def resolve_post(
     platform: list[str] | None = None,
     format: str | None = None,
     filename: str | None = None,
+    solve: str | None = None,
 ) -> Response:
     """Resolve package specs and/or an environment file via POST body.
 
@@ -398,7 +482,24 @@ async def resolve_post(
     Pass ``?format=<name>`` on either dispatch to route the response
     through conda's exporter plugin registry.  ``format`` is
     query-only; it is not read from the JSON body.
+
+    Pass ``?solve=auto|always|never`` to control solver behaviour.
+    ``auto`` (default) skips the solver when both input and output are
+    lockfile formats.  ``always`` forces a solve.  ``never`` returns
+    400 if a solve would be needed.
     """
+    solve_mode = solve or "auto"
+    if solve_mode not in SOLVE_MODES:
+        return Response(
+            {
+                "error": (
+                    f"Invalid solve mode {solve_mode!r}, "
+                    f"allowed: {', '.join(SOLVE_MODES)}"
+                )
+            },
+            status_code=HTTP_400_BAD_REQUEST,
+        )
+
     content_type = (
         request.headers.get("content-type", "")
         .split(";")[0]
@@ -465,18 +566,47 @@ async def resolve_post(
             status_code=HTTP_400_BAD_REQUEST,
         )
 
+    parsed: ParsedInput | None = None
     if file_content is not None:
         try:
-            file_specs, file_channels = parse_file_content(
-                file_content, file_name
-            )
+            parsed = parse_file_content(file_content, file_name)
         except ValueError as exc:
             return Response(
                 {"error": str(exc)}, status_code=HTTP_400_BAD_REQUEST
             )
-        specs = list(specs) + file_specs
+        specs = list(specs) + parsed.specs
         if not channels:
-            channels = file_channels
+            channels = parsed.channels
+
+    if (
+        solve_mode != "always"
+        and can_transcode(parsed, format, platforms)
+    ):
+        try:
+            body_str, media_type = render_envs([parsed.env], format)
+        except UnknownFormatError as exc:
+            return Response(
+                {"error": str(exc), "available_formats": exc.available},
+                status_code=HTTP_400_BAD_REQUEST,
+            )
+        except Exception:
+            log.exception("Transcode failed")
+            return Response(
+                {"error": "Transcode failed"},
+                status_code=HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+        return Response(body_str, media_type=media_type)
+
+    if solve_mode == "never":
+        return Response(
+            {
+                "error": (
+                    "solve=never but a solve is required for "
+                    "this input/output combination"
+                )
+            },
+            status_code=HTTP_400_BAD_REQUEST,
+        )
 
     if not specs:
         return Response(
@@ -584,13 +714,13 @@ async def parse(request: Request) -> Response:
             status_code=HTTP_400_BAD_REQUEST,
         )
     try:
-        specs, channels = parse_file_content(data.file, data.filename)
+        parsed = parse_file_content(data.file, data.filename)
     except ValueError as exc:
         return Response(
             {"error": str(exc)},
             status_code=HTTP_400_BAD_REQUEST,
         )
-    return Response({"specs": specs, "channels": channels})
+    return Response({"specs": parsed.specs, "channels": parsed.channels})
 
 
 @get("/health", mcp_resource="health")

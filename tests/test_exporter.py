@@ -15,7 +15,9 @@ from conda.models.environment import Environment
 from conda_presto.exceptions import UnknownFormatError
 from conda_presto.exporter import (
     available_formats,
+    input_is_lockfile,
     media_type_for,
+    output_is_lockfile,
     render_envs,
 )
 
@@ -170,3 +172,42 @@ def test_render_envs_no_export_method_raises(monkeypatch):
     with pytest.raises(UnknownFormatError) as excinfo:
         render_envs(["env1"], "test-fmt")
     assert excinfo.value.format_name == "test-fmt"
+
+
+# --- output_is_lockfile / input_is_lockfile ---
+
+
+@pytest.mark.parametrize(
+    "format_name, expected",
+    [
+        pytest.param("explicit", True, id="explicit"),
+        pytest.param("conda-lock-v1", True, id="conda-lock"),
+        pytest.param("pixi-lock-v6", True, id="pixi-lock"),
+        pytest.param("rattler-lock-v6", True, id="rattler-lock"),
+        pytest.param("environment-yaml", False, id="env-yaml"),
+        pytest.param("environment-json", False, id="env-json"),
+        pytest.param("requirements", False, id="requirements"),
+        pytest.param("nonexistent-format", False, id="unknown"),
+    ],
+)
+def test_output_is_lockfile(format_name, expected):
+    assert output_is_lockfile(format_name) is expected
+
+
+def test_input_is_lockfile_with_lockfile_specifier():
+    from conda.plugins.types import EnvironmentFormat
+
+    fake = SimpleNamespace(environment_format=EnvironmentFormat.lockfile)
+    assert input_is_lockfile(fake) is True
+
+
+def test_input_is_lockfile_with_environment_specifier():
+    from conda.plugins.types import EnvironmentFormat
+
+    fake = SimpleNamespace(environment_format=EnvironmentFormat.environment)
+    assert input_is_lockfile(fake) is False
+
+
+def test_input_is_lockfile_with_no_attribute():
+    fake = SimpleNamespace()
+    assert input_is_lockfile(fake) is False

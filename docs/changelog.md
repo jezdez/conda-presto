@@ -1,6 +1,13 @@
 # Changelog
 
-## 0.4.0 (unreleased)
+## 0.5.0 (unreleased)
+
+- Added lockfile transcoder mode: `?solve=auto|always|never` on `/resolve`.
+  When both input and output are lockfile formats, `solve=auto` skips the
+  solver entirely and pipes through conda's exporter directly (~5 ms vs
+  ~250 ms). Existing requests are unaffected.
+
+## 0.4.0
 
 - Added documentation site (Sphinx + MyST + conda-sphinx-theme)
 - Added GitHub Pages deployment workflow
