@@ -1,6 +1,6 @@
-# transcoder: Lockfile transcoder mode
+# transcoder: `POST /transcode` — lockfile format conversion
 
-Status: proposal, not yet implemented
+Status: implemented (PR #27)
 Owner: TBD
 Filed: 2026-04-16
 
@@ -10,12 +10,9 @@ implementation order.
 
 ## TL;DR
 
-Stop solving when the input is already fully resolved. Add a
-`?solve=auto|always|never` knob to `/resolve` (default `auto`). When
-both the input and output formats are conda
-`EnvironmentFormat.lockfile` and the requested platforms are a subset
-of the input's platforms, skip the solver and pipe the parsed
-`Environment` straight to the exporter.
+A dedicated `POST /transcode` endpoint converts between lockfile
+formats (pixi.lock, conda-lock.yml, explicit) without invoking the
+solver. The parsed `Environment` is piped straight to the exporter.
 
 This turns a ~250 ms re-solve into a ~5 ms transcode, and reframes
 conda-presto from "fast solver as a service" to "conda's universal
@@ -59,193 +56,117 @@ allowed cells of the matrix.
 
 ## API surface
 
-### New query parameter: `?solve={auto,always,never}`
+### `POST /transcode` — dedicated endpoint
 
-- `auto` (default): skip the solve iff
-  - input specifier's `environment_format == EnvironmentFormat.lockfile`, AND
-  - output exporter's `environment_format == EnvironmentFormat.lockfile`, AND
-  - the requested platforms are a subset of the platforms the parsed
-    `Environment` already covers (or no platforms requested at all).
-  Otherwise solve.
-- `always`: today's behaviour. Always solve, regardless of input format.
-- `never`: error (HTTP 400) if a solve would be needed under `auto`.
+```
+POST /transcode?format=pixi-lock-v6
+Content-Type: application/json
+{"file": "<lockfile content>", "filename": "conda-lock.yml"}
+→ 200 OK
+Content-Type: application/yaml
+body: <pixi.lock>
+```
 
-### Behaviour matrix (input × output, with `solve=auto`)
+Also accepts raw body with `Content-Type: application/yaml` (same
+body parsing as `/resolve`).
 
-|                            | output: env (yaml/json)         | output: lockfile (pixi.lock, conda-lock.yml, explicit) |
-|----------------------------|----------------------------------|--------------------------------------------------------|
-| input: env (environment.yml, pyproject.toml, requirements.txt, inline specs) | solve, then exporter            | solve, then exporter                                  |
-| input: lockfile (pixi.lock, conda-lock.yml, explicit)                         | solve (lockfile → env loses pinning unless we read explicit_packages — see open question Q2) | **transcode, no solve**                             |
+Requires `?format=` (400 without it). Both input and output must be
+lockfile formats; returns 400 with a clear message otherwise.
 
-The bottom-right cell is the new fast path. Everything else is
-unchanged.
+### Design decision: separate endpoint vs query param
 
-### Default output (no `?format=`)
+The original proposal used `?solve=auto|always|never` on `/resolve`.
+After review (with input from Opus 4.7 and GPT 5.5), we chose a
+dedicated endpoint instead:
 
-Unchanged. The default JSON `list[SolveResult]` always solves
-(implementation-wise it just doesn't go through the exporter path
-at all). Could be revisited later — see "Out of scope" below.
+- `/resolve` means "solver ran"; `/transcode` means "format
+  conversion, no solver." Clear provenance for a supply-chain tool.
+- Maps 1:1 to the GitHub Action's `command: transcode`.
+- Follows the `/parse` precedent (file operation, no solve).
+- Avoids the semantic awkwardness of `/resolve?solve=never`.
+- Each endpoint is a distinct MCP tool with its own description.
+
+### Behaviour matrix (endpoint × direction)
+
+| Direction | Endpoint | Solver invoked? |
+|-----------|----------|-----------------|
+| env → env | `/resolve` | yes |
+| env → lockfile | `/resolve` | yes |
+| lockfile → lockfile | `/transcode` | no |
+| lockfile → env | `/resolve` | yes (re-solve needed) |
+
+### `/resolve` is unchanged
+
+No new query params, no implicit fast paths. `/resolve` always
+solves. Callers that want the fast lockfile conversion path use
+`/transcode` explicitly.
 
 ## Implementation outline
 
-Files touched: `conda_presto/app.py`, `conda_presto/resolve.py` (small
-helpers), `conda_presto/exporter.py` (read `environment_format`),
-`tests/test_app.py`. No changes to `cli.py`, `config.py`, or any
-public CLI behaviour in this PR.
+Files touched: `conda_presto/app.py`, `conda_presto/exporter.py`,
+`tests/test_app.py`, `tests/test_exporter.py`.
 
-### 1. Refactor `parse_file_content` to return the parsed `Environment`
-
-Today (`app.py:139`):
-
-```python
-def parse_file_content(content, filename=None) -> tuple[list[str], list[str]]:
-    ...
-    specs = [str(s) for s in env.requested_packages]
-    channels = [...]
-    return specs, channels
-```
-
-Change to:
+### 1. Refactor `parse_file_content` to return `ParsedInput`
 
 ```python
 @dataclass
 class ParsedInput:
-    env: Environment
+    env: object       # conda.models.environment.Environment
+    specifier: object  # conda.plugins.types.CondaEnvironmentSpecifier
     specs: list[str]
     channels: list[str]
-    specifier: CondaEnvironmentSpecifier  # for environment_format
-
-def parse_file_content(content, filename=None) -> ParsedInput:
-    ...
 ```
 
-The existing call site in `resolve_post` keeps using `.specs` /
-`.channels`; the new transcoder path uses `.env` and `.specifier`.
+Carries the parsed `Environment` and specifier plugin alongside
+specs/channels. The `/resolve` call sites use `.specs` / `.channels`;
+`/transcode` uses `.env` and `.specifier`.
 
-Tempfile lifetime: keep the same lazy-access pattern (some env-spec
-plugins read the file lazily on attribute access). Either materialize
-`explicit_packages` eagerly into a list before exiting the
-`NamedTemporaryFile` context, or restructure to keep the tempfile
-alive for the request lifetime.
+Tempfile lifetime: `explicit_packages` is eagerly materialized into
+a list before exiting the `NamedTemporaryFile` context.
 
-### 2. Expose `environment_format` from `exporter.py`
-
-Add a small accessor that returns the exporter's `environment_format`
-without needing the calling code to import `CondaEnvironmentExporter`
-or the format enum directly:
+### 2. Format-detection helpers in `exporter.py`
 
 ```python
-def output_is_lockfile(format_name: str) -> bool:
-    exporter = context.plugin_manager.get_environment_exporter_by_format(format_name)
-    return exporter.environment_format == EnvironmentFormat.lockfile
+def output_is_lockfile(format_name: str) -> bool: ...
+def input_is_lockfile(specifier: object) -> bool: ...
 ```
 
-(Or just expose the exporter and let `app.py` import the enum.
-Either works. Whichever keeps `app.py` cleaner.)
+Both check `environment_format == EnvironmentFormat.lockfile`. The
+`EnvironmentFormat` enum is imported lazily to avoid import cost at
+startup.
 
-### 3. Branch in `app.py` before `run_solve`
+### 3. `POST /transcode` handler in `app.py`
 
-In `resolve_post` (and symmetrically in `resolve_get`, where it just
-means "solve, since there's no input lockfile to transcode"):
-
-```python
-solve_mode = solve or "auto"          # new query param
-parsed: ParsedInput | None = None
-if file_content is not None:
-    parsed = parse_file_content(file_content, file_name)
-    specs = list(specs) + parsed.specs
-    if not channels:
-        channels = parsed.channels
-
-# ... cap checks, default channels ...
-
-if (
-    parsed is not None
-    and format_name is not None
-    and solve_mode != "always"
-    and parsed.specifier.environment_format == EnvironmentFormat.lockfile
-    and output_is_lockfile(format_name)
-    and platforms_are_subset(platforms, parsed.env)
-):
-    # Fast path: no solve, just re-emit.
-    body, media_type = render_envs([parsed.env], format_name)
-    return Response(body, media_type=media_type)
-
-if solve_mode == "never":
-    return Response(
-        {"error": "solve=never but a solve is required for this combination"},
-        status_code=HTTP_400_BAD_REQUEST,
-    )
-
-return await run_solve(request, specs, channels, platforms or None, format_name=format_name)
-```
-
-`platforms_are_subset(requested, env)` is the only new helper:
-
-```python
-def platforms_are_subset(requested: list[str], env: Environment) -> bool:
-    if not requested:
-        return True
-    return set(requested) <= {env.platform, *(getattr(env, "platforms", []) or ())}
-```
-
-(Need to verify how the conda-lockfiles loader populates platform
-metadata on `Environment` — this is one of the few open questions
-below.)
+Accepts the same body formats as `/resolve` (JSON envelope or raw
+file body). Validates both sides are lockfiles via
+`validate_transcode()`. Passes the parsed `Environment` directly
+to `render_envs()`.
 
 ### 4. Tests
 
-Four happy-path cells of the matrix:
-
-1. lockfile in (pixi.lock), lockfile out (conda-lock.yml), `solve=auto` → no solver call
-2. lockfile in, env out (environment.yml), `solve=auto` → solver called
-3. env in (environment.yml), lockfile out, `solve=auto` → solver called
-4. env in, env out, `solve=auto` → solver called
-
-Plus the `solve=` knob:
-
-5. lockfile in, lockfile out, `solve=always` → solver called
-6. env in, lockfile out, `solve=never` → 400
-7. lockfile in, lockfile out, `solve=never` → success, no solver call
-8. lockfile in (linux-64 only), lockfile out, `?platform=osx-64` → solver called (subset check fails)
-
-And one robustness case:
-
-9. lockfile in, lockfile out, transcoder path, malformed input → 400 with helpful message (existing parse error path)
-
-Mock the solver call by monkeypatching `conda_presto.resolve.solve_environments`
-to assert it's NOT called on cells 1, 7, and IS called on the rest.
-
-### 5. OpenAPI / docs
-
-- Document `?solve=` in the `POST /resolve` and `GET /resolve` handler
-  docstrings (drives the OpenAPI description).
-- Update the module docstring at `app.py:1` to describe the
-  transcoder mode in two sentences.
-- Update README pitch + add a short "Lockfile transcoding" example
-  block under the existing examples.
-- Add a CHANGELOG entry under `[Unreleased]`.
+- Missing `?format=` returns 400
+- No file content returns 400
+- Environment input (not lockfile) returns 400
+- Non-lockfile output format returns 400
+- Lockfile in + lockfile out succeeds, solver never called
+- Raw body dispatch works
+- Unknown format returns 400 with available formats
+- Unsupported content type returns 400
+- MCP tool metadata is set
 
 ## API surface change summary
 
-- New query param on `POST /resolve` and `GET /resolve`:
-  `?solve=auto|always|never` (default `auto`).
-- New behaviour: when `?format=` resolves to a lockfile exporter and
-  the input is a lockfile, no solve runs.
-- No breaking changes. Existing requests behave identically because
-  `auto` only short-circuits when both ends are lockfiles — and today
-  no existing client could have been doing that and getting solver
-  results, since there was no fast path.
+- New `POST /transcode` endpoint with `?format=` (required).
+- `/resolve` is unchanged. No new query params, no implicit behaviour
+  changes.
+- No breaking changes. The new endpoint is purely additive.
 
 ## Migration / backwards compatibility
 
-- Pure addition. Default behaviour is preserved for every input/output
-  combination that exists today, *except* lockfile→lockfile, which
-  changes from "re-solve and re-emit (slow)" to "re-emit directly
-  (fast)". Output content for that cell should be byte-identical for
-  well-formed lockfiles, since we're skipping a solve that was
-  finding the same packages anyway. Callers that depend on the solve
-  side-effects (cache warmup, etc.) can pass `?solve=always`.
+- Pure addition. Existing `/resolve` callers are unaffected.
+  Lockfile-to-lockfile conversion that previously went through
+  `/resolve` (re-solving) still works, just slower. The new
+  `/transcode` endpoint is the fast path for that use case.
 
 ## Out of scope (file as follow-ups)
 
@@ -270,35 +191,20 @@ to assert it's NOT called on cells 1, 7, and IS called on the rest.
 
 ## Open questions
 
-- **Q1:** Does the `Environment` returned by
+- **Q1: Round-trip fidelity.** Does the `Environment` returned by
   `CondaLockV1Loader` / `RattlerLockV6Loader` populate
   `explicit_packages` in a form the matching exporter's
   `multiplatform_export` accepts? Quick verification: parse a
   `pixi.lock`, render it back via `rattler-lock-v6`, diff against
   the input (expect a stable normalization, not byte-identity).
-- **Q2:** What's the right behaviour for lockfile → environment.yml
-  output? Three options: (a) always re-solve; (b) emit the parsed
-  `Environment` as-is (preserves pinning but loses the "human
-  re-solvable" property of environment.yml); (c) emit just the
-  `requested_packages` to keep environment.yml semantically
-  user-editable. Default to (a) for now (current behaviour); revisit
-  if anyone asks.
-- **Q3:** Multi-platform lockfile inputs — does the conda-lockfiles
-  loader give us one `Environment` per platform or one
-  `Environment` with multiple platforms? The exporter signature
-  takes `Iterable[Environment]`, so the right structure depends on
-  the loader. Affects the `platforms_are_subset` helper.
-- **Q4:** How does `?platform=` interact with a lockfile input? If a
-  user passes `?platform=osx-64` and the input lockfile only covers
-  `linux-64`, today we re-solve. Under transcoder mode, the subset
-  check fails and we fall through to a solve. Is that surprising?
-  Should we document it as "to filter a lockfile to a subset of its
-  platforms, use `?solve=never` plus an explicit platform list"?
-- **Q5:** Should `?solve=auto` also short-circuit when the input is a
-  lockfile and the output is `default JSON` (no `?format=`)? Pro:
-  consistent fast path. Con: the JSON shape (`list[SolveResult]`) is
-  technically a solve result, not a lockfile re-emit. Probably no for
-  this PR.
+- **Q2: Multi-platform lockfiles.** Does the conda-lockfiles loader
+  give us one `Environment` per platform or one `Environment` with
+  multiple platforms? The exporter takes `Iterable[Environment]`, so
+  the right structure depends on the loader.
+- **Q3: Platform filtering.** Currently `/transcode` does not accept
+  `?platform=` to filter a multi-platform lockfile to a subset. The
+  exporter receives the full environment. Adding platform filtering
+  is a follow-up if needed.
 
 ## Effort estimate
 
@@ -323,3 +229,14 @@ to assert it's NOT called on cells 1, 7, and IS called on the rest.
 - Current parser entry point in conda-presto: `conda_presto/app.py:139` (`parse_file_content`)
 - Current exporter entry point: `conda_presto/exporter.py:68` (`render_envs`)
 - Current solve dispatch: `conda_presto/resolve.py:393` (`solve_environments`)
+
+## Changelog
+
+- 2026-05-08: Redesigned from `?solve=auto|always|never` query param
+  on `/resolve` to a dedicated `POST /transcode` endpoint. Rationale:
+  clearer semantics for a supply-chain tool (each endpoint does one
+  thing), maps 1:1 to the GitHub Action's `command: transcode`,
+  follows the `/parse` precedent, avoids the awkward
+  `/resolve?solve=never` semantics. Design reviewed by Opus 4.7 and
+  GPT 5.5, both recommended Option B (separate endpoint).
+- 2026-04-16: Initial proposal filed with `?solve=` query param design.

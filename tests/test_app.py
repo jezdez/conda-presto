@@ -19,6 +19,7 @@ from conda_presto.app import (
     platforms,
     resolve_get,
     resolve_post,
+    transcode,
     version,
 )
 
@@ -29,6 +30,7 @@ def test_app():
         route_handlers=[
             resolve_get,
             resolve_post,
+            transcode,
             formats,
             platforms,
             version,
@@ -839,3 +841,224 @@ async def test_parse_endpoint_empty_body(client):
 
 def test_parse_handler_has_mcp_tool_opt():
     assert parse.opt.get("mcp_tool") == "parse_file"
+
+
+def test_transcode_handler_has_mcp_tool_opt():
+    assert transcode.opt.get("mcp_tool") == "transcode"
+
+
+@pytest.mark.anyio
+async def test_transcode_missing_format(client):
+    resp = await client.post(
+        "/transcode",
+        json={"file": "anything", "filename": "pixi.lock"},
+    )
+    assert resp.status_code == 400
+    assert "format" in resp.json()["error"].lower()
+
+
+@pytest.mark.anyio
+async def test_transcode_no_file_content(client):
+    resp = await client.post(
+        "/transcode?format=explicit",
+        json={},
+    )
+    assert resp.status_code == 400
+    assert "file content" in resp.json()["error"].lower()
+
+
+@pytest.mark.anyio
+async def test_transcode_rejects_environment_input(client):
+    """environment.yml is not a lockfile format, so /transcode rejects it."""
+    yml = (
+        "name: test\n"
+        "channels:\n"
+        "  - conda-forge\n"
+        "dependencies:\n"
+        "  - zlib\n"
+    )
+    resp = await client.post(
+        "/transcode?format=explicit",
+        json={"file": yml, "filename": "environment.yml"},
+    )
+    assert resp.status_code == 400
+    assert "not a lockfile" in resp.json()["error"].lower()
+
+
+@pytest.mark.anyio
+async def test_transcode_rejects_non_lockfile_output(client, monkeypatch):
+    """Output format must be a lockfile format."""
+    from types import SimpleNamespace
+
+    from conda.plugins.types import EnvironmentFormat
+
+    fake_env = SimpleNamespace(
+        platform="linux-64",
+        explicit_packages=[],
+        requested_packages=[],
+        config=None,
+    )
+    fake_specifier = SimpleNamespace(
+        environment_format=EnvironmentFormat.lockfile,
+    )
+    fake_parsed = app_module.ParsedInput(
+        env=fake_env,
+        specifier=fake_specifier,
+        specs=["zlib"],
+        channels=["conda-forge"],
+    )
+    monkeypatch.setattr(
+        "conda_presto.app.parse_file_content",
+        lambda content, filename=None: fake_parsed,
+    )
+
+    resp = await client.post(
+        "/transcode?format=environment-yaml",
+        json={"file": "fake lockfile", "filename": "pixi.lock"},
+    )
+    assert resp.status_code == 400
+    assert "not a lockfile" in resp.json()["error"].lower()
+
+
+@pytest.mark.anyio
+async def test_transcode_lockfile_to_lockfile_skips_solver(
+    client, monkeypatch
+):
+    """Lockfile in + lockfile out succeeds without calling the solver."""
+    solve_called = []
+    monkeypatch.setattr(
+        "conda_presto.app.solve_environments",
+        lambda *a, **kw: solve_called.append(True) or [],
+    )
+    monkeypatch.setattr(
+        "conda_presto.app.solve",
+        lambda *a, **kw: solve_called.append(True) or [],
+    )
+
+    from types import SimpleNamespace
+
+    from conda.plugins.types import EnvironmentFormat
+
+    fake_env = SimpleNamespace(
+        platform="linux-64",
+        explicit_packages=[],
+        requested_packages=[],
+        config=None,
+    )
+    fake_specifier = SimpleNamespace(
+        environment_format=EnvironmentFormat.lockfile,
+    )
+    fake_parsed = app_module.ParsedInput(
+        env=fake_env,
+        specifier=fake_specifier,
+        specs=["zlib"],
+        channels=["conda-forge"],
+    )
+    monkeypatch.setattr(
+        "conda_presto.app.parse_file_content",
+        lambda content, filename=None: fake_parsed,
+    )
+    monkeypatch.setattr(
+        "conda_presto.app.render_envs",
+        lambda envs, fmt: (
+            "@EXPLICIT\ntranscoded",
+            "text/plain; charset=utf-8",
+        ),
+    )
+
+    resp = await client.post(
+        "/transcode?format=explicit",
+        json={"file": "fake lockfile", "filename": "explicit.txt"},
+    )
+    assert resp.status_code == 200
+    assert "transcoded" in resp.text
+    assert not solve_called, "solver should NOT have been called"
+
+
+@pytest.mark.anyio
+async def test_transcode_raw_body(client, monkeypatch):
+    """Raw YAML body with Content-Type works on /transcode."""
+    from types import SimpleNamespace
+
+    from conda.plugins.types import EnvironmentFormat
+
+    fake_env = SimpleNamespace(
+        platform="linux-64",
+        explicit_packages=[],
+        requested_packages=[],
+        config=None,
+    )
+    fake_specifier = SimpleNamespace(
+        environment_format=EnvironmentFormat.lockfile,
+    )
+    fake_parsed = app_module.ParsedInput(
+        env=fake_env,
+        specifier=fake_specifier,
+        specs=[],
+        channels=[],
+    )
+    monkeypatch.setattr(
+        "conda_presto.app.parse_file_content",
+        lambda content, filename=None: fake_parsed,
+    )
+    monkeypatch.setattr(
+        "conda_presto.app.render_envs",
+        lambda envs, fmt: ("converted", "application/yaml"),
+    )
+
+    resp = await client.post(
+        "/transcode?format=pixi-lock-v6&filename=conda-lock.yml",
+        content="version: 1\npackage: []",
+        headers={"content-type": "application/yaml"},
+    )
+    assert resp.status_code == 200
+    assert "converted" in resp.text
+
+
+@pytest.mark.anyio
+async def test_transcode_unknown_format(client, monkeypatch):
+    """Unknown output format returns 400 with available formats."""
+    from types import SimpleNamespace
+
+    from conda.plugins.types import EnvironmentFormat
+
+    fake_env = SimpleNamespace(
+        platform="linux-64",
+        explicit_packages=[],
+        requested_packages=[],
+        config=None,
+    )
+    fake_specifier = SimpleNamespace(
+        environment_format=EnvironmentFormat.lockfile,
+    )
+    fake_parsed = app_module.ParsedInput(
+        env=fake_env,
+        specifier=fake_specifier,
+        specs=[],
+        channels=[],
+    )
+    monkeypatch.setattr(
+        "conda_presto.app.parse_file_content",
+        lambda content, filename=None: fake_parsed,
+    )
+    monkeypatch.setattr(
+        "conda_presto.app.output_is_lockfile",
+        lambda fmt: True,
+    )
+
+    resp = await client.post(
+        "/transcode?format=does-not-exist",
+        json={"file": "fake", "filename": "pixi.lock"},
+    )
+    assert resp.status_code == 400
+    assert "does-not-exist" in resp.json()["error"]
+
+
+@pytest.mark.anyio
+async def test_transcode_unsupported_content_type(client):
+    resp = await client.post(
+        "/transcode?format=explicit",
+        content=b"anything",
+        headers={"content-type": "application/octet-stream"},
+    )
+    assert resp.status_code == 400

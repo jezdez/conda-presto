@@ -1,6 +1,14 @@
 # Changelog
 
-## 0.4.0 (unreleased)
+## 0.5.0 (unreleased)
+
+- Added `POST /transcode` endpoint for lockfile-to-lockfile format
+  conversion without invoking the solver (~5 ms vs ~250 ms). Accepts
+  the same body formats as `/resolve`; requires `?format=` to specify
+  the target lockfile format.
+- Added `AGENTS.md` with coding guidelines for AI agents.
+
+## 0.4.0
 
 - Added documentation site (Sphinx + MyST + conda-sphinx-theme)
 - Added GitHub Pages deployment workflow
