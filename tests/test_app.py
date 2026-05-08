@@ -843,9 +843,6 @@ def test_parse_handler_has_mcp_tool_opt():
     assert parse.opt.get("mcp_tool") == "parse_file"
 
 
-# --- POST /lint endpoint ---
-
-
 def test_lint_handler_has_mcp_tool_opt():
     assert lint_endpoint.opt.get("mcp_tool") == "lint"
 

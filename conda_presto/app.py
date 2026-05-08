@@ -74,6 +74,7 @@ from importlib.metadata import version as pkg_version
 
 import anyio
 import msgspec
+from conda.base.constants import KNOWN_SUBDIRS
 from conda.base.context import context
 from litestar import Litestar, Request, get, post
 from litestar.config.compression import CompressionConfig
@@ -104,6 +105,7 @@ from .config import (
 )
 from .exceptions import UnknownFormatError
 from .exporter import available_formats, render_envs
+from .lint import lint
 from .resolve import (
     shutdown_process_pool,
     solve,
@@ -516,8 +518,6 @@ async def formats() -> dict[str, list[str]]:
 )
 async def platforms() -> dict[str, list[str]]:
     """Return the known conda platform subdirectory names."""
-    from conda.base.constants import KNOWN_SUBDIRS
-
     return {"platforms": sorted(KNOWN_SUBDIRS)}
 
 
@@ -639,8 +639,6 @@ async def lint_endpoint(
     Pass ``?severity=warning`` to filter findings to that level
     or higher (``info`` < ``warning`` < ``error``).
     """
-    from .lint import lint
-
     content_type = (
         request.headers.get("content-type", "")
         .split(";")[0]

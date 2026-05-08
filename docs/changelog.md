@@ -1,6 +1,11 @@
 # Changelog
 
-## 0.4.0 (unreleased)
+## 0.5.0 (unreleased)
+
+- Added `POST /lint` endpoint for environment file linting (10 rules
+  covering pinning, duplicates, channels, formatting, structure)
+
+## 0.4.0
 
 - Added documentation site (Sphinx + MyST + conda-sphinx-theme)
 - Added GitHub Pages deployment workflow
