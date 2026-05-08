@@ -35,6 +35,7 @@ Security notes:
       API clients; everything else returns a generic message.  Full
       detail is still logged server-side.
 """
+
 from __future__ import annotations
 
 import logging
@@ -305,10 +306,7 @@ def dispatch[T](
 
     results: dict[str, T] = {}
     pool = get_process_pool()
-    futures = {
-        pool.submit(solver_fn, channels, dependencies, p): p
-        for p in platforms
-    }
+    futures = {pool.submit(solver_fn, channels, dependencies, p): p for p in platforms}
     for future in as_completed(futures):
         platform = futures[future]
         try:
@@ -347,9 +345,7 @@ def solve_one_platform(
 def solve_result_error(platform: str, exc: Exception) -> SolveResult:
     """Wrap an exception as a ``SolveResult`` with a sanitized message."""
     log.warning("Solver dispatch error for %s: %s", platform, exc)
-    return SolveResult(
-        platform=platform, packages=[], error=safe_error_message(exc)
-    )
+    return SolveResult(platform=platform, packages=[], error=safe_error_message(exc))
 
 
 def solve(
@@ -471,8 +467,6 @@ def warmup(channels: list[str], platforms: list[str]):
     warmup_indexes(channels, platforms)
 
     pool = get_process_pool()
-    futures = [
-        pool.submit(warmup_indexes, channels, [p]) for p in platforms
-    ]
+    futures = [pool.submit(warmup_indexes, channels, [p]) for p in platforms]
     for f in futures:
         f.result()

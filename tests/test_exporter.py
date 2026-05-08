@@ -4,6 +4,7 @@ The native JSON output produced by the CLI and HTTP API is covered by
 ``tests/test_resolve.py`` and ``tests/test_app.py``; those paths do
 not go through this module.
 """
+
 from __future__ import annotations
 
 from types import SimpleNamespace
@@ -32,38 +33,18 @@ def env_with_records(make_package_record):
 @pytest.mark.parametrize(
     "format_name, expected",
     [
-        pytest.param(
-            "environment-json", "application/json", id="environment-json"
-        ),
-        pytest.param(
-            "json", "application/json", id="json-alias"
-        ),
-        pytest.param(
-            "environment-yaml", "application/yaml", id="yaml"
-        ),
-        pytest.param(
-            "yaml", "application/yaml", id="yaml-alias"
-        ),
-        pytest.param(
-            "conda-lock-v1", "application/yaml", id="conda-lock-v1"
-        ),
-        pytest.param(
-            "pixi-lock-v6", "application/yaml", id="pixi-lock-v6"
-        ),
-        pytest.param(
-            "explicit", "text/plain; charset=utf-8", id="explicit"
-        ),
-        pytest.param(
-            "requirements", "text/plain; charset=utf-8", id="requirements"
-        ),
+        pytest.param("environment-json", "application/json", id="environment-json"),
+        pytest.param("json", "application/json", id="json-alias"),
+        pytest.param("environment-yaml", "application/yaml", id="yaml"),
+        pytest.param("yaml", "application/yaml", id="yaml-alias"),
+        pytest.param("conda-lock-v1", "application/yaml", id="conda-lock-v1"),
+        pytest.param("pixi-lock-v6", "application/yaml", id="pixi-lock-v6"),
+        pytest.param("explicit", "text/plain; charset=utf-8", id="explicit"),
+        pytest.param("requirements", "text/plain; charset=utf-8", id="requirements"),
     ],
 )
 def test_media_type_for(format_name, expected):
-    exporter = (
-        context.plugin_manager.get_environment_exporter_by_format(
-            format_name
-        )
-    )
+    exporter = context.plugin_manager.get_environment_exporter_by_format(format_name)
     assert media_type_for(exporter) == expected
 
 
@@ -159,7 +140,8 @@ def test_render_envs_dispatches_to_exporter_methods(
 def test_render_envs_no_export_method_raises(monkeypatch):
     """An exporter with neither method raises UnknownFormatError."""
     fake = SimpleNamespace(
-        multiplatform_export=None, export=None,
+        multiplatform_export=None,
+        export=None,
         default_filenames=("out.txt",),
     )
     monkeypatch.setattr(

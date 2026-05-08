@@ -19,6 +19,7 @@ server instead.  The ``--host`` and ``--port`` defaults can be set via
 When no channels are provided via ``-c`` or environment files, the CLI
 falls back to ``CONDA_PRESTO_CHANNELS`` (default: ``conda-forge``).
 """
+
 from __future__ import annotations
 
 import argparse
@@ -94,9 +95,7 @@ def configure_parser(parser: argparse.ArgumentParser):
         "--port", type=int, default=DEFAULT_PORT, help="Server port."
     )
 
-    parser.add_argument(
-        "specs", nargs="*", help="Inline package specs"
-    )
+    parser.add_argument("specs", nargs="*", help="Inline package specs")
 
 
 def execute(args: argparse.Namespace):
@@ -185,9 +184,7 @@ def cmd_serve(args: argparse.Namespace):
     """
     import uvicorn
 
-    uvicorn.run(
-        "conda_presto.app:app", host=args.host, port=args.port
-    )
+    uvicorn.run("conda_presto.app:app", host=args.host, port=args.port)
 
 
 def main():

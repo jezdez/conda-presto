@@ -1,4 +1,5 @@
 """Shared fixtures for conda-presto tests."""
+
 from __future__ import annotations
 
 import pytest

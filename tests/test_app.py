@@ -1,4 +1,5 @@
 """Tests for conda_presto.app (Litestar endpoints)."""
+
 from __future__ import annotations
 
 import time
@@ -16,11 +17,15 @@ from conda_presto.app import (
     on_shutdown,
     on_startup,
     parse,
+    permalink_get,
     platforms,
     resolve_get,
     resolve_post,
+    verify,
     version,
 )
+from conda_presto.cache import CacheEntry, ResultCache
+from conda_presto.receipt import Receipt, encode_receipt
 
 
 @pytest.fixture()
@@ -29,10 +34,12 @@ def test_app():
         route_handlers=[
             resolve_get,
             resolve_post,
+            permalink_get,
             formats,
             platforms,
             version,
             parse,
+            verify,
             health,
         ],
         openapi_config=OpenAPIConfig(
@@ -43,15 +50,14 @@ def test_app():
         request_max_body_size=1_024 * 1_024,
     )
     app.state.solver_limiter = None
+    app.state.result_cache = ResultCache(max_entries=1000)
     return app
 
 
 @pytest.fixture()
 async def client(test_app):
     transport = ASGITransport(app=test_app)
-    async with AsyncClient(
-        transport=transport, base_url="http://test"
-    ) as c:
+    async with AsyncClient(transport=transport, base_url="http://test") as c:
         yield c
 
 
@@ -171,13 +177,7 @@ async def test_resolve_post_file(client):
 
 @pytest.mark.anyio
 async def test_resolve_post_file_with_filename(client):
-    yml = (
-        "name: test\n"
-        "channels:\n"
-        "  - conda-forge\n"
-        "dependencies:\n"
-        "  - zlib\n"
-    )
+    yml = "name: test\nchannels:\n  - conda-forge\ndependencies:\n  - zlib\n"
     resp = await client.post(
         "/resolve",
         json={
@@ -193,13 +193,7 @@ async def test_resolve_post_file_with_filename(client):
 
 @pytest.mark.anyio
 async def test_resolve_post_merged_specs_and_file(client):
-    yml = (
-        "name: test\n"
-        "channels:\n"
-        "  - conda-forge\n"
-        "dependencies:\n"
-        "  - python=3.12\n"
-    )
+    yml = "name: test\nchannels:\n  - conda-forge\ndependencies:\n  - python=3.12\n"
     resp = await client.post(
         "/resolve",
         json={
@@ -287,13 +281,7 @@ async def test_resolve_post_bad_extension(client):
 
 @pytest.mark.anyio
 async def test_resolve_post_path_traversal(client):
-    yml = (
-        "name: test\n"
-        "channels:\n"
-        "  - conda-forge\n"
-        "dependencies:\n"
-        "  - zlib\n"
-    )
+    yml = "name: test\nchannels:\n  - conda-forge\ndependencies:\n  - zlib\n"
     resp = await client.post(
         "/resolve",
         json={
@@ -424,9 +412,7 @@ async def test_resolve_get_rejects_too_many_platforms(client, monkeypatch):
 
 
 @pytest.mark.anyio
-async def test_resolve_post_omitted_fields_fall_through_to_query(
-    client, monkeypatch
-):
+async def test_resolve_post_omitted_fields_fall_through_to_query(client, monkeypatch):
     captured = {}
 
     def capture(channels, specs, platforms):
@@ -447,9 +433,7 @@ async def test_resolve_post_omitted_fields_fall_through_to_query(
 
 
 @pytest.mark.anyio
-async def test_resolve_post_empty_body_array_overrides_query(
-    client, monkeypatch
-):
+async def test_resolve_post_empty_body_array_overrides_query(client, monkeypatch):
     captured = {}
 
     def capture(channels, specs, platforms):
@@ -619,9 +603,7 @@ async def test_resolve_post_unsupported_content_type(client):
 
 
 @pytest.mark.anyio
-async def test_convert_environment_yml_to_pixi_lock_via_http(
-    client, tmp_path
-):
+async def test_convert_environment_yml_to_pixi_lock_via_http(client, tmp_path):
     """End-to-end HTTP: POST ``environment.yml`` body -> pixi.lock
     response. Mirrors the CLI pipeline test."""
     platform = "linux-64"
@@ -629,9 +611,7 @@ async def test_convert_environment_yml_to_pixi_lock_via_http(
         "/resolve?format=pixi-lock-v6",
         json={
             "file": (
-                "name: demo\n"
-                "channels:\n  - conda-forge\n"
-                "dependencies:\n  - zlib\n"
+                "name: demo\nchannels:\n  - conda-forge\ndependencies:\n  - zlib\n"
             ),
             "platforms": [platform],
         },
@@ -683,10 +663,9 @@ async def test_resolve_format_includes_conda_lockfiles_formats(client):
 
 
 @pytest.mark.anyio
-async def test_resolve_format_propagates_solver_errors_as_500(
-    client, monkeypatch
-):
+async def test_resolve_format_propagates_solver_errors_as_500(client, monkeypatch):
     """Exporter path can't represent per-platform errors -> 500 on failure."""
+
     def boom(*a, **kw):
         raise RuntimeError("kaboom")
 
@@ -839,3 +818,124 @@ async def test_parse_endpoint_empty_body(client):
 
 def test_parse_handler_has_mcp_tool_opt():
     assert parse.opt.get("mcp_tool") == "parse_file"
+
+
+@pytest.mark.anyio
+async def test_permalink_get_cache_miss(client):
+    fake_hash = "0" * 64
+    resp = await client.get(f"/r/{fake_hash}")
+    assert resp.status_code == 404
+    assert "not in cache" in resp.json()["error"]
+
+
+@pytest.mark.anyio
+async def test_permalink_get_cache_hit(test_app, client):
+    entry = CacheEntry(
+        body='{"hello": "world"}',
+        media_type="application/json",
+        created_at=time.time(),
+    )
+    test_app.state.result_cache.put("abc123hash", entry)
+    resp = await client.get("/r/abc123hash")
+    assert resp.status_code == 200
+    assert resp.json() == {"hello": "world"}
+
+
+@pytest.mark.anyio
+async def test_resolve_returns_location_and_xcache_headers(client, monkeypatch):
+    monkeypatch.setattr("conda_presto.app.solve", lambda *a, **kw: [])
+    resp = await client.post(
+        "/resolve",
+        json={
+            "specs": ["zlib"],
+            "channels": ["conda-forge"],
+            "platforms": ["linux-64"],
+        },
+    )
+    assert resp.status_code == 200
+    assert "X-Cache" in resp.headers
+    assert resp.headers["X-Cache"] == "MISS"
+    assert "Location" in resp.headers
+    assert resp.headers["Location"].startswith("/r/")
+
+
+@pytest.mark.anyio
+async def test_resolve_same_request_returns_cache_hit(client, monkeypatch):
+    call_count = 0
+
+    def counting_solve(*a, **kw):
+        nonlocal call_count
+        call_count += 1
+        return []
+
+    monkeypatch.setattr("conda_presto.app.solve", counting_solve)
+    payload = {
+        "specs": ["zlib"],
+        "channels": ["conda-forge"],
+        "platforms": ["linux-64"],
+    }
+
+    resp1 = await client.post("/resolve", json=payload)
+    assert resp1.status_code == 200
+    assert resp1.headers["X-Cache"] == "MISS"
+    assert call_count == 1
+
+    resp2 = await client.post("/resolve", json=payload)
+    assert resp2.status_code == 200
+    assert resp2.headers["X-Cache"] == "HIT"
+    assert call_count == 1
+
+
+def test_permalink_handler_has_mcp_tool_opt():
+    assert permalink_get.opt.get("mcp_tool") == "get_cached_result"
+
+
+def test_verify_handler_has_mcp_tool_opt():
+    assert verify.opt.get("mcp_tool") == "verify_receipt"
+
+
+@pytest.mark.anyio
+async def test_verify_valid_receipt(client, monkeypatch):
+    secret = b"test-fixed-secret-for-verify!!!"
+    monkeypatch.setattr("conda_presto.app.RECEIPT_SECRET", secret)
+    receipt = Receipt(
+        v=1,
+        request_hash="abc123",
+        channels=[],
+        solver_name="rattler",
+        solver_version="1.0.0",
+        presto_version="0.1.0",
+        solved_at="2026-05-08T12:00:00+00:00",
+    )
+    encoded = encode_receipt(receipt, secret)
+    resp = await client.post("/verify", json={"receipt": encoded})
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["verified"] is True
+    assert data["receipt_age_seconds"] > 0
+    assert data["channel_state_drift"] is False
+
+
+@pytest.mark.anyio
+async def test_verify_invalid_receipt(client):
+    resp = await client.post("/verify", json={"receipt": "not-a-receipt"})
+    assert resp.status_code == 400
+
+
+@pytest.mark.anyio
+async def test_verify_tampered_receipt(client, monkeypatch):
+    secret = b"test-fixed-secret-for-verify!!!"
+    monkeypatch.setattr("conda_presto.app.RECEIPT_SECRET", secret)
+    receipt = Receipt(
+        v=1,
+        request_hash="abc123",
+        channels=[],
+        solver_name="rattler",
+        solver_version="1.0.0",
+        presto_version="0.1.0",
+        solved_at="2026-05-08T12:00:00+00:00",
+    )
+    encoded = encode_receipt(receipt, secret)
+    tampered = encoded[:-4] + "XXXX"
+    resp = await client.post("/verify", json={"receipt": tampered})
+    assert resp.status_code == 400

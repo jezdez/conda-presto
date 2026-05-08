@@ -10,6 +10,7 @@ clients.  Anything not in the list is sanitized via
 :func:`safe_error_message` to a generic message; full detail still
 lands in the server logs.
 """
+
 from __future__ import annotations
 
 from conda.exceptions import PackagesNotFoundError, UnsatisfiableError

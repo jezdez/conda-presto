@@ -1,6 +1,6 @@
 # permalink: Permalink solves — content-addressed result cache
 
-Status: proposal, not yet implemented
+Status: implemented (PR #30)
 Owner: TBD
 Filed: 2026-04-16
 
@@ -117,3 +117,10 @@ in the same PR (probably defer).
   contents across users. Don't.
 - Signed permalinks for private deployments. Trivial to layer on
   top later if anyone wants tenant isolation.
+
+## Changelog
+
+- 2026-05-08: Implemented in PR #30. In-memory LRU cache with
+  `CONDA_PRESTO_RESULT_CACHE` and `CONDA_PRESTO_RESULT_CACHE_MAX_ENTRIES`
+  config. `GET /r/{hash}` endpoint, `X-Cache` and `Location` headers,
+  `?cache=no` bypass. Redis backend deferred.

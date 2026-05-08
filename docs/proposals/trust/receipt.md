@@ -1,9 +1,9 @@
 # receipt: Solve receipts and `/verify` — local drift detection
 
-Status: proposal, not yet implemented
+Status: implemented (PR #31)
 Owner: TBD
 Filed: 2026-04-16
-Last updated: 2026-04-16 (renamed witness→receipt to avoid CEP-27 terminology overlap)
+Last updated: 2026-05-08
 
 Depends on: nothing strictly. Composes with [transcoder](../capability/transcoder.md), [diff](../capability/diff.md), [permalink](../integration/permalink.md), [meta-mcp](../integration/meta-mcp.md).
 Companion plans: [attestation](attestation.md) (sigstore attestations, CEP-27 aligned),
@@ -323,3 +323,9 @@ on top, reusing the same channel-snapshot capture.
 - **Mutation detection across PR base/head.** GitHub action that
   runs `/verify` on the base lockfile and reports drift in the PR
   comment. Easy follow-up once [github-action](../integration/github-action.md) lands.
+
+## Changelog
+
+- **2026-05-08:** v1 implemented with HMAC signing, encode/decode,
+  `POST /verify`, and `?receipt=true` on `/resolve`.
+  Drift detection deferred to follow-up.

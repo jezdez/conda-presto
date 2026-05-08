@@ -1,4 +1,5 @@
 """Tests for conda_presto.resolve."""
+
 from __future__ import annotations
 
 import threading
@@ -59,9 +60,7 @@ def _warm_index():
         pytest.param("minimal_record", "md5", "", id="empty-md5"),
         pytest.param("minimal_record", "size", None, id="empty-size"),
         pytest.param("minimal_record", "depends", (), id="empty-depends"),
-        pytest.param(
-            "minimal_record", "constrains", (), id="empty-constrains"
-        ),
+        pytest.param("minimal_record", "constrains", (), id="empty-constrains"),
     ],
 )
 def test_resolved_package_from_record(record_fixture, field, expected, request):
@@ -101,9 +100,7 @@ def test_solve_result_msgspec_json_roundtrip(sample_resolved_package):
 
 
 def test_solve_result_error_serializes(sample_resolved_package):
-    result = SolveResult(
-        platform="linux-64", packages=[], error="solver failed"
-    )
+    result = SolveResult(platform="linux-64", packages=[], error="solver failed")
     decoded = msgspec.json.decode(msgspec.json.encode(result))
     assert decoded["error"] == "solver failed"
     assert decoded["packages"] == []
@@ -224,9 +221,7 @@ def test_defaults_to_current_platform(fn_name):
     results = fn(["conda-forge"], ["zlib"])
     assert len(results) == 1
     platform = (
-        results[0].platform
-        if hasattr(results[0], "platform")
-        else results[0].platform
+        results[0].platform if hasattr(results[0], "platform") else results[0].platform
     )
     assert platform == context.subdir
 
@@ -305,6 +300,7 @@ def test_solve_one_platform_generic_exception_sanitized(monkeypatch):
 
 def test_solve_one_platform_known_exception_surfaces_detail(monkeypatch):
     """Known solver errors (UnsatisfiableError/PackagesNotFoundError) surface detail."""
+
     def raise_pnf(*a, **kw):
         raise PackagesNotFoundError(["__nonexistent__"])
 
@@ -449,8 +445,6 @@ def test_warmup_including_pool(monkeypatch):
                 f.set_exception(exc)
             return f
 
-    monkeypatch.setattr(
-        "conda_presto.resolve.get_process_pool", lambda: FakePool()
-    )
+    monkeypatch.setattr("conda_presto.resolve.get_process_pool", lambda: FakePool())
     warmup(["conda-forge"], ["linux-64", "osx-arm64"])
     assert calls[0] == ("parent", ["conda-forge"], ["linux-64", "osx-arm64"])
