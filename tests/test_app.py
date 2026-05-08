@@ -13,6 +13,7 @@ import conda_presto.app as app_module
 from conda_presto.app import (
     formats,
     health,
+    lint_endpoint,
     on_shutdown,
     on_startup,
     parse,
@@ -33,6 +34,7 @@ def test_app():
             platforms,
             version,
             parse,
+            lint_endpoint,
             health,
         ],
         openapi_config=OpenAPIConfig(
@@ -839,3 +841,142 @@ async def test_parse_endpoint_empty_body(client):
 
 def test_parse_handler_has_mcp_tool_opt():
     assert parse.opt.get("mcp_tool") == "parse_file"
+
+
+def test_lint_handler_has_mcp_tool_opt():
+    assert lint_endpoint.opt.get("mcp_tool") == "lint"
+
+
+@pytest.mark.anyio
+async def test_lint_clean_file(client):
+    yml = (
+        "name: test\n"
+        "channels:\n"
+        "  - conda-forge\n"
+        "dependencies:\n"
+        "  - numpy\n"
+        "  - pandas\n"
+    )
+    resp = await client.post(
+        "/lint",
+        json={"file": yml, "filename": "environment.yml"},
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert "findings" in data
+    assert "summary" in data
+    assert isinstance(data["findings"], list)
+
+
+@pytest.mark.anyio
+async def test_lint_finds_single_equals(client):
+    yml = (
+        "name: test\n"
+        "channels:\n"
+        "  - conda-forge\n"
+        "dependencies:\n"
+        "  - numpy=1.26.4\n"
+    )
+    resp = await client.post(
+        "/lint",
+        json={"file": yml, "filename": "environment.yml"},
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    codes = [f["code"] for f in data["findings"]]
+    assert "PIN001" in codes
+
+
+@pytest.mark.anyio
+async def test_lint_ignore_filter(client):
+    yml = (
+        "name: test\n"
+        "channels:\n"
+        "  - conda-forge\n"
+        "dependencies:\n"
+        "  - numpy=1.26.4\n"
+    )
+    resp = await client.post(
+        "/lint?ignore=PIN001",
+        json={"file": yml, "filename": "environment.yml"},
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    codes = [f["code"] for f in data["findings"]]
+    assert "PIN001" not in codes
+
+
+@pytest.mark.anyio
+async def test_lint_severity_filter(client):
+    yml = (
+        "name: test\n"
+        "channels:\n"
+        "  - conda-forge\n"
+        "dependencies:\n"
+        "  - numpy=1.26.4\n"
+    )
+    resp = await client.post(
+        "/lint?severity=error",
+        json={"file": yml, "filename": "environment.yml"},
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    for finding in data["findings"]:
+        assert finding["severity"] == "error"
+
+
+@pytest.mark.anyio
+async def test_lint_no_file_content(client):
+    resp = await client.post("/lint", json={})
+    assert resp.status_code == 400
+
+
+@pytest.mark.anyio
+async def test_lint_empty_body(client):
+    resp = await client.post(
+        "/lint",
+        content=b"",
+        headers={"content-type": "application/json"},
+    )
+    assert resp.status_code == 400
+
+
+@pytest.mark.anyio
+async def test_lint_raw_yaml_body(client):
+    body = (
+        "name: test\n"
+        "channels:\n"
+        "  - conda-forge\n"
+        "dependencies:\n"
+        "  - numpy=1.26.4\n"
+    )
+    resp = await client.post(
+        "/lint",
+        content=body,
+        headers={"content-type": "application/yaml"},
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert "findings" in data
+
+
+@pytest.mark.anyio
+async def test_lint_summary_counts(client):
+    yml = (
+        "channels:\n"
+        "  - conda-forge\n"
+        "dependencies:\n"
+        "  - numpy=1.26.4\n"
+    )
+    resp = await client.post(
+        "/lint",
+        json={"file": yml, "filename": "environment.yml"},
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    summary = data["summary"]
+    assert "errors" in summary
+    assert "warnings" in summary
+    assert "info" in summary
+    total = summary["errors"] + summary["warnings"] + summary["info"]
+    assert total == len(data["findings"])
