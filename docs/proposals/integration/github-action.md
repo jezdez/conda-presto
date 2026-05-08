@@ -15,9 +15,9 @@ Composite GitHub Action that lives in the conda-presto repo itself
   and runs the CLI directly. No infrastructure required.
 - **remote**: calls a hosted conda-presto HTTP API endpoint.
 
-Currently supports `command: solve`. Future commands (`transcode`,
-`diff`, `preflight`) will be added as those endpoints land.
-Referenced as `jezdez/conda-presto@v0.4.0`.
+Supports `command: solve`, `command: transcode`, and `command: lint`.
+Future commands (`diff`, `preflight`) will be added as those
+endpoints land.
 
 ## Motivation
 
@@ -35,43 +35,46 @@ Referenced as `jezdez/conda-presto@v0.4.0`.
 ## API surface
 
 ```yaml
-# Local mode (default) — installs on the runner, no endpoint needed
-- uses: jezdez/conda-presto@v0.4.0
+# Solve an environment file
+- uses: jezdez/conda-presto@v0.5.0
   with:
     command: solve
     file: environment.yml
     platforms: linux-64,osx-arm64
 
-# Remote mode — calls a hosted instance
-- uses: jezdez/conda-presto@v0.4.0
+# Transcode a lockfile (remote mode)
+- uses: jezdez/conda-presto@v0.5.0
   with:
     mode: remote
     endpoint: ${{ vars.CONDA_PRESTO_URL }}
-    command: solve
-    file: environment.yml
-    platforms: linux-64
+    command: transcode
+    file: pixi.lock
+    format: conda-lock-v1
+    output: conda-lock.yml
 
-# Write a lockfile artifact
-- uses: jezdez/conda-presto@v0.4.0
+# Lint an environment file
+- uses: jezdez/conda-presto@v0.5.0
   with:
-    command: solve
+    mode: remote
+    endpoint: ${{ vars.CONDA_PRESTO_URL }}
+    command: lint
     file: environment.yml
-    platforms: linux-64
-    format: pixi-lock-v6
-    output: pixi.lock
+    severity: warning
 ```
 
 Inputs:
 
 - `mode`: `local` (default) or `remote`
-- `command`: `solve` (required; future: `transcode | diff | preflight`)
+- `command`: `solve`, `transcode`, or `lint` (required)
 - `file`: path to input file
-- `specs`: comma-separated specs
+- `specs`: comma-separated specs (solve only)
 - `channels`: comma-separated channels (default: `conda-forge`)
-- `platforms`: comma-separated target platforms
-- `format`: output format name
+- `platforms`: comma-separated target platforms (solve/transcode)
+- `format`: output format name (solve/transcode)
 - `output`: path to write the response body to (default stdout)
 - `endpoint`: conda-presto base URL (required when `mode: remote`)
+- `ignore`: comma-separated lint rule codes to skip (lint only)
+- `severity`: minimum severity filter for lint (lint only)
 
 Outputs:
 

@@ -1,5 +1,5 @@
 name: conda-presto
-description: Resolve, transcode, and lint conda environments locally via the CLI or remotely via the HTTP API
+description: Resolve, transcode, and lint conda environments via the CLI (local) or HTTP API (remote)
 branding:
   icon: package
   color: green
@@ -127,31 +127,8 @@ runs:
             ;;
 
           lint)
-            if [[ -z "${INPUT_FILE:-}" ]]; then
-              echo "::error::Input 'file' is required for command: lint"
-              exit 1
-            fi
-            if [[ ! -f "${INPUT_FILE}" ]]; then
-              echo "::error::File not found: ${INPUT_FILE}"
-              exit 1
-            fi
-
-            echo "::group::conda-presto lint (local)"
-            echo "file: ${INPUT_FILE}"
-            echo "::endgroup::"
-
-            tmpout="$(mktemp)"
-            file_content="$(cat "${INPUT_FILE}")"
-            file_basename="$(basename "${INPUT_FILE}")"
-            body=$(jq -n \
-              --arg file "${file_content}" \
-              --arg filename "${file_basename}" \
-              '{file: $file, filename: $filename}')
-
-            # lint is not a CLI subcommand yet; use the HTTP API locally
-            # by starting the server briefly or calling via Python.
-            # For now, fall through to remote mode logic with localhost.
             echo "::warning::lint command in local mode is not yet supported. Use mode: remote with a running conda-presto instance."
+            tmpout="$(mktemp)"
             echo "exit_code=1" >> "$GITHUB_OUTPUT"
             echo "tmpout=${tmpout}" >> "$GITHUB_OUTPUT"
             ;;
@@ -232,18 +209,20 @@ runs:
           body=$(echo "${body}" | jq --argjson platforms "${platforms_json}" '. + {platforms: $platforms}')
         fi
 
-        # Build query string from format, ignore, severity
         query_params=""
         if [[ -n "${INPUT_FORMAT:-}" ]]; then
-          query_params="format=${INPUT_FORMAT}"
+          enc=$(printf '%s' "${INPUT_FORMAT}" | jq -sRr @uri)
+          query_params="format=${enc}"
         fi
         if [[ -n "${INPUT_IGNORE:-}" ]]; then
+          enc=$(printf '%s' "${INPUT_IGNORE}" | jq -sRr @uri)
           [[ -n "${query_params}" ]] && query_params="${query_params}&"
-          query_params="${query_params}ignore=${INPUT_IGNORE}"
+          query_params="${query_params}ignore=${enc}"
         fi
         if [[ -n "${INPUT_SEVERITY:-}" ]]; then
+          enc=$(printf '%s' "${INPUT_SEVERITY}" | jq -sRr @uri)
           [[ -n "${query_params}" ]] && query_params="${query_params}&"
-          query_params="${query_params}severity=${INPUT_SEVERITY}"
+          query_params="${query_params}severity=${enc}"
         fi
         if [[ -n "${query_params}" ]]; then
           url="${url}?${query_params}"
