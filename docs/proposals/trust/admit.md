@@ -3,11 +3,11 @@
 Status: proposal, not yet implemented
 Owner: TBD
 Filed: 2026-04-16
-Depends on: nothing strictly. Composes powerfully with [receipt](05-receipt.md), [attestation](06-attestation.md), [cep-solve-attestation](14-cep-solve-attestation.md) (CEP draft), and
-[serving-attestations](07-serving-attestations.md) (sidecar serving). Works as a useful endpoint without them
+Depends on: nothing strictly. Composes powerfully with [receipt](receipt.md), [attestation](attestation.md), [cep-solve-attestation](cep-solve-attestation.md) (CEP draft), and
+[serving-attestations](serving-attestations.md) (sidecar serving). Works as a useful endpoint without them
 (channel/license/drift checks are valuable on their own); becomes
 *radically* useful once attestations are in the picture.
-Implementation order: ship after the trust track ([serving-attestations](07-serving-attestations.md)) so policies can reference attestations as first-class
+Implementation order: ship after the trust track ([serving-attestations](serving-attestations.md)) so policies can reference attestations as first-class
 inputs.
 
 ## TL;DR
@@ -62,17 +62,17 @@ are inert; with it, they become enforceable.
   hand-rolls those checks (or skips them). `/admit` collapses that
   into one call.
 - **Policies as first-class artifacts.** They version, they diff
-  ([diff](11-diff.md) over policy is a natural follow-up), they get
+  ([diff](../capability/diff.md) over policy is a natural follow-up), they get
   attestations of their own.
 - **Composes with existing plans:**
-  - [github-action](09-github-action.md) GH Action — `conda-presto/admit@v1` becomes a PR check
-  - [permalink](04-permalink.md) permalinks — policies and decisions live at `/p/<sha>`
+  - [github-action](../integration/github-action.md) GH Action — `conda-presto/admit@v1` becomes a PR check
+  - [permalink](../integration/permalink.md) permalinks — policies and decisions live at `/p/<sha>`
     so an `admit` decision is reproducible by reference
-  - [meta-mcp](10-meta-mcp.md) MCP — agents call `admit` before suggesting an install
-  - [receipt](05-receipt.md) / [attestation](06-attestation.md) — attestations satisfy `requires_*` clauses
-  - [lint](02-lint.md) — both produce structured findings; share output
+  - [meta-mcp](../integration/meta-mcp.md) MCP — agents call `admit` before suggesting an install
+  - [receipt](receipt.md) / [attestation](attestation.md) — attestations satisfy `requires_*` clauses
+  - [lint](../capability/lint.md) — both produce structured findings; share output
     schema where sensible
-  - [why-not](03-why-not.md) — for `deny`-because-of-feasibility, point at
+  - [why-not](../capability/why-not.md) — for `deny`-because-of-feasibility, point at
     `/why-not` for diagnosis
 - **Compliance story.** Compliance teams want to write `policy.toml`
   once and have CI enforce it. Today they cobble together
@@ -115,14 +115,14 @@ with policy verdicts.
 
 Returns the proof tree for the decision: which rules ran, in what
 order, what their inputs were, what their outputs were. Composes
-with [explain](12-explain.md) (`/explain`) — same shape, different domain.
+with [explain](../capability/explain.md) (`/explain`) — same shape, different domain.
 
 ### `GET /admit/policies/templates`
 
 Discovery for built-in policy templates (see below). Each returns
 the template TOML and a short description.
 
-### `POST /admit/policies` ([permalink](04-permalink.md) integration)
+### `POST /admit/policies` ([permalink](../integration/permalink.md) integration)
 
 Optional: cache policies by content-address. Returns a
 `/admit/policies/<sha256>` URL. Lets `policy_url` point at a
@@ -175,7 +175,7 @@ max_attestation_age_days = 30
 
 [drift]
 reject_when_channel_drifted = "warn"   # error | warn | ignore
-                                       # uses [receipt](05-receipt.md) verify pipeline
+                                       # uses [receipt](receipt.md) verify pipeline
 
 [vulnerabilities]                      # optional, requires OSV integration
 enabled            = false
@@ -212,21 +212,21 @@ Stock templates so users can be productive in 30 seconds:
 `POST /admit?policy_template=presto/conda-forge-only` is the trivial
 "I just want the basic check" call.
 
-Templates are versioned and themselves attested ([attestation](06-attestation.md)). A user
+Templates are versioned and themselves attested ([attestation](attestation.md)). A user
 who wants to know "is `presto/orgwide-baseline` v1.2.0 the same
 template I evaluated against last quarter?" gets a yes/no via
 sigstore.
 
 ## Key integrations
 
-- **[github-action](09-github-action.md):** `conda-presto/admit@v1`
+- **[github-action](../integration/github-action.md):** `conda-presto/admit@v1`
   as a PR check. Default policy: `presto/conda-forge-only`.
-- **[receipt](05-receipt.md) / [attestation](06-attestation.md):**
+- **[receipt](receipt.md) / [attestation](attestation.md):**
   Drift checks consume receipts; attestation checks consume sigstore
   bundles.
-- **[lint](02-lint.md):** Same `Finding` shape; lint runs on
+- **[lint](../capability/lint.md):** Same `Finding` shape; lint runs on
   environment files, admit runs on lockfiles.
-- **[serving-attestations](07-serving-attestations.md):** `/admit` can
+- **[serving-attestations](serving-attestations.md):** `/admit` can
   fetch attestations from `<lockfile_url>.sigs` automatically.
 
 ## Implementation outline
@@ -268,8 +268,8 @@ Adding a rule = one function. Rules are testable in isolation.
 ### 3. `POST /admit` Litestar handler
 
 Same body-parsing pattern as `/resolve`. Optional Sigstore
-verification (delegates to [attestation](06-attestation.md)'s `attestation.py`). Optional
-drift verify (delegates to [receipt](05-receipt.md)'s `receipt.py` /verify pipeline).
+verification (delegates to [attestation](attestation.md)'s `attestation.py`). Optional
+drift verify (delegates to [receipt](receipt.md)'s `receipt.py` /verify pipeline).
 
 ### 4. Optional OSV integration (defer to v1.1)
 
@@ -279,16 +279,16 @@ Bound by a `vuln_check_timeout_ms` cap; degrades gracefully to
 
 ### 5. Decision permalinks
 
-When [permalink](04-permalink.md) is enabled, every admit decision is content-addressed
+When [permalink](../integration/permalink.md) is enabled, every admit decision is content-addressed
 and stored. Verifiers can re-run the same decision and prove
 determinism.
 
 ### 6. Optional decision attestations
 
-When [attestation](06-attestation.md) is enabled and `?attest_decision=true` is passed,
+When [attestation](attestation.md) is enabled and `?attest_decision=true` is passed,
 the admit decision itself gets a sigstore attestation with a new
 predicate type (e.g. `attestations-admit-1`). This is a follow-up;
-file as future work in [cep-solve-attestation](14-cep-solve-attestation.md)'s CEP discussion.
+file as future work in [cep-solve-attestation](cep-solve-attestation.md)'s CEP discussion.
 
 ## Tests
 
@@ -327,7 +327,7 @@ file as future work in [cep-solve-attestation](14-cep-solve-attestation.md)'s CE
 - **Q4: Policy-as-attestation.** Sign policies themselves with
   sigstore so a verifier can confirm "this is the policy we agreed
   on, signed by the security team." Natural follow-up; feeds back
-  into [cep-solve-attestation](14-cep-solve-attestation.md)'s CEP discussion as a third predicate type.
+  into [cep-solve-attestation](cep-solve-attestation.md)'s CEP discussion as a third predicate type.
 - **Q5: License source-of-truth.** Conda package metadata's
   `license` field is famously unreliable. v1: use what's there,
   surface `unknown` honestly. Follow-up: optional integration with
@@ -353,9 +353,9 @@ file as future work in [cep-solve-attestation](14-cep-solve-attestation.md)'s CE
 - v1.1 OSV integration + caching: ~1 week
 - v1.2 Policy permalinks + decision attestations: ~½ week
 
-Best landed AFTER [receipt](05-receipt.md) and [attestation](06-attestation.md)
+Best landed AFTER [receipt](receipt.md) and [attestation](attestation.md)
 (so attestation and drift checks have real signals to consume) and
-AFTER or alongside [lint](02-lint.md), so both endpoints can share the
+AFTER or alongside [lint](../capability/lint.md), so both endpoints can share the
 `Finding` shape.
 
 ## Out of scope (file as follow-ups)
@@ -378,12 +378,12 @@ AFTER or alongside [lint](02-lint.md), so both endpoints can share the
 
 ## References
 
-- [receipt](05-receipt.md) — drift signals
-- [attestation](06-attestation.md) — sigstore signals
-- [cep-solve-attestation](14-cep-solve-attestation.md) (CEP draft) — predicate definitions; admit decisions
+- [receipt](receipt.md) — drift signals
+- [attestation](attestation.md) — sigstore signals
+- [cep-solve-attestation](cep-solve-attestation.md) (CEP draft) — predicate definitions; admit decisions
   could become their own predicate type later
-- [serving-attestations](07-serving-attestations.md) (serving attestations) — `/admit` auto-fetches `.sigs`
-- [github-action](09-github-action.md) (GitHub Action) — primary consumer
-- [meta-mcp](10-meta-mcp.md) (MCP) — agent integration
-- [lint](02-lint.md) — sister Findings-shaped endpoint
-- [why-not](03-why-not.md) — link target for feasibility-related denies
+- [serving-attestations](serving-attestations.md) (serving attestations) — `/admit` auto-fetches `.sigs`
+- [github-action](../integration/github-action.md) (GitHub Action) — primary consumer
+- [meta-mcp](../integration/meta-mcp.md) (MCP) — agent integration
+- [lint](../capability/lint.md) — sister Findings-shaped endpoint
+- [why-not](../capability/why-not.md) — link target for feasibility-related denies

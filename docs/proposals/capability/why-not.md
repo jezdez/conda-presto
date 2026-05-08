@@ -3,8 +3,8 @@
 Status: proposal, not yet implemented
 Owner: TBD
 Filed: 2026-04-16
-Depends on: nothing strictly. Pairs with [explain](12-explain.md) and
-[preflight](13-preflight.md). Reuses the same solver index plumbing as
+Depends on: nothing strictly. Pairs with [explain](explain.md) and
+[preflight](preflight.md). Reuses the same solver index plumbing as
 `/resolve`.
 Implementation order: ship early. Independent of the trust track.
 
@@ -54,7 +54,7 @@ POST /why-not
   plumbing.
 - **MCP-ready.** Agents asking "can the user have X and Y together?"
   get a structured answer instead of a wall of stderr. Pairs
-  naturally with [meta-mcp](10-meta-mcp.md).
+  naturally with [meta-mcp](../integration/meta-mcp.md).
 - **Editor / CI / onboarding sweet spot.** `pixi-browse`, the
   GitHub Action, IDE plugins all want this signal.
 - **Independent of the trust track.** Doesn't need the trust track.
@@ -88,22 +88,22 @@ conda presto why-not --file environment.yml
 
 ## Composition with existing plans
 
-- **[explain](12-explain.md).** Same data plumbing (the solver's dependency
+- **[explain](explain.md).** Same data plumbing (the solver's dependency
   reasoning). `/explain` works on a *successful* solve; `/why-not`
   works on an *unsuccessful* one. Two endpoints, one shared internal
   module.
-- **[preflight](13-preflight.md).** Preflight rejects requests with bad spec
+- **[preflight](preflight.md).** Preflight rejects requests with bad spec
   syntax / unknown packages before even attempting a solve. `/why-not`
   picks up where preflight leaves off — the request is well-formed
   but the solve is infeasible.
-- **[diff](11-diff.md).** When a PR's lockfile would no longer solve
+- **[diff](diff.md).** When a PR's lockfile would no longer solve
   ("openssl removed from conda-forge"), `/why-not` produces the
   PR-comment text.
-- **[meta-mcp](10-meta-mcp.md) MCP.** New tool `why_not(specs, ...)` that agents can
+- **[meta-mcp](../integration/meta-mcp.md) MCP.** New tool `why_not(specs, ...)` that agents can
   call before suggesting installations.
-- **[lint](02-lint.md).** Lint catches authoring mistakes; why-not catches
+- **[lint](lint.md).** Lint catches authoring mistakes; why-not catches
   semantic conflicts.
-- **[admit](08-admit.md).** When admit denies because of feasibility-related
+- **[admit](../trust/admit.md).** When admit denies because of feasibility-related
   rules, link to `/why-not` for the conflict chain.
 
 ## Implementation outline
@@ -174,7 +174,7 @@ relaxation search.
   pin / widen to `>=lowest_compatible`". Add more strategies later
   if real users want them.
 - **Q3: Cache the failure?** `/why-not` results are deterministic for
-  a given input + channel snapshot. [permalink](04-permalink.md) permalinks can cache them
+  a given input + channel snapshot. [permalink](../integration/permalink.md) permalinks can cache them
   the same way as solves. Worth it for repeated CI invocations.
 - **Q4: Latency budget.** A failed solve + ~5 relaxation re-solves
   could push latency to several seconds for big environments.
@@ -190,8 +190,8 @@ relaxation search.
 
 ## References
 
-- [explain](12-explain.md) — sister endpoint for successful solves
-- [preflight](13-preflight.md) — runs before /why-not in CI pipelines
-- [meta-mcp](10-meta-mcp.md) (MCP) — primary "why-not" consumer
-- [lint](02-lint.md) — catches different class of errors
-- [admit](08-admit.md) — link target for feasibility-related denies
+- [explain](explain.md) — sister endpoint for successful solves
+- [preflight](preflight.md) — runs before /why-not in CI pipelines
+- [meta-mcp](../integration/meta-mcp.md) (MCP) — primary "why-not" consumer
+- [lint](lint.md) — catches different class of errors
+- [admit](../trust/admit.md) — link target for feasibility-related denies

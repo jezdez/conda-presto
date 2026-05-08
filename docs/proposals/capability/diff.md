@@ -3,7 +3,7 @@
 Status: proposal, not yet implemented
 Owner: TBD
 Filed: 2026-04-16
-Depends on: [transcoder](01-transcoder.md)
+Depends on: [transcoder](transcoder.md)
 
 ## TL;DR
 
@@ -20,10 +20,10 @@ metadata.
   irrelevant hash churn.
 - **No conda equivalent exists.** pip has `pip-compile --upgrade`
   with primitive diffs; conda has nothing structured.
-- **Composes directly on the transcoder ([transcoder](01-transcoder.md)).** Implementation:
+- **Composes directly on the transcoder ([transcoder](transcoder.md)).** Implementation:
   transcode each side to a canonical resolved-package list, diff.
   All the parsing and (optional) solving is already done.
-- **Killer integration**: a GitHub Action ([github-action](09-github-action.md)) that posts the
+- **Killer integration**: a GitHub Action ([github-action](../integration/github-action.md)) that posts the
   diff as a PR comment.
 
 ## API surface
@@ -86,7 +86,7 @@ own canonical shape).
 
 ## Effort
 
-~1 day after [transcoder](01-transcoder.md) lands. The diff data model is the only real
+~1 day after [transcoder](transcoder.md) lands. The diff data model is the only real
 design decision; everything else is reuse.
 
 ## Out of scope

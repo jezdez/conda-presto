@@ -1,9 +1,9 @@
-# github-action: `jezdez/conda-presto@v1` — first-party GitHub Action
+# github-action: `jezdez/conda-presto@v0.4.0` — first-party GitHub Action
 
 Status: implemented (solve command, local + remote modes)
 Owner: TBD
 Filed: 2026-04-16
-Depends on: [transcoder](01-transcoder.md), [diff](11-diff.md) — soft dependencies,
+Depends on: [transcoder](../capability/transcoder.md), [diff](../capability/diff.md) — soft dependencies,
 each makes the action more useful
 
 ## TL;DR
@@ -17,7 +17,7 @@ Composite GitHub Action that lives in the conda-presto repo itself
 
 Currently supports `command: solve`. Future commands (`transcode`,
 `diff`, `preflight`) will be added as those endpoints land.
-Referenced as `jezdez/conda-presto@v1`.
+Referenced as `jezdez/conda-presto@v0.4.0`.
 
 ## Motivation
 
@@ -36,14 +36,14 @@ Referenced as `jezdez/conda-presto@v1`.
 
 ```yaml
 # Local mode (default) — installs on the runner, no endpoint needed
-- uses: jezdez/conda-presto@v1
+- uses: jezdez/conda-presto@v0.4.0
   with:
     command: solve
     file: environment.yml
     platforms: linux-64,osx-arm64
 
 # Remote mode — calls a hosted instance
-- uses: jezdez/conda-presto@v1
+- uses: jezdez/conda-presto@v0.4.0
   with:
     mode: remote
     endpoint: ${{ vars.CONDA_PRESTO_URL }}
@@ -52,7 +52,7 @@ Referenced as `jezdez/conda-presto@v1`.
     platforms: linux-64
 
 # Write a lockfile artifact
-- uses: jezdez/conda-presto@v1
+- uses: jezdez/conda-presto@v0.4.0
   with:
     command: solve
     file: environment.yml
