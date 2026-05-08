@@ -1,6 +1,6 @@
 # github-action: `jezdez/conda-presto@v0.4.0` — first-party GitHub Action
 
-Status: implemented (solve command, local + remote modes)
+Status: implemented (solve, transcode, lint commands)
 Owner: TBD
 Filed: 2026-04-16
 Depends on: [transcoder](../capability/transcoder.md), [diff](../capability/diff.md) — soft dependencies,
@@ -118,3 +118,12 @@ Remaining: ~1 hour per additional command as endpoints land.
 
 - conda-meta-mcp's existing action: `conda-incubator/conda-meta-mcp@main`
   — same composite pattern, good reference for layout and CI.
+
+## Changelog
+
+- 2026-05-08: Expanded action.yml with `command: transcode` and
+  `command: lint`. Added `ignore` and `severity` inputs for lint.
+  Remote mode routes to the correct endpoint per command. Local lint
+  deferred (no CLI subcommand yet). Updated output handling for
+  lint findings.
+- 2026-04-16: Initial implementation with `command: solve` only.
