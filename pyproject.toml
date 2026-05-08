@@ -70,8 +70,12 @@ anyio = ">=4.0"
 
 [tool.pixi.feature.server.dependencies]
 litestar = ">=2.18"
+pyjwt = ">=2.0"
 uvicorn = ">=0.34"
 brotli-python = ">=1.1"
+
+[tool.pixi.feature.server.pypi-dependencies]
+litestar-mcp = ">=0.1"
 
 [tool.pixi.environments]
 dev = { features = ["dev", "server"], solve-group = "default" }

@@ -4,9 +4,15 @@ Endpoints:
 
 - ``GET /resolve`` — resolve specs via query params
 - ``POST /resolve`` — resolve specs and/or file content via JSON body
+- ``GET /formats`` — list registered output format names
+- ``GET /platforms`` — list known conda platform subdirs
+- ``GET /version`` — version info for conda-presto and dependencies
+- ``POST /parse`` — extract specs/channels from a file without solving
 - ``GET /health`` — returns ``{"status": "ok"}``
 - ``GET /`` — interactive Scalar API documentation
 - ``GET /openapi.json`` — OpenAPI 3.1 schema (auto-generated)
+- ``POST /mcp`` — MCP Streamable HTTP endpoint (via ``litestar-mcp``)
+- ``GET /.well-known/mcp-server.json`` — MCP server manifest
 
 Output formats:
     By default, ``/resolve`` returns a list of ``SolveResult`` objects
@@ -81,6 +87,7 @@ from litestar.status_codes import (
     HTTP_500_INTERNAL_SERVER_ERROR,
     HTTP_504_GATEWAY_TIMEOUT,
 )
+from litestar_mcp import LitestarMCP, MCPConfig
 
 from .config import (
     CORS_ORIGINS,
@@ -95,7 +102,7 @@ from .config import (
     SOLVE_TIMEOUT_S,
 )
 from .exceptions import UnknownFormatError
-from .exporter import render_envs
+from .exporter import available_formats, render_envs
 from .resolve import (
     shutdown_process_pool,
     solve,
@@ -271,7 +278,31 @@ async def run_solve(
     return Response(body, media_type=media_type)
 
 
-@get("/resolve")
+@get(
+    "/resolve",
+    mcp_tool="resolve",
+    mcp_description=(
+        "Resolve conda package specs to fully pinned packages."
+    ),
+    mcp_when_to_use=(
+        "Use when you need to dry-run a conda solve "
+        "without installing anything."
+    ),
+    mcp_returns=(
+        "Resolved packages with versions, builds, "
+        "channels, and SHA256 hashes."
+    ),
+    mcp_agent_instructions=(
+        "Pass specs as repeated ?spec= query params "
+        "(e.g. ?spec=python=3.12&spec=numpy). "
+        "Channels default to conda-forge. "
+        "Use ?platform= to solve for specific platforms "
+        "(linux-64, osx-arm64, win-64, etc.); omit for native. "
+        "Use ?format= to get output in a specific format: "
+        "explicit, environment-yaml, environment-json, "
+        "conda-lock-v1, pixi-lock-v6, or requirements."
+    ),
+)
 async def resolve_get(
     request: Request,
     spec: list[str] | None = None,
@@ -306,7 +337,40 @@ async def resolve_get(
     )
 
 
-@post("/resolve", status_code=200)
+@post(
+    "/resolve",
+    status_code=200,
+    mcp_tool="resolve_file",
+    mcp_description=(
+        "Resolve a conda environment file or inline specs "
+        "to fully pinned packages."
+    ),
+    mcp_when_to_use=(
+        "Use when you have an environment.yml, pixi.lock, "
+        "or other environment file to resolve."
+    ),
+    mcp_returns=(
+        "Resolved packages or a rendered lockfile "
+        "in the requested format."
+    ),
+    mcp_agent_instructions=(
+        "POST a JSON body with: "
+        "specs (list of strings), "
+        "file (string content of an environment file), "
+        "filename (e.g. 'environment.yml' or 'pixi.lock' — "
+        "controls which parser is used), "
+        "channels (list, default conda-forge), "
+        "platforms (list, e.g. ['linux-64', 'osx-arm64']). "
+        "Or POST the raw file as the body with "
+        "Content-Type: application/yaml. "
+        "Use ?format= for output format: "
+        "explicit, environment-yaml, environment-json, "
+        "conda-lock-v1, pixi-lock-v6, or requirements. "
+        "Supported input formats: environment.yml, "
+        "pyproject.toml, requirements.txt, pixi.lock, "
+        "conda-lock.yml, explicit lockfiles."
+    ),
+)
 async def resolve_post(
     request: Request,
     spec: list[str] | None = None,
@@ -431,7 +495,105 @@ async def resolve_post(
     )
 
 
-@get("/health")
+@get(
+    "/formats",
+    mcp_resource="formats",
+    mcp_description=(
+        "List all supported output format names for "
+        "the ?format= query parameter."
+    ),
+)
+async def formats() -> dict[str, list[str]]:
+    """Return the list of registered exporter format names."""
+    return {"formats": available_formats()}
+
+
+@get(
+    "/platforms",
+    mcp_resource="platforms",
+    mcp_description="List all known conda platform subdirs.",
+)
+async def platforms() -> dict[str, list[str]]:
+    """Return the known conda platform subdirectory names."""
+    from conda.base.constants import KNOWN_SUBDIRS
+
+    return {"platforms": sorted(KNOWN_SUBDIRS)}
+
+
+@get(
+    "/version",
+    mcp_resource="version",
+    mcp_description=(
+        "Return conda-presto, conda, solver, and plugin versions."
+    ),
+)
+async def version() -> dict[str, str]:
+    """Return version info for conda-presto and its key dependencies."""
+    versions: dict[str, str] = {
+        "conda-presto": pkg_version("conda-presto"),
+        "conda": pkg_version("conda"),
+    }
+    for pkg in ("conda-rattler-solver", "conda-lockfiles"):
+        try:
+            versions[pkg] = pkg_version(pkg)
+        except Exception:
+            pass
+    return versions
+
+
+@post(
+    "/parse",
+    status_code=200,
+    mcp_tool="parse_file",
+    mcp_description=(
+        "Parse an environment file and extract its specs, "
+        "channels, and name without solving."
+    ),
+    mcp_when_to_use=(
+        "Use to inspect what is in an environment file "
+        "before deciding whether to solve."
+    ),
+    mcp_returns=(
+        "Extracted specs, channels, and environment name."
+    ),
+    mcp_agent_instructions=(
+        "POST a JSON body with: "
+        "file (string content of an environment file), "
+        "filename (e.g. 'environment.yml' — controls parser). "
+        "Returns {specs, channels} without running a solve."
+    ),
+)
+async def parse(request: Request) -> Response:
+    """Parse an environment file and return its specs and channels."""
+    body = await request.body()
+    if not body:
+        return Response(
+            {"error": "Provide a JSON body with 'file' content"},
+            status_code=HTTP_400_BAD_REQUEST,
+        )
+    try:
+        data = msgspec.json.decode(body, type=ResolveRequest)
+    except (msgspec.DecodeError, msgspec.ValidationError) as exc:
+        return Response(
+            {"error": f"Invalid JSON body: {exc}"},
+            status_code=HTTP_400_BAD_REQUEST,
+        )
+    if not data.file:
+        return Response(
+            {"error": "Field 'file' is required"},
+            status_code=HTTP_400_BAD_REQUEST,
+        )
+    try:
+        specs, channels = parse_file_content(data.file, data.filename)
+    except ValueError as exc:
+        return Response(
+            {"error": str(exc)},
+            status_code=HTTP_400_BAD_REQUEST,
+        )
+    return Response({"specs": specs, "channels": channels})
+
+
+@get("/health", mcp_resource="health")
 async def health() -> dict[str, str]:
     """Liveness probe."""
     return {"status": "ok"}
@@ -464,7 +626,16 @@ if RATE_LIMIT:
     )
 
 app = Litestar(
-    route_handlers=[resolve_get, resolve_post, health],
+    route_handlers=[
+        resolve_get,
+        resolve_post,
+        formats,
+        platforms,
+        version,
+        parse,
+        health,
+    ],
+    plugins=[LitestarMCP(MCPConfig(name="conda-presto"))],
     openapi_config=OpenAPIConfig(
         title="conda-presto",
         version=pkg_version("conda-presto"),

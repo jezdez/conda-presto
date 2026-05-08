@@ -1,44 +1,68 @@
-# meta-mcp: conda-meta-mcp integration — expose conda-presto as MCP tools
+# MCP: native MCP server + conda-meta-mcp integration
 
-Status: proposal, not yet implemented
+Status: native MCP implemented; conda-meta-mcp integration not yet started
 Owner: TBD
 Filed: 2026-04-16
-Depends on: [transcoder](01-transcoder.md) (transcoder, optional), [diff](11-diff.md) (diff, optional).
-Lives in two repos: conda-presto (no changes required) and
-conda-meta-mcp (new tool wrappers).
+Depends on: [transcoder](01-transcoder.md) (optional), [diff](11-diff.md) (optional).
 
 ## TL;DR
 
-Add `resolve`, `transcode`, and `diff` tools to
-[conda-meta-mcp](https://github.com/conda-incubator/conda-meta-mcp)
-that wrap the conda-presto HTTP API. Fulfills conda-meta-mcp's own
-roadmap item:
+Two complementary MCP surfaces for conda-presto:
+
+1. **Native MCP** (implemented) — conda-presto's Litestar app exposes
+   its route handlers as MCP tools via `litestar-mcp`. Any MCP client
+   can connect directly to a running conda-presto instance at `/mcp`.
+2. **conda-meta-mcp wrappers** (not yet started) — thin tool
+   wrappers in conda-meta-mcp that call conda-presto's HTTP API,
+   so agents already using conda-meta-mcp get solver tools without
+   a second MCP connection. Fulfills conda-meta-mcp's roadmap item:
 
 > Planned: Solver feasibility signals (dry-run outputs)
 
-This gives AI agents a complete picture of the conda ecosystem:
-metadata queries (already there) + solving + format translation
-(via conda-presto).
-
 ## Motivation
 
-- **Roadmap fit.** "Solver feasibility signals (dry-run outputs)"
-  is the next planned tool category in conda-meta-mcp's README
-  (`conda-meta-mcp/README.md` line 29). conda-presto is the
+- **Two valid deployment shapes.** Some users run conda-presto as a
+  standalone service (native MCP is the right answer). Others already
+  run conda-meta-mcp and want solver tools alongside metadata
+  queries (conda-meta-mcp wrappers are the right answer). Both
+  should exist.
+- **Roadmap fit.** "Solver feasibility signals" is the next planned
+  tool category in conda-meta-mcp's README. conda-presto is the
   reference implementation.
-- **Complementary projects.** conda-meta-mcp is "metadata as a
-  queryable surface for agents"; conda-presto is "solving + format
-  translation as a queryable surface." Together they cross the
-  threshold from "useful API" to "actually agent-shaped tool."
-- **Distribution lever.** conda-meta-mcp already has the
-  agent-facing distribution channel (FastMCP, GitHub Action,
-  `pixi global install`). Wrapping conda-presto into it gets us
-  agent users without conda-presto needing its own MCP transport.
-- **Each project stays focused.** conda-presto keeps owning
-  solver/transcoder logic; conda-meta-mcp keeps owning the
-  agent-facing distribution and the MCP transport details.
+- **Complementary projects.** conda-meta-mcp owns metadata queries;
+  conda-presto owns solving + format translation. Together they
+  give agents a complete picture of the conda ecosystem.
 
-## API surface (new conda-meta-mcp tools)
+## Native MCP (implemented)
+
+conda-presto's Litestar route handlers are annotated with
+`mcp_tool` / `mcp_resource` kwargs. The `LitestarMCP` plugin
+auto-discovers these at startup and exposes them via MCP Streamable
+HTTP at `/mcp`.
+
+Current tools/resources:
+
+| Name | Type | Route | Description |
+|---|---|---|---|
+| `resolve` | tool | `GET /resolve` | Resolve specs to pinned packages |
+| `resolve_file` | tool | `POST /resolve` | Resolve an environment file or inline specs |
+| `parse_file` | tool | `POST /parse` | Extract specs/channels from a file without solving |
+| `formats` | resource | `GET /formats` | List supported output format names |
+| `platforms` | resource | `GET /platforms` | List known conda platform subdirs |
+| `version` | resource | `GET /version` | Version info for conda-presto and dependencies |
+| `health` | resource | `GET /health` | Liveness probe |
+
+New endpoints (lint, diff, transcode, etc.) automatically become
+MCP tools when they carry `mcp_tool=` in their decorator — no
+separate MCP module to maintain.
+
+Dependency: `litestar-mcp` (PyPI), installed in the `server` pixi
+feature. `pyjwt` is also required (litestar-mcp declares
+`litestar[jwt]` but litestar >= 2.21 no longer bundles it).
+
+## conda-meta-mcp wrappers (not yet started)
+
+### API surface (new conda-meta-mcp tools)
 
 ### `resolve`
 
@@ -104,18 +128,18 @@ async def diff(
     """
 ```
 
-## Implementation outline
+### Implementation outline
 
 In conda-meta-mcp:
 
 1. New module `conda_meta_mcp/tools/conda_presto.py` (or three
    separate modules — match the existing one-file-per-tool pattern).
 2. Configurable backend URL via env var
-   `CONDA_META_MCP_PRESTO_URL`, default to the public deployment
-   `https://conda-presto.jezdez.dev`.
+   `CONDA_META_MCP_PRESTO_URL` (required, no default — users
+   provide their own deployment URL).
 3. Use `httpx.AsyncClient` with sensible timeouts (default 30s,
-   override per-tool). Verify `httpx` is already a conda-meta-mcp
-   dependency; add if needed.
+   override per-tool). `httpx` is already a conda-meta-mcp
+   dependency.
 4. Surface conda-presto's HTTP errors as MCP tool errors with the
    sanitized error messages conda-presto already returns.
 5. Mark the "Planned: Solver feasibility signals" line in the
@@ -123,39 +147,41 @@ In conda-meta-mcp:
 
 In conda-presto:
 
-- No code changes required. Optionally:
-  - Add a brief mention in the README that the public deployment
-    is exposed via conda-meta-mcp for AI agent use.
-  - Add an `mcp` section to the existing examples gist with a
-    sample MCP tool invocation.
+- No further code changes required. The native MCP and HTTP API
+  already cover everything conda-meta-mcp needs to call.
 
 ## Tests
 
+Native MCP (in conda-presto):
+
+- `test_production_app_has_mcp_plugin` — verifies `LitestarMCP` is
+  registered on the production app.
+- `test_resolve_handlers_have_mcp_tool_opt` — verifies `mcp_tool`
+  opt is set on both resolve handlers.
+- `test_health_handler_has_mcp_resource_opt` — verifies `mcp_resource`
+  opt is set on the health handler.
+
+conda-meta-mcp wrappers (future):
+
 - Each tool: happy path against a stubbed conda-presto (use
   `respx` or similar to fake HTTP responses).
-- Happy path against the live public deployment (skipped by default,
-  enabled in a "smoke" CI job).
 - Error path: backend returns 400 / 500 → tool surfaces a clean
   MCP error.
 - Timeout: backend hangs → tool times out cleanly.
 
 ## Effort
 
-- conda-meta-mcp: ~½ day for all three tools (after the
+- Native MCP: done (~1 hour, decorator kwargs + plugin line +
+  dependency wiring).
+- conda-meta-mcp wrappers: ~½ day for all three tools (after the
   conda-presto endpoints they wrap exist).
-- conda-presto: ~30 min for README updates.
 
 ## Open questions
 
-- **Where does the default backend URL point?** The public
-  deployment at `https://conda-presto.jezdez.dev` is convenient
-  but pins the integration to that host. Acceptable for v1; revisit
-  if someone wants conda-meta-mcp to ship with no external
-  dependencies (in which case: default to `localhost:8000`,
-  document `CONDA_META_MCP_PRESTO_URL`).
-- **Auth.** None today. If conda-meta-mcp ever supports
-  per-tenant config, consider a `CONDA_META_MCP_PRESTO_TOKEN` env
-  var for hosted tenants behind auth.
+- **Auth.** None today. If conda-meta-mcp ever supports per-tenant
+  config, consider a `CONDA_META_MCP_PRESTO_TOKEN` env var for
+  hosted tenants behind auth. conda-presto's native MCP inherits
+  whatever auth middleware Litestar is configured with.
 - **Bundling.** Should there be a `cmm` extras-install that pulls
   conda-presto as a sibling tool for fully local agent setups
   (`pixi global install conda-meta-mcp[presto]`)? Probably yes
@@ -163,10 +189,6 @@ In conda-presto:
 
 ## Out of scope
 
-- Native MCP support inside conda-presto (running its own MCP
-  server). Possible later if there's demand for a single
-  install-target solver MCP server, but adds transport surface and
-  duplicates conda-meta-mcp's plumbing. Don't do unless asked.
 - Bidirectional integration (conda-presto calling conda-meta-mcp
   for spec validation suggestions). The [preflight](13-preflight.md) `/preflight`
   endpoint could call conda-meta-mcp's `package_search` for
@@ -183,4 +205,4 @@ In conda-presto:
   `tools/package_search.py`, `tools/repoquery.py`
 - conda-meta-mcp blog post:
   https://conda.org/blog/conda-meta-mcp
-- Public conda-presto deployment: https://conda-presto.jezdez.dev
+- litestar-mcp: https://github.com/cofin/litestar-mcp

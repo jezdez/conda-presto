@@ -230,6 +230,44 @@ curl -sS --data-binary @environment.yml \
 conda env create -n demo -f pixi.lock
 ```
 
+### `GET /formats`
+
+Returns the list of registered output format names:
+
+```bash
+curl http://localhost:8000/formats
+# {"formats":["conda-lock-v1","environment-json","environment-yaml","explicit",...]}
+```
+
+### `GET /platforms`
+
+Returns the list of known conda platform subdirs:
+
+```bash
+curl http://localhost:8000/platforms
+# {"platforms":["linux-64","osx-arm64","osx-64","win-64",...]}
+```
+
+### `GET /version`
+
+Returns version info for conda-presto and its key dependencies:
+
+```bash
+curl http://localhost:8000/version
+# {"conda-presto":"0.4.0","conda":"26.3.2","conda-rattler-solver":"0.0.6",...}
+```
+
+### `POST /parse`
+
+Parse an environment file and extract its specs and channels without
+solving:
+
+```bash
+curl -sS http://localhost:8000/parse \
+  --json '{"file":"channels:\n  - conda-forge\ndependencies:\n  - numpy\n","filename":"environment.yml"}'
+# {"specs":["numpy"],"channels":["conda-forge"]}
+```
+
 ### `GET /health`
 
 Returns `{"status": "ok"}`.
@@ -238,6 +276,102 @@ Returns `{"status": "ok"}`.
 
 Interactive API documentation (Scalar UI). The raw OpenAPI 3.1
 schema is available at `/openapi.json`.
+
+## GitHub Action
+
+The action supports two modes: **local** (default) installs
+conda-presto on the runner via pixi and runs the CLI directly;
+**remote** calls a hosted conda-presto endpoint.
+
+### Local mode (default)
+
+No infrastructure required -- conda-presto is installed on the
+runner automatically:
+
+```yaml
+- uses: jezdez/conda-presto@v1
+  with:
+    command: solve
+    file: environment.yml
+    platforms: linux-64,osx-arm64
+```
+
+Write a lockfile artifact:
+
+```yaml
+- uses: jezdez/conda-presto@v1
+  with:
+    command: solve
+    file: environment.yml
+    platforms: linux-64
+    format: pixi-lock-v6
+    output: pixi.lock
+```
+
+### Remote mode
+
+Calls a hosted conda-presto deployment (faster, shared cache, but
+requires infrastructure):
+
+```yaml
+- uses: jezdez/conda-presto@v1
+  with:
+    mode: remote
+    endpoint: ${{ vars.CONDA_PRESTO_URL }}
+    command: solve
+    file: environment.yml
+    platforms: linux-64
+```
+
+### Inputs
+
+| Input | Required | Default | Description |
+|---|---|---|---|
+| `mode` | no | `local` | `local` (install + CLI) or `remote` (HTTP API) |
+| `command` | yes | `solve` | Action to perform |
+| `file` | no | | Path to an environment file |
+| `specs` | no | | Comma-separated package specs |
+| `channels` | no | `conda-forge` | Comma-separated channels |
+| `platforms` | no | | Comma-separated target platforms |
+| `format` | no | | Output format name |
+| `output` | no | | Path to write the response body to |
+| `endpoint` | remote only | | conda-presto base URL (required when `mode: remote`) |
+
+### Outputs
+
+| Output | Description |
+|---|---|
+| `result` | The response body |
+| `solved` | `true` or `false` |
+
+## MCP (Model Context Protocol)
+
+When running with the `server` feature, conda-presto exposes an MCP
+endpoint at `/mcp` via [litestar-mcp](https://github.com/cofin/litestar-mcp).
+AI agents can discover and call the `resolve` and `resolve_file` tools
+through the standard MCP Streamable HTTP transport.
+
+```bash
+# The MCP endpoint is available alongside the REST API
+curl http://localhost:8000/.well-known/mcp-server.json
+```
+
+Available MCP tools:
+
+| Tool | Description |
+|---|---|
+| `resolve` | Resolve package specs to fully pinned packages (GET /resolve) |
+| `resolve_file` | Resolve an environment file or inline specs (POST /resolve) |
+| `parse_file` | Extract specs and channels from a file without solving (POST /parse) |
+
+Available MCP resources:
+
+| Resource | Description |
+|---|---|
+| `formats` | List supported output format names (GET /formats) |
+| `platforms` | List known conda platform subdirs (GET /platforms) |
+| `version` | Version info for conda-presto and dependencies (GET /version) |
+| `health` | Liveness probe (GET /health) |
 
 ## Docker
 
