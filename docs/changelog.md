@@ -1,6 +1,12 @@
 # Changelog
 
-## 0.4.0 (unreleased)
+## 0.5.0 (unreleased)
+
+- Added in-memory LRU result cache with `GET /r/{hash}` permalink endpoint
+- Added HMAC-signed solve receipts with `POST /verify` endpoint
+- Added `?receipt=true` on `/resolve` to emit `X-Solve-Receipt` header
+
+## 0.4.0
 
 - Added documentation site (Sphinx + MyST + conda-sphinx-theme)
 - Added GitHub Pages deployment workflow

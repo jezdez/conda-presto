@@ -1,4 +1,5 @@
 """Tests for conda_presto.plugin registration."""
+
 from __future__ import annotations
 
 import argparse

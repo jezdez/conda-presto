@@ -15,9 +15,10 @@ from __future__ import annotations
 import base64
 import hashlib
 import hmac
-import json
 
 import msgspec
+
+from .cache import canonical_request_hash
 
 
 class ChannelSnapshot(msgspec.Struct, frozen=True):
@@ -44,24 +45,18 @@ class VerifyResult(msgspec.Struct):
     drift: dict | None = None
 
 
-def _request_hash(
+def request_hash(
     specs: list[str],
     channels: list[str],
     platforms: list[str] | None,
     format_name: str | None,
 ) -> str:
-    """Deterministic hash of the solve request parameters."""
-    data = json.dumps(
-        {
-            "specs": sorted(specs),
-            "channels": sorted(channels),
-            "platforms": sorted(platforms or []),
-            "format": format_name or "",
-        },
-        sort_keys=True,
-        separators=(",", ":"),
-    )
-    return hashlib.sha256(data.encode()).hexdigest()
+    """Deterministic hash of the solve request parameters.
+
+    Reuses :func:`~conda_presto.cache.canonical_request_hash` for
+    consistency between receipt hashes and permalink keys.
+    """
+    return canonical_request_hash(specs, channels, platforms, format_name)
 
 
 def encode_receipt(receipt: Receipt, secret: bytes) -> str:

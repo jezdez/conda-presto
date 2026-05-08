@@ -68,7 +68,9 @@ Cross-platform virtual packages:
 
 from __future__ import annotations
 
+import logging
 import os
+import secrets
 
 
 def env_int(name: str, default: int) -> int:
@@ -135,13 +137,8 @@ RECEIPT_ENABLED = os.environ.get("CONDA_PRESTO_RECEIPTS", "true").lower() in (
 )
 
 if not RECEIPT_SECRET:
-    import secrets as _secrets
-
-    RECEIPT_SECRET = _secrets.token_bytes(32)
-
-    import logging as _log
-
-    _log.getLogger(__name__).warning(
+    RECEIPT_SECRET = secrets.token_bytes(32)
+    logging.getLogger(__name__).warning(
         "CONDA_PRESTO_RECEIPT_SECRET not set, using random secret. "
         "Receipts will not survive server restarts."
     )

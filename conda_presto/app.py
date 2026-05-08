@@ -77,6 +77,7 @@ from importlib.metadata import version as pkg_version
 
 import anyio
 import msgspec
+from conda.base.constants import KNOWN_SUBDIRS
 from conda.base.context import context
 from litestar import Litestar, Request, get, post
 from litestar.config.compression import CompressionConfig
@@ -116,9 +117,9 @@ from .exporter import available_formats, render_envs
 from .receipt import (
     Receipt,
     VerifyResult,
-    _request_hash,
     decode_receipt,
     encode_receipt,
+    request_hash,
 )
 from .resolve import (
     shutdown_process_pool,
@@ -245,7 +246,7 @@ def _build_receipt_header(
 
     receipt = Receipt(
         v=1,
-        request_hash=_request_hash(specs, channels, platforms, format_name),
+        request_hash=request_hash(specs, channels, platforms, format_name),
         channels=[],
         solver_name="rattler",
         solver_version=pkg_version("conda-rattler-solver"),
@@ -637,8 +638,6 @@ async def formats() -> dict[str, list[str]]:
 )
 async def platforms() -> dict[str, list[str]]:
     """Return the known conda platform subdirectory names."""
-    from conda.base.constants import KNOWN_SUBDIRS
-
     return {"platforms": sorted(KNOWN_SUBDIRS)}
 
 

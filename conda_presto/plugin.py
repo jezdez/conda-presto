@@ -4,6 +4,7 @@ This module is imported on every ``conda`` invocation via the entry
 point system.  See :func:`conda_subcommands` for why the CLI module
 is imported lazily inside the hook rather than at module top.
 """
+
 from __future__ import annotations
 
 from typing import TYPE_CHECKING

@@ -10,9 +10,9 @@ import pytest
 from conda_presto.receipt import (
     Receipt,
     VerifyResult,
-    _request_hash,
     decode_receipt,
     encode_receipt,
+    request_hash,
 )
 
 
@@ -85,14 +85,14 @@ def test_too_short_payload_raises(secret):
 
 
 def test_request_hash_deterministic_regardless_of_order():
-    h1 = _request_hash(["numpy", "python"], ["conda-forge"], ["linux-64"], None)
-    h2 = _request_hash(["python", "numpy"], ["conda-forge"], ["linux-64"], None)
+    h1 = request_hash(["numpy", "python"], ["conda-forge"], ["linux-64"], None)
+    h2 = request_hash(["python", "numpy"], ["conda-forge"], ["linux-64"], None)
     assert h1 == h2
 
 
 def test_request_hash_differs_for_different_specs():
-    h1 = _request_hash(["numpy"], ["conda-forge"], ["linux-64"], None)
-    h2 = _request_hash(["pandas"], ["conda-forge"], ["linux-64"], None)
+    h1 = request_hash(["numpy"], ["conda-forge"], ["linux-64"], None)
+    h2 = request_hash(["pandas"], ["conda-forge"], ["linux-64"], None)
     assert h1 != h2
 
 
