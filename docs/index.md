@@ -24,14 +24,14 @@ Step-by-step guides for the CLI, HTTP API, CI pipelines, and MCP.
 :::
 
 :::{grid-item-card} {octicon}`book` Reference
-:link: reference/cli
+:link: reference/index
 :link-type: doc
 
 CLI flags, endpoint specs, output formats, and environment variables.
 :::
 
 :::{grid-item-card} {octicon}`gear` Explanation
-:link: explanation/architecture
+:link: explanation/index
 :link-type: doc
 
 Architecture, performance characteristics, and security model.
@@ -65,20 +65,14 @@ tutorials/index
 :caption: Reference
 :hidden:
 
-reference/cli
-reference/http-api
-reference/output-formats
-reference/environment-variables
-reference/configuration
+reference/index
 ```
 
 ```{toctree}
 :caption: Explanation
 :hidden:
 
-explanation/architecture
-explanation/performance
-explanation/security
+explanation/index
 ```
 
 ```{toctree}

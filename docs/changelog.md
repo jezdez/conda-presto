@@ -2,8 +2,10 @@
 
 ## 0.4.0 (unreleased)
 
-- Added documentation site (Sphinx + MyST)
+- Added documentation site (Sphinx + MyST + conda-sphinx-theme)
+- Added GitHub Pages deployment workflow
 - Moved design proposals from `plans/` to `docs/proposals/`
+- Added reference, explanation, and tutorial index pages with grid navigation
 
 ## 0.3.0
 
