@@ -2,10 +2,11 @@
 
 ## 0.5.0 (unreleased)
 
-- Added lockfile transcoder mode: `?solve=auto|always|never` on `/resolve`.
-  When both input and output are lockfile formats, `solve=auto` skips the
-  solver entirely and pipes through conda's exporter directly (~5 ms vs
-  ~250 ms). Existing requests are unaffected.
+- Added `POST /transcode` endpoint for lockfile-to-lockfile format
+  conversion without invoking the solver (~5 ms vs ~250 ms). Accepts
+  the same body formats as `/resolve`; requires `?format=` to specify
+  the target lockfile format.
+- Added `AGENTS.md` with coding guidelines for AI agents.
 
 ## 0.4.0
 

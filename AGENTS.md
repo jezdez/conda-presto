@@ -147,3 +147,6 @@
   strategy, open questions, and effort estimate.
 - Implementation should stay close to the proposal. Deviations are
   fine when justified, but note them in the PR description.
+- Keep a changelog at the bottom of each proposal document. Record
+  the date, what changed, and why. This makes design evolution
+  traceable without digging through git history.
