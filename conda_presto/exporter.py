@@ -19,20 +19,12 @@ import os
 from conda.base.context import context
 from conda.exceptions import CondaValueError
 from conda.models.environment import Environment
-from conda.plugins.types import CondaEnvironmentExporter
+from conda.plugins.types import (
+    CondaEnvironmentExporter,
+    EnvironmentFormat,
+)
 
 from .exceptions import UnknownFormatError
-
-EnvironmentFormat = None  # resolved lazily to avoid import cost at startup
-
-
-def _get_environment_format():
-    global EnvironmentFormat
-    if EnvironmentFormat is None:
-        from conda.plugins.types import EnvironmentFormat as _EF
-
-        EnvironmentFormat = _EF
-    return EnvironmentFormat
 
 
 def output_is_lockfile(format_name: str) -> bool:
@@ -43,16 +35,15 @@ def output_is_lockfile(format_name: str) -> bool:
     format names rather than raising, so the caller can fall through
     to the normal solve path (which will raise on its own).
     """
-    EF = _get_environment_format()
     try:
         exporter = (
             context.plugin_manager.get_environment_exporter_by_format(
                 format_name
             )
         )
-    except Exception:
+    except CondaValueError:
         return False
-    return exporter.environment_format == EF.lockfile
+    return exporter.environment_format == EnvironmentFormat.lockfile
 
 
 def input_is_lockfile(specifier: object) -> bool:
@@ -61,8 +52,10 @@ def input_is_lockfile(specifier: object) -> bool:
     *specifier* is a ``CondaEnvironmentSpecifier`` instance (the
     plugin object, not the spec).
     """
-    EF = _get_environment_format()
-    return getattr(specifier, "environment_format", None) == EF.lockfile
+    return (
+        getattr(specifier, "environment_format", None)
+        == EnvironmentFormat.lockfile
+    )
 
 
 EXTENSION_MEDIA_TYPES: dict[str, str] = {

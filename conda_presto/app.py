@@ -74,6 +74,7 @@ from importlib.metadata import version as pkg_version
 
 import anyio
 import msgspec
+from conda.base.constants import KNOWN_SUBDIRS
 from conda.base.context import context
 from litestar import Litestar, Request, get, post
 from litestar.config.compression import CompressionConfig
@@ -707,8 +708,6 @@ async def formats() -> dict[str, list[str]]:
 )
 async def platforms() -> dict[str, list[str]]:
     """Return the known conda platform subdirectory names."""
-    from conda.base.constants import KNOWN_SUBDIRS
-
     return {"platforms": sorted(KNOWN_SUBDIRS)}
 
 

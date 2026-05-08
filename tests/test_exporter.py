@@ -174,9 +174,6 @@ def test_render_envs_no_export_method_raises(monkeypatch):
     assert excinfo.value.format_name == "test-fmt"
 
 
-# --- output_is_lockfile / input_is_lockfile ---
-
-
 @pytest.mark.parametrize(
     "format_name, expected",
     [

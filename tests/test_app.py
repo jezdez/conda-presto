@@ -843,9 +843,6 @@ def test_parse_handler_has_mcp_tool_opt():
     assert parse.opt.get("mcp_tool") == "parse_file"
 
 
-# --- POST /transcode endpoint ---
-
-
 def test_transcode_handler_has_mcp_tool_opt():
     assert transcode.opt.get("mcp_tool") == "transcode"
 
