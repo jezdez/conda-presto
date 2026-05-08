@@ -45,6 +45,14 @@ HTTP middleware:
     ``CONDA_PRESTO_LOG_LEVEL``
         Application log level (default: ``INFO``).
 
+Solve receipts:
+    ``CONDA_PRESTO_RECEIPT_SECRET``
+        HMAC secret for signing solve receipts.  If unset, a random
+        32-byte secret is generated at import time (receipts will not
+        survive server restarts).
+    ``CONDA_PRESTO_RECEIPTS``
+        Enable or disable receipt emission (default: ``true``).
+
 Cross-platform virtual packages:
     ``CONDA_PRESTO_GLIBC_VERSION``
         Virtual ``__glibc`` version for Linux solves (default: ``2.17``).
@@ -57,6 +65,7 @@ Cross-platform virtual packages:
         The ``__win`` virtual package is usually unversioned; the value
         exists to keep the override dict shape consistent.
 """
+
 from __future__ import annotations
 
 import os
@@ -84,9 +93,7 @@ def env_list(name: str, default: str) -> list[str]:
 
 DEFAULT_CHANNELS = env_list("CONDA_PRESTO_CHANNELS", "conda-forge")
 
-DEFAULT_PLATFORMS = env_list(
-    "CONDA_PRESTO_PLATFORMS", "linux-64,osx-arm64,osx-64"
-)
+DEFAULT_PLATFORMS = env_list("CONDA_PRESTO_PLATFORMS", "linux-64,osx-arm64,osx-64")
 
 MAX_BODY_BYTES = env_int("CONDA_PRESTO_MAX_BODY_BYTES", 1_024 * 1_024)
 
@@ -112,3 +119,29 @@ LOG_LEVEL = os.environ.get("CONDA_PRESTO_LOG_LEVEL", "INFO")
 SOLVE_TIMEOUT_S = env_int("CONDA_PRESTO_SOLVE_TIMEOUT_S", 60)
 MAX_PLATFORMS = env_int("CONDA_PRESTO_MAX_PLATFORMS", 8)
 MAX_SPECS = env_int("CONDA_PRESTO_MAX_SPECS", 200)
+
+RESULT_CACHE_MAX_ENTRIES = env_int("CONDA_PRESTO_RESULT_CACHE_MAX_ENTRIES", 1000)
+RESULT_CACHE_ENABLED = os.environ.get("CONDA_PRESTO_RESULT_CACHE", "true").lower() in (
+    "true",
+    "1",
+    "yes",
+)
+
+RECEIPT_SECRET = os.environ.get("CONDA_PRESTO_RECEIPT_SECRET", "").encode("utf-8")
+RECEIPT_ENABLED = os.environ.get("CONDA_PRESTO_RECEIPTS", "true").lower() in (
+    "true",
+    "1",
+    "yes",
+)
+
+if not RECEIPT_SECRET:
+    import secrets as _secrets
+
+    RECEIPT_SECRET = _secrets.token_bytes(32)
+
+    import logging as _log
+
+    _log.getLogger(__name__).warning(
+        "CONDA_PRESTO_RECEIPT_SECRET not set, using random secret. "
+        "Receipts will not survive server restarts."
+    )
