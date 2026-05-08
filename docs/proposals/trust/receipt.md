@@ -5,9 +5,9 @@ Owner: TBD
 Filed: 2026-04-16
 Last updated: 2026-04-16 (renamed witness→receipt to avoid CEP-27 terminology overlap)
 
-Depends on: nothing strictly. Composes with [transcoder](01-transcoder.md), [diff](11-diff.md), [permalink](04-permalink.md), [meta-mcp](10-meta-mcp.md).
-Companion plans: [attestation](06-attestation.md) (sigstore attestations, CEP-27 aligned),
-[cep-solve-attestation](14-cep-solve-attestation.md) (CEP draft for solve attestation predicate).
+Depends on: nothing strictly. Composes with [transcoder](../capability/transcoder.md), [diff](../capability/diff.md), [permalink](../integration/permalink.md), [meta-mcp](../integration/meta-mcp.md).
+Companion plans: [attestation](attestation.md) (sigstore attestations, CEP-27 aligned),
+[cep-solve-attestation](cep-solve-attestation.md) (CEP draft for solve attestation predicate).
 
 ## TL;DR
 
@@ -30,7 +30,7 @@ To stay out of the way of the conda ecosystem's emerging supply-chain
 vocabulary (CEP-27 etc.), we deliberately call this a **receipt**, not
 a witness, attestation, or provenance statement.
 
-|                | Receipt                         | Attestation ([attestation](06-attestation.md))                                       |
+|                | Receipt                         | Attestation ([attestation](attestation.md))                                       |
 |----------------|------------------------------------------|-------------------------------------------------------------|
 | Format         | Compact, opaque, conda-presto-specific   | in-toto Statement v1 + DSSE + Sigstore bundle (CEP-27 stack)|
 | Signing        | HMAC-SHA256 (shared secret)              | Sigstore (keyless, OIDC-bound, ephemeral keys)              |
@@ -41,7 +41,7 @@ a witness, attestation, or provenance statement.
 
 Both layers coexist. Most users want the receipt; regulated /
 enterprise / cross-org users want attestations. receipt ships first
-because it's small and adds immediate value; [attestation](06-attestation.md) follows.
+because it's small and adds immediate value; [attestation](attestation.md) follows.
 
 ## Motivation
 
@@ -162,11 +162,11 @@ Defer until HTTP surface stabilizes.
 
 ## Key integrations
 
-- **[diff](11-diff.md):** A receipt on each side reveals whether a
+- **[diff](../capability/diff.md):** A receipt on each side reveals whether a
   diff is *drift* (channel changed) versus *intent* (different input).
-- **[permalink](04-permalink.md):** Permalinks include the receipt —
+- **[permalink](../integration/permalink.md):** Permalinks include the receipt —
   same `/r/<hash>` URL becomes self-verifying.
-- **[attestation](06-attestation.md):** Same underlying fields. The
+- **[attestation](attestation.md):** Same underlying fields. The
   receipt is the compact local form; the attestation is the public,
   sigstore-signed form. Single data structure, two encodings.
 
@@ -186,7 +186,7 @@ index_cache[key] = (index, repodata_hashes)
 Repodata files are already in memory after the fetch; computing the
 hash is microseconds.
 
-This step is shared with [attestation](06-attestation.md) — both receipts and attestations
+This step is shared with [attestation](attestation.md) — both receipts and attestations
 need channel snapshot hashes.
 
 ### 2. New `conda_presto/receipt.py` module
@@ -214,7 +214,7 @@ class Receipt:
 Pure functions, easily unit-tested. No external state.
 
 The `Receipt` dataclass should be reusable as the in-memory
-representation that [attestation](06-attestation.md)'s attestation builder also consumes
+representation that [attestation](attestation.md)'s attestation builder also consumes
 (separate signing/encoding paths, same upstream data).
 
 ### 3. Wire emission into `run_solve`
@@ -281,7 +281,7 @@ invalidates all outstanding receipts.
   shares the same secret. Document: shared secrets enable a
   verifying fleet; defaulting to per-instance secrets is fine for
   solo deployments. Public deployment uses a stable secret. Cross-org
-  verification is the proper job of [attestation](06-attestation.md) attestations, not
+  verification is the proper job of [attestation](attestation.md) attestations, not
   receipts.
 - **Q4: Receipt expiry.** Should receipts have an explicit
   `not_after`? Pro: bounds the verification window. Con: legitimate
@@ -302,17 +302,17 @@ invalidates all outstanding receipts.
 - Operational doc (secret management, rotation): ~½ day
 - Total: ~3–4 days, single PR
 
-Best landed AFTER [transcoder](01-transcoder.md) but BEFORE [github-action](09-github-action.md) (GitHub
+Best landed AFTER [transcoder](../capability/transcoder.md) but BEFORE [github-action](../integration/github-action.md) (GitHub
 Action), so the action's CI workflow can default to running
-`/verify` on every push. [attestation](06-attestation.md) (sigstore attestations) follows
+`/verify` on every push. [attestation](attestation.md) (sigstore attestations) follows
 on top, reusing the same channel-snapshot capture.
 
 ## Out of scope (covered by other plans or filed below)
 
-- **Public-key / sigstore signatures** — see [attestation](06-attestation.md). Receipts and
+- **Public-key / sigstore signatures** — see [attestation](attestation.md). Receipts and
   attestations coexist; receipts are the local-fast path,
   attestations are the public-portable path.
-- **Conda CEP for the attestation predicate** — see [cep-solve-attestation](14-cep-solve-attestation.md).
+- **Conda CEP for the attestation predicate** — see [cep-solve-attestation](cep-solve-attestation.md).
 - **Channel snapshot publication.** A separate "snapshot service"
   that periodically publishes immutable, content-addressed channel
   snapshots so receipts/attestations can reference them by name
@@ -322,4 +322,4 @@ on top, reusing the same channel-snapshot capture.
   Defer indefinitely.
 - **Mutation detection across PR base/head.** GitHub action that
   runs `/verify` on the base lockfile and reports drift in the PR
-  comment. Easy follow-up once [github-action](09-github-action.md) lands.
+  comment. Easy follow-up once [github-action](../integration/github-action.md) lands.

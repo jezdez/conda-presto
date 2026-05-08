@@ -68,6 +68,14 @@ pytest-cov = ">=6.0"
 httpx = ">=0.28"
 anyio = ">=4.0"
 
+[tool.pixi.feature.docs.dependencies]
+sphinx = ">=7.0"
+conda-sphinx-theme = ">=0.2"
+myst-parser = ">=3.0"
+sphinx-design = ">=0.6"
+sphinx-copybutton = ">=0.5"
+sphinxcontrib-mermaid = ">=1.0"
+
 [tool.pixi.feature.server.dependencies]
 litestar = ">=2.18"
 pyjwt = ">=2.0"
@@ -82,6 +90,7 @@ dev = { features = ["dev", "server"], solve-group = "default" }
 test = { features = ["test", "server"], solve-group = "default" }
 prod = { features = ["server"], solve-group = "default" }
 cli = { solve-group = "default" }
+docs = { features = ["docs"], solve-group = "default" }
 
 [tool.pixi.activation.env]
 CONDA_CHANNEL_PRIORITY = "strict"
@@ -92,6 +101,9 @@ CONDA_AGGRESSIVE_UPDATE_PACKAGES = ""
 CONDA_LOCAL_REPODATA_TTL = "300"
 CONDA_JSON = "true"
 CONDA_SOLVER = "rattler"
+
+[tool.pixi.feature.docs.tasks]
+docs = "sphinx-build -b dirhtml docs docs/_build/dirhtml"
 
 [tool.pixi.tasks]
 lint = { cmd = "ruff check conda_presto tests", description = "Check code style" }

@@ -3,12 +3,12 @@
 Status: proposal, not yet implemented
 Owner: TBD
 Filed: 2026-04-16
-Depends on: [receipt](05-receipt.md) — shares channel-snapshot capture and
+Depends on: [receipt](receipt.md) — shares channel-snapshot capture and
 the underlying data structure.
-Companion plans: [cep-solve-attestation](14-cep-solve-attestation.md) (the CEP draft that registers the new
-predicate type upstream), [serving-attestations](07-serving-attestations.md) (the `.sigs` sidecar serving
+Companion plans: [cep-solve-attestation](cep-solve-attestation.md) (the CEP draft that registers the new
+predicate type upstream), [serving-attestations](serving-attestations.md) (the `.sigs` sidecar serving
 convention that mirrors CEP-PR-#142 for solve attestations),
-[admit](08-admit.md) (admission engine that consumes these attestations).
+[admit](admit.md) (admission engine that consumes these attestations).
 
 ## TL;DR
 
@@ -22,7 +22,7 @@ without trusting our server, our keys, or our HMAC secret.
 The attestation declares: "this resolved environment was produced by
 this conda-presto identity from these inputs against this channel
 snapshot." It is the public, portable, third-party-verifiable
-counterpart to [receipt](05-receipt.md)'s local receipt.
+counterpart to [receipt](receipt.md)'s local receipt.
 
 ## Motivation
 
@@ -61,9 +61,9 @@ This makes conda-presto the obvious project to define and ship the
 **solve attestation** predicate, in the same spirit and stack as
 CEP-27.
 
-## What it gives us beyond [receipt](05-receipt.md)
+## What it gives us beyond [receipt](receipt.md)
 
-| Capability                            | [receipt](05-receipt.md) | attestation attestation |
+| Capability                            | [receipt](receipt.md) | attestation attestation |
 |---------------------------------------|:--------------:|:-------------------:|
 | Drift detection on the issuing instance | ✓            | ✓                   |
 | Verifiable without trusting the issuer  |              | ✓                   |
@@ -92,7 +92,7 @@ POST /resolve?spec=numpy&format=conda-lock-v1&attestation=true
 For JSON responses (no `?format=`), include the attestation as a
 sibling field in the response body:
 
-```json
+```text
 {
   "results": [...],
   "attestation_bundle": "<base64 sigstore bundle>"
@@ -105,7 +105,7 @@ the same underlying solve and don't conflict.
 
 ### Standalone attestation endpoint (post-hoc)
 
-For solves cached via [permalink](04-permalink.md) permalinks, allow attesting after the
+For solves cached via [permalink](../integration/permalink.md) permalinks, allow attesting after the
 fact:
 
 ```
@@ -147,9 +147,9 @@ wraps `sigstore-python` with conda-presto-specific predicate
 validation (checks `predicateType` matches our schema, prints the
 solve inputs in a readable form, etc.). Convenience only.
 
-## Predicate shape (proposed; full spec in [cep-solve-attestation](14-cep-solve-attestation.md))
+## Predicate shape (proposed; full spec in [cep-solve-attestation](cep-solve-attestation.md))
 
-```jsonc
+```json5
 {
   "_type": "https://in-toto.io/Statement/v1",
   "predicateType": "https://schemas.conda.org/attestations-solve-1.schema.json",
@@ -208,7 +208,7 @@ populated over time as conda-forge attestation coverage grows.
 
 ## Implementation outline
 
-### 1. Reuse [receipt](05-receipt.md)'s channel-snapshot capture
+### 1. Reuse [receipt](receipt.md)'s channel-snapshot capture
 
 The `Receipt` dataclass and the `repodata_sha256` capture in
 `build_index` are shared. Both `Receipt.encode()` and a new
@@ -250,7 +250,7 @@ The public deployment runs a long-lived GitHub Actions workflow
 
 ### 4. New `POST /attest` handler
 
-Looks up a permalink ([permalink](04-permalink.md)) → loads the cached solve and its
+Looks up a permalink ([permalink](../integration/permalink.md)) → loads the cached solve and its
 captured snapshot data → builds and signs an attestation → returns
 the bundle. Re-attestation of the same solve is idempotent.
 
@@ -285,7 +285,7 @@ validation. Optional; users can also use `cosign` directly.
   the original solve would have
 - `POST /attest` against a non-existent permalink → 404
 - Multi-platform solve → one attestation per platform, or one
-  attestation with multiple subjects (decision: file in [cep-solve-attestation](14-cep-solve-attestation.md))
+  attestation with multiple subjects (decision: file in [cep-solve-attestation](cep-solve-attestation.md))
 - Compatibility: bundle verifies cleanly with `cosign verify-blob`
   and `gh attestation verify`
 
@@ -295,7 +295,7 @@ validation. Optional; users can also use `cosign` directly.
   with N subjects?** in-toto allows N subjects per Statement. For
   multi-platform conda-presto solves we have N lockfiles. Cleaner
   to emit one attestation per subject (per-platform), but more
-  bundles to distribute. Tentatively: per-platform; revisit in [cep-solve-attestation](14-cep-solve-attestation.md).
+  bundles to distribute. Tentatively: per-platform; revisit in [cep-solve-attestation](cep-solve-attestation.md).
 - **Q2: Where does the Rekor publication latency budget come from?**
   ~100-500 ms is meaningful relative to a fast solve. Acceptable
   because attestation is opt-in. Document the latency in OpenAPI;
@@ -325,7 +325,7 @@ validation. Optional; users can also use `cosign` directly.
 - **Q6: Deferred predicate fields.** Worth including
   `slsa.buildType` and other SLSA-flavored fields in our predicate
   for forward compatibility with SLSA verifiers, even though we
-  define a conda-specific predicate? Discuss in [cep-solve-attestation](14-cep-solve-attestation.md).
+  define a conda-specific predicate? Discuss in [cep-solve-attestation](cep-solve-attestation.md).
 
 ## Effort
 
@@ -335,11 +335,11 @@ validation. Optional; users can also use `cosign` directly.
 - `POST /attest` for permalinks: ~½ day
 - Optional `verify-attestation` CLI: ~½ day
 - Tests + docs: ~2 days
-- Total: ~1-1.5 weeks, plus [receipt](05-receipt.md) as prerequisite
+- Total: ~1-1.5 weeks, plus [receipt](receipt.md) as prerequisite
 
-Best landed AFTER [receipt](05-receipt.md) (which provides the channel-snapshot
-infrastructure) and AFTER or alongside [cep-solve-attestation](14-cep-solve-attestation.md) (which formalizes
-the predicate). [github-action](09-github-action.md) (GitHub Action) lands after attestation so
+Best landed AFTER [receipt](receipt.md) (which provides the channel-snapshot
+infrastructure) and AFTER or alongside [cep-solve-attestation](cep-solve-attestation.md) (which formalizes
+the predicate). [github-action](../integration/github-action.md) (GitHub Action) lands after attestation so
 "verify-on-CI" can be a one-line action default.
 
 ## Out of scope (file as follow-ups)

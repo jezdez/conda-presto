@@ -5,11 +5,11 @@ Owner: TBD (proposed co-authors: Wolf Vollprecht / prefix.dev,
 William Woodruff / Trail of Bits, plus this project's maintainers)
 Filed: 2026-04-16
 Depends on: nothing for the CEP itself; in conda-presto, this is
-the schema [attestation](06-attestation.md) implements.
-Companion plans: [receipt](05-receipt.md) (local receipts), [attestation](06-attestation.md) (sigstore
-attestations), [serving-attestations](07-serving-attestations.md) (`.sigs` sidecar serving convention,
+the schema [attestation](attestation.md) implements.
+Companion plans: [receipt](receipt.md) (local receipts), [attestation](attestation.md) (sigstore
+attestations), [serving-attestations](serving-attestations.md) (`.sigs` sidecar serving convention,
 mirroring [conda/ceps#142](https://github.com/conda/ceps/pull/142)),
-[admit](08-admit.md) (admission engine that consumes attestations of this
+[admit](admit.md) (admission engine that consumes attestations of this
 predicate type).
 
 ## What this file is
@@ -488,8 +488,6 @@ choice):
 
 # (Draft ends)
 
----
-
 ## Submission checklist (for when this is ready)
 
 - [ ] Polish prose; remove placeholder dates/IDs
@@ -498,5 +496,5 @@ choice):
       (mirror CEP-27's `<details>` blocks)
 - [ ] Open discussion thread on conda/ceps
 - [ ] Open the actual PR with `cep-NNNN.md`
-- [ ] Update conda-presto's [attestation](06-attestation.md) with the assigned CEP number
+- [ ] Update conda-presto's [attestation](attestation.md) with the assigned CEP number
 - [ ] Reference from conda-presto's README and OpenAPI description

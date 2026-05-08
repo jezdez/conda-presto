@@ -3,7 +3,7 @@
 Status: proposal, not yet implemented
 Owner: TBD
 Filed: 2026-04-16
-Depends on: nothing strictly; richer when paired with [diff](11-diff.md)
+Depends on: nothing strictly; richer when paired with [diff](diff.md)
 
 ## TL;DR
 
@@ -24,9 +24,9 @@ which requires `libstdcxx-ng`." Two surfaces:
   read-only addition.
 - Real, frequent pain: "why is this thing in my env?" Today's answer
   is "diff two solves" or "use mamba's `--why` flag and squint."
-- Pairs naturally with [diff](11-diff.md): "this dep changed because *that*
+- Pairs naturally with [diff](diff.md): "this dep changed because *that*
   package now requires it" becomes a one-call explanation.
-- Useful for AI agents ([meta-mcp](10-meta-mcp.md)) that need to reason about why a solve
+- Useful for AI agents ([meta-mcp](../integration/meta-mcp.md)) that need to reason about why a solve
   produced a particular result.
 
 ## API surface

@@ -3,7 +3,7 @@
 Status: proposal, not yet implemented
 Owner: TBD
 Filed: 2026-04-16
-Depends on: nothing ([preflight](13-preflight.md) is the closest neighbor;
+Depends on: nothing ([preflight](preflight.md) is the closest neighbor;
 this is the smaller, faster, no-network-required cousin).
 Implementation order: ship early. No dependencies on the trust track.
 
@@ -40,7 +40,7 @@ POST /lint
   function over the request body.
 - **Editor-friendly.** A LSP-style "lint on save" hook fits this API
   naturally.
-- **Compounds with [github-action](09-github-action.md) GitHub Action.** "Run conda-presto-lint on
+- **Compounds with [github-action](../integration/github-action.md) GitHub Action.** "Run conda-presto-lint on
   every PR" is a one-line add. Cheap, fast, helpful comments inline.
 - **Independent of the trust track.** No reason to block on the trust track.
 
@@ -126,7 +126,7 @@ conda presto lint --ignore PYP001,FMT002 environment.yml
   `pyproject.toml` could embed `[tool.conda-presto.lint]` with rule
   overrides, the CLI/API could respect them. Easy add later; v1 takes
   overrides via query string only.
-- **Q4: Should `/preflight` ([preflight](13-preflight.md)) call `/lint` internally?** Probably
+- **Q4: Should `/preflight` ([preflight](preflight.md)) call `/lint` internally?** Probably
   yes — preflight is "lint + spec syntax + channel reachability". A
   shared library function lets both endpoints stay clean.
 
@@ -139,7 +139,7 @@ conda presto lint --ignore PYP001,FMT002 environment.yml
 
 ## References
 
-- [transcoder](01-transcoder.md), [preflight](13-preflight.md) — closest neighbors
-- [github-action](09-github-action.md) (GitHub Action) — primary consumer
-- [why-not](03-why-not.md) (`/why-not`) — sister "fast helper endpoint"
-- [admit](08-admit.md) (`/admit`) — shares the `Finding` output shape
+- [transcoder](transcoder.md), [preflight](preflight.md) — closest neighbors
+- [github-action](../integration/github-action.md) (GitHub Action) — primary consumer
+- [why-not](why-not.md) (`/why-not`) — sister "fast helper endpoint"
+- [admit](../trust/admit.md) (`/admit`) — shares the `Finding` output shape
