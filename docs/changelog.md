@@ -2,6 +2,10 @@
 
 ## 0.4.0 (unreleased)
 
+- Added `POST /migrate` endpoint for pip-to-conda environment migration
+- Added `--migrate` CLI flag for pip spec file migration
+- Added `conda_presto/migrate/` subpackage: parsers, name mapping, models
+- Added unavailability classification (version_not_available, wrong_arch, not_in_conda)
 - Added documentation site (Sphinx + MyST + conda-sphinx-theme)
 - Added GitHub Pages deployment workflow
 - Moved design proposals from `plans/` to `docs/proposals/`

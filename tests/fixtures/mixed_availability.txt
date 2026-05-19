@@ -1,0 +1,7 @@
+# Mix of conda-available and pip-only packages
+# Enterprise customer with internal tooling alongside standard libs
+numpy>=1.24
+pandas>=2.0
+requests>=2.28
+outerbounds>=0.3
+metaflow-card-html>=1.0

@@ -47,12 +47,15 @@ def configure_parser(parser: argparse.ArgumentParser):
     add_parser_networking(parser)
     add_parser_solver(parser)
 
+    from conda.base.constants import KNOWN_SUBDIRS
+
     parser.add_argument(
         "-p",
         "--platform",
         action="append",
         default=[],
         dest="platforms",
+        choices=sorted(KNOWN_SUBDIRS),
         metavar="SUBDIR",
         help="Target platform (e.g. linux-64, osx-arm64). "
         "May be specified multiple times for parallel solves.",
@@ -94,15 +97,33 @@ def configure_parser(parser: argparse.ArgumentParser):
         "--port", type=int, default=DEFAULT_PORT, help="Server port."
     )
 
+    migrate_group = parser.add_argument_group("Migration")
+    migrate_group.add_argument(
+        "--migrate",
+        action="store_true",
+        default=False,
+        help="Migrate pip spec files to conda equivalents. "
+        "Requires -f to specify input file(s).",
+    )
+    migrate_group.add_argument(
+        "--json",
+        action="store_true",
+        default=False,
+        dest="json_output",
+        help="Output machine-readable JSON.",
+    )
+
     parser.add_argument(
         "specs", nargs="*", help="Inline package specs"
     )
 
 
 def execute(args: argparse.Namespace):
-    """Dispatch based on ``--serve`` flag (conda plugin action)."""
+    """Dispatch based on mode flags."""
     if args.serve:
         cmd_serve(args)
+    elif args.migrate:
+        cmd_migrate(args)
     else:
         cmd_solve(args)
 
@@ -188,6 +209,103 @@ def cmd_serve(args: argparse.Namespace):
     uvicorn.run(
         "conda_presto.app:app", host=args.host, port=args.port
     )
+
+
+def cmd_migrate(args: argparse.Namespace):
+    """Migrate pip spec files to conda equivalents.
+
+    Default output: environment.yml to stdout (pipeable to file).
+    Summary and per-package details to stderr.
+    --json: structured MigrationResult array to stdout.
+    """
+    from .migrate import migrate
+    from .migrate.models import MigrationResult
+    from .migrate.name_mapping import cf_mapping_available
+    from .resolve import NATIVE_SUBDIR
+
+    if not args.files:
+        print(
+            "Usage: conda presto --migrate -f <spec_file> "
+            "[-p platform] [-c channel] [--json]",
+            file=sys.stderr,
+        )
+        raise SystemExit(1)
+
+    context.__init__(argparse_args=args)
+
+    channels = list(context.channels)
+    if not channels or channels == ["defaults"]:
+        channels = list(DEFAULT_CHANNELS)
+
+    platform = args.platforms[0] if args.platforms else NATIVE_SUBDIR
+
+    results: list[MigrationResult] = []
+    for fpath in args.files:
+        try:
+            content = open(fpath).read()
+        except OSError as exc:
+            print(f"Cannot read {fpath}: {exc}", file=sys.stderr)
+            raise SystemExit(1)
+
+        result = migrate(
+            spec_content=content,
+            channels=channels,
+            platform=platform,
+        )
+        results.append(result)
+
+    if not cf_mapping_available():
+        print(
+            "Warning: cf-graph name mapping unavailable. "
+            "Some packages may not match their conda equivalent.",
+            file=sys.stderr,
+        )
+
+    if args.json_output:
+        body = msgspec.json.format(msgspec.json.encode(results), indent=2)
+        sys.stdout.buffer.write(body + b"\n")
+    else:
+        for i, result in enumerate(results):
+            if i > 0:
+                sys.stdout.write("---\n")
+            sys.stdout.write(result.environment_yml)
+        _print_summary(results, sys.stderr)
+
+
+def _print_summary(results: list, file) -> None:
+    """Print migration summary with per-package details to stderr."""
+    for result in results:
+        available = [p for p in result.packages if p.status == "available"]
+        unavailable = [p for p in result.packages if p.status != "available"]
+        total = len(result.packages)
+        if not total:
+            continue
+
+        coverage = len(available) / total * 100
+        print(
+            f"\n# {result.platform} | {result.source_format} | "
+            f"{len(available)}/{total} conda ({coverage:.0f}%)",
+            file=file,
+        )
+
+        if unavailable:
+            print("# pip fallback:", file=file)
+            for pkg in unavailable:
+                detail = ""
+                if pkg.reason == "version_not_available":
+                    versions = ", ".join(pkg.available_versions or [])
+                    detail = f" (available: {versions})" if versions else ""
+                elif pkg.reason == "wrong_arch":
+                    detail = f" (not built for {result.platform})"
+                elif pkg.reason == "not_in_conda":
+                    detail = " (pip-only)"
+                print(f"#   {pkg.pip_name}{detail}", file=file)
+
+        if not result.solve_success and result.solve_error:
+            print(
+                f"# solve warning: {result.solve_error.splitlines()[0]}",
+                file=file,
+            )
 
 
 def main():

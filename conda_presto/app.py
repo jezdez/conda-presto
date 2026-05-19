@@ -599,6 +599,138 @@ async def health() -> dict[str, str]:
     return {"status": "ok"}
 
 
+@dataclass
+class MigrateRequest:
+    """JSON body for ``POST /migrate``."""
+
+    file: str | None = None
+    filename: str | None = None
+    channels: list[str] | None = None
+    platform: str | None = None
+
+
+@post(
+    "/migrate",
+    status_code=200,
+    mcp_tool="migrate",
+    mcp_description=(
+        "Migrate a pip spec file to conda equivalents. "
+        "Translates names, checks availability, validates via solve."
+    ),
+    mcp_when_to_use=(
+        "Use when you have a pip requirements.txt, pyproject.toml, "
+        "Pipfile, or poetry.lock and want to know what's available "
+        "on conda channels."
+    ),
+    mcp_returns=(
+        "Per-package migration status (available/unavailable with reason), "
+        "solve result, and coverage percentage."
+    ),
+    mcp_agent_instructions=(
+        "POST a JSON body with: "
+        "file (string content of a pip spec file), "
+        "channels (optional list, default ['conda-forge']), "
+        "platform (optional string, default current platform). "
+        "Or POST raw text/plain with the pip spec file content."
+    ),
+)
+async def migrate_post(
+    request: Request,
+) -> Response:
+    """Migrate a pip spec file to conda equivalents.
+
+    Accepts a pip environment file (requirements.txt, pyproject.toml,
+    Pipfile, poetry.lock), translates package names to conda, checks
+    availability, and validates via dry-run solve.
+
+    Dispatch on ``Content-Type``:
+
+    * ``application/json``: body is a :class:`MigrateRequest` envelope.
+    * ``text/plain``: body *is* the raw pip spec file content.
+    """
+    from .migrate import migrate
+    from .resolve import NATIVE_SUBDIR
+
+    content_type = (
+        request.headers.get("content-type", "")
+        .split(";")[0]
+        .strip()
+        .lower()
+    )
+
+    if content_type in ("", "application/json"):
+        body = await request.body()
+        if not body:
+            return Response(
+                {"error": "Provide a pip spec file in the request body"},
+                status_code=HTTP_400_BAD_REQUEST,
+            )
+        try:
+            data = msgspec.json.decode(body, type=MigrateRequest)
+        except (msgspec.DecodeError, msgspec.ValidationError) as exc:
+            return Response(
+                {"error": f"Invalid JSON body: {exc}"},
+                status_code=HTTP_400_BAD_REQUEST,
+            )
+        file_content = data.file
+        channels = data.channels
+        platform = data.platform
+    elif content_type == "text/plain":
+        body = await request.body()
+        try:
+            file_content = body.decode("utf-8")
+        except UnicodeDecodeError as exc:
+            return Response(
+                {"error": f"Body is not valid UTF-8: {exc}"},
+                status_code=HTTP_400_BAD_REQUEST,
+            )
+        channels = None
+        platform = None
+    else:
+        return Response(
+            {"error": f"Unsupported Content-Type {content_type!r}. "
+             "Use application/json or text/plain."},
+            status_code=HTTP_400_BAD_REQUEST,
+        )
+
+    if not file_content:
+        return Response(
+            {"error": "Provide pip spec file content in 'file' field"},
+            status_code=HTTP_400_BAD_REQUEST,
+        )
+
+    channels = channels or list(DEFAULT_CHANNELS)
+    platform = platform or NATIVE_SUBDIR
+
+    def work():
+        return migrate(
+            spec_content=file_content,
+            channels=channels,
+            platform=platform,
+        )
+
+    try:
+        with anyio.fail_after(SOLVE_TIMEOUT_S):
+            result = await anyio.to_thread.run_sync(
+                work,
+                limiter=request.app.state.solver_limiter,
+                abandon_on_cancel=True,
+            )
+    except TimeoutError:
+        return Response(
+            {"error": f"Migration exceeded {SOLVE_TIMEOUT_S}s timeout"},
+            status_code=HTTP_504_GATEWAY_TIMEOUT,
+        )
+    except Exception:
+        log.exception("Migration failed")
+        return Response(
+            {"error": "Internal migration error"},
+            status_code=HTTP_500_INTERNAL_SERVER_ERROR,
+        )
+
+    return Response(result)
+
+
 async def on_startup(app: Litestar) -> None:
     """Initialize solver limiter and pre-warm repodata caches."""
     app.state.solver_limiter = anyio.CapacityLimiter(MAX_CONCURRENCY)
@@ -629,6 +761,7 @@ app = Litestar(
     route_handlers=[
         resolve_get,
         resolve_post,
+        migrate_post,
         formats,
         platforms,
         version,

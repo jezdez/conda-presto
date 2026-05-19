@@ -1,0 +1,7 @@
+# A typical web app stack a customer would migrate
+flask>=3.0
+sqlalchemy>=2.0
+celery>=5.3
+gunicorn>=21.0
+psycopg2-binary>=2.9
+redis>=5.0
