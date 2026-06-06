@@ -257,14 +257,14 @@ def test_cmd_solve_unknown_format_exits(run_cli, monkeypatch, capsys):
 def test_cmd_solve_format_solver_error_exits(run_cli, monkeypatch, capsys):
     """cmd_solve --format surfaces known solver errors cleanly (no traceback)."""
     def raise_pnf(*a, **kw):
-        raise PackagesNotFoundError(["__nonexistent__"])
+        raise PackagesNotFoundError(["nonexistent-package-zzzzzz"])
 
     monkeypatch.setattr("conda_presto.cli.solve_environments", raise_pnf)
     with pytest.raises(SystemExit, match="1"):
         run_cli(
             "-c", "conda-forge", "-p", "linux-64",
-            "--format", "explicit", "__nonexistent__",
+            "--format", "explicit", "nonexistent-package-zzzzzz",
         )
     err = capsys.readouterr().err
     assert "Solver error:" in err
-    assert "__nonexistent__" in err
+    assert "nonexistent-package-zzzzzz" in err
