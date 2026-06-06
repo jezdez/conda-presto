@@ -151,7 +151,7 @@ def test_run_solver_unsatisfiable():
     with pytest.raises((UnsatisfiableError, PackagesNotFoundError)):
         run_solver(
             channels=("conda-forge",),
-            dependencies=["__nonexistent_package_xyz__"],
+            dependencies=["nonexistent-package-xyz-zzzzzz"],
             platform="linux-64",
         )
 
@@ -185,7 +185,7 @@ def test_solve_one_platform(deps):
 def test_solve_one_platform_unsatisfiable():
     result = solve_one_platform(
         channels=("conda-forge",),
-        dependencies=["__nonexistent_package_xyz__"],
+        dependencies=["nonexistent-package-xyz-zzzzzz"],
         platform="linux-64",
     )
     assert result.error is not None
@@ -306,12 +306,16 @@ def test_solve_one_platform_generic_exception_sanitized(monkeypatch):
 def test_solve_one_platform_known_exception_surfaces_detail(monkeypatch):
     """Known solver errors (UnsatisfiableError/PackagesNotFoundError) surface detail."""
     def raise_pnf(*a, **kw):
-        raise PackagesNotFoundError(["__nonexistent__"])
+        raise PackagesNotFoundError(["nonexistent-package-zzzzzz"])
 
     monkeypatch.setattr("conda_presto.resolve.run_solver", raise_pnf)
-    result = solve_one_platform(("conda-forge",), ["__nonexistent__"], "linux-64")
+    result = solve_one_platform(
+        ("conda-forge",),
+        ["nonexistent-package-zzzzzz"],
+        "linux-64",
+    )
     assert result.error is not None
-    assert "__nonexistent__" in result.error
+    assert "nonexistent-package-zzzzzz" in result.error
 
 
 def test_solve_result_error_sanitizes_generic():

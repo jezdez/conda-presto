@@ -133,7 +133,7 @@ async def test_resolve_post_unsatisfiable(client):
         "/resolve",
         json={
             "channels": ["conda-forge"],
-            "specs": ["__nonexistent_package_xyz__"],
+            "specs": ["nonexistent-package-xyz-zzzzzz"],
             "platforms": ["linux-64"],
         },
     )

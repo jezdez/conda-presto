@@ -1,4 +1,4 @@
-FROM ghcr.io/prefix-dev/pixi:0.67.0 AS build
+FROM ghcr.io/prefix-dev/pixi:0.70.1 AS build
 
 WORKDIR /app
 COPY pyproject.toml pixi.lock ./
