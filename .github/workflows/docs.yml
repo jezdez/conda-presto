@@ -33,7 +33,7 @@ jobs:
       - name: Build docs
         run: pixi run -e docs docs
       - name: Upload artifact
-        uses: actions/upload-pages-artifact@v4
+        uses: actions/upload-pages-artifact@v5
         with:
           path: "docs/_build/dirhtml"
 
