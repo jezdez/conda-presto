@@ -152,8 +152,9 @@ limiting itself).
 
 ### CORS
 
-By default, all origins are allowed (`CONDA_PRESTO_CORS_ORIGINS=*`).
-In production, restrict this to your frontend domains:
+By default, CORS is disabled. To allow browser clients, set
+`CONDA_PRESTO_CORS_ORIGINS` to the frontend domains that should be
+allowed:
 
 ```bash
 export CONDA_PRESTO_CORS_ORIGINS="https://app.example.com,https://ci.example.com"

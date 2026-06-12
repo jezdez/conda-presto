@@ -12,6 +12,7 @@ from conda.models.environment import Environment
 from conda.models.records import PackageRecord
 
 import conda_presto.resolve as resolve_module
+from conda_presto.exceptions import safe_error_message
 from conda_presto.resolve import (
     ResolvedPackage,
     SolveResult,
@@ -342,6 +343,20 @@ def test_solve_one_platform_known_exception_surfaces_detail(monkeypatch):
     )
     assert result.error is not None
     assert "nonexistent-package-zzzzzz" in result.error
+
+
+def test_safe_error_message_redacts_known_error_channel_urls():
+    exc = PackagesNotFoundError(
+        ["nonexistent-package-zzzzzz"],
+        ["https://token@example.internal/conda?auth=secret"],
+    )
+    message = safe_error_message(exc)
+
+    assert "nonexistent-package-zzzzzz" in message
+    assert "Current channels: [redacted]" in message
+    assert "token" not in message
+    assert "example.internal" not in message
+    assert "auth=secret" not in message
 
 
 def test_solve_result_error_sanitizes_generic():

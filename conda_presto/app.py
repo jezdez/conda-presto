@@ -1128,6 +1128,13 @@ async def on_shutdown(app: Litestar) -> None:
     shutdown_process_pool()
 
 
+def build_cors_config(origins: list[str]) -> CORSConfig | None:
+    """Return a CORS config only when origins are explicitly configured."""
+    if not origins:
+        return None
+    return CORSConfig(allow_origins=origins)
+
+
 middleware = [LoggingMiddlewareConfig().middleware]
 if RATE_LIMIT:
     middleware.append(RateLimitConfig(rate_limit=("minute", RATE_LIMIT)).middleware)
@@ -1161,7 +1168,7 @@ app = Litestar(
     ),
     request_max_body_size=MAX_BODY_BYTES,
     compression_config=CompressionConfig(backend="brotli", brotli_gzip_fallback=True),
-    cors_config=CORSConfig(allow_origins=CORS_ORIGINS),
+    cors_config=build_cors_config(CORS_ORIGINS),
     logging_config=LoggingConfig(
         log_exceptions="always",
         loggers={"conda_presto": {"level": LOG_LEVEL}},

@@ -58,7 +58,7 @@ HTTP middleware:
         start uvicorn with ``--forwarded-allow-ips`` so the client IP
         is taken from ``X-Forwarded-For`` rather than the proxy.
     ``CONDA_PRESTO_CORS_ORIGINS``
-        Comma-separated allowed CORS origins (default: ``*``).
+        Comma-separated allowed CORS origins (default: disabled).
     ``CONDA_PRESTO_LOG_LEVEL``
         Application log level (default: ``INFO``).
 
@@ -151,7 +151,7 @@ if RESULT_CACHE_BACKEND not in {"memory", "file", "redis"}:
     )
 
 RATE_LIMIT = env_int("CONDA_PRESTO_RATE_LIMIT", 300)
-CORS_ORIGINS = env_list("CONDA_PRESTO_CORS_ORIGINS", "*")
+CORS_ORIGINS = env_list("CONDA_PRESTO_CORS_ORIGINS", "")
 LOG_LEVEL = os.environ.get("CONDA_PRESTO_LOG_LEVEL", "INFO")
 
 SOLVE_TIMEOUT_S = env_int("CONDA_PRESTO_SOLVE_TIMEOUT_S", 60)

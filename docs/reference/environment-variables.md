@@ -32,7 +32,7 @@ CLI and the HTTP server.
 | `CONDA_PRESTO_RESULT_CACHE_REDIS_URL` | unset | Redis URL for the `redis` result cache backend. If `CONDA_PRESTO_RESULT_CACHE_BACKEND=redis` is set without this value, `redis://localhost:6379/0` is used. |
 | `CONDA_PRESTO_RESULT_CACHE_REDIS_NAMESPACE` | `conda-presto` | Redis key namespace for result cache entries. |
 | `CONDA_PRESTO_RATE_LIMIT` | `300` | Maximum requests per minute per client IP. Set to `0` to disable. Behind a reverse proxy, start uvicorn with `--forwarded-allow-ips` so the rate-limit key is the real client IP, not the proxy. |
-| `CONDA_PRESTO_CORS_ORIGINS` | `*` | Comma-separated allowed CORS origins. |
+| `CONDA_PRESTO_CORS_ORIGINS` | disabled | Comma-separated allowed CORS origins. |
 | `CONDA_PRESTO_LOG_LEVEL` | `INFO` | Application log level (`DEBUG`, `INFO`, `WARNING`, `ERROR`). |
 | `CONDA_PRESTO_GLIBC_VERSION` | `2.17` | Virtual `__glibc` version injected for cross-platform Linux solves. |
 | `CONDA_PRESTO_LINUX_VERSION` | `5.15` | Virtual `__linux` version injected for cross-platform Linux solves. |

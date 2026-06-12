@@ -18,6 +18,7 @@ from litestar.stores.redis import RedisStore
 import conda_presto.app as app_module
 from conda_presto.app import (
     ResultCache,
+    build_cors_config,
     formats,
     health,
     on_shutdown,
@@ -108,6 +109,16 @@ async def test_health(client):
     resp = await client.get("/health")
     assert resp.status_code == 200
     assert resp.json() == {"status": "ok"}
+
+
+def test_build_cors_config_disabled_without_origins():
+    assert build_cors_config([]) is None
+
+
+def test_build_cors_config_enabled_for_explicit_origins():
+    cors = build_cors_config(["https://app.example.com"])
+    assert cors is not None
+    assert cors.allow_origins == ["https://app.example.com"]
 
 
 @pytest.mark.anyio
@@ -983,7 +994,10 @@ async def test_resolve_rejects_unlisted_channel(client, monkeypatch):
     )
 
     assert resp.status_code == 400
-    assert resp.json()["error"] == "Unsupported channel(s)"
+    body = resp.json()
+    assert "Unsupported channel" in body["error"]
+    assert "allowed_channels" not in body
+    assert "example.invalid" not in resp.text
 
 
 @pytest.mark.anyio
