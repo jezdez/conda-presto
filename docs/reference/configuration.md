@@ -169,6 +169,7 @@ requests:
 - `CONDA_PRESTO_MAX_CHANNELS` caps channels per request (default 8)
 - `CONDA_PRESTO_MAX_PLATFORMS` caps platforms per request (default 8)
 - `CONDA_PRESTO_SOLVE_TIMEOUT_S` caps solve duration (default 60s)
+- `CONDA_PRESTO_PARSE_TIMEOUT_S` caps file parsing duration (default 10s)
 - `CONDA_PRESTO_MAX_INDEX_CACHE_ENTRIES` caps in-process solver index
   cache entries (default 128; set to `0` to disable index caching)
 

@@ -41,6 +41,9 @@ Request limits (abuse/DoS protection):
     ``CONDA_PRESTO_SOLVE_TIMEOUT_S``
         Max wall-clock seconds per solve request (default: ``60``).
         Returns HTTP 504 if exceeded.
+    ``CONDA_PRESTO_PARSE_TIMEOUT_S``
+        Max wall-clock seconds per file parse request (default: ``10``).
+        Returns HTTP 504 if exceeded.
     ``CONDA_PRESTO_MAX_PLATFORMS``
         Max platforms per request (default: ``8``).  Returns HTTP 400
         if exceeded.
@@ -152,6 +155,7 @@ CORS_ORIGINS = env_list("CONDA_PRESTO_CORS_ORIGINS", "*")
 LOG_LEVEL = os.environ.get("CONDA_PRESTO_LOG_LEVEL", "INFO")
 
 SOLVE_TIMEOUT_S = env_int("CONDA_PRESTO_SOLVE_TIMEOUT_S", 60)
+PARSE_TIMEOUT_S = env_int("CONDA_PRESTO_PARSE_TIMEOUT_S", 10)
 MAX_CHANNELS = env_int("CONDA_PRESTO_MAX_CHANNELS", 8)
 MAX_PLATFORMS = env_int("CONDA_PRESTO_MAX_PLATFORMS", 8)
 MAX_SPECS = env_int("CONDA_PRESTO_MAX_SPECS", 200)

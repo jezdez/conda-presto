@@ -102,6 +102,15 @@ class ParsedInputFile:
                 f"Unsupported file extension '{ext}', "
                 f"allowed: {', '.join(sorted(ALLOWED_EXTENSIONS))}"
             )
+        for line in content.splitlines():
+            stripped = line.strip()
+            if not stripped or stripped.startswith("#"):
+                continue
+            if stripped == "@EXPLICIT":
+                raise ValueError(
+                    "Explicit package URL lockfiles are not accepted by the HTTP parser"
+                )
+            break
 
         with tempfile.TemporaryDirectory() as tmpdir:
             path = Path(tmpdir) / filename

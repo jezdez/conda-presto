@@ -22,6 +22,7 @@ CLI and the HTTP server.
 | `CONDA_PRESTO_MAX_PLATFORMS` | `8` | Maximum number of platforms per request. Returns HTTP 400 if exceeded. |
 | `CONDA_PRESTO_MAX_INDEX_CACHE_ENTRIES` | `128` | Maximum number of in-process solver index cache entries. Set to `0` to disable index caching. |
 | `CONDA_PRESTO_SOLVE_TIMEOUT_S` | `60` | Per-request solve timeout in seconds. Returns HTTP 504 if exceeded. |
+| `CONDA_PRESTO_PARSE_TIMEOUT_S` | `10` | Per-request file parsing timeout in seconds. Returns HTTP 504 if exceeded. |
 | `CONDA_PRESTO_HOST` | `127.0.0.1` | Default bind address for `--serve` / `--host`. |
 | `CONDA_PRESTO_PORT` | `8000` | Default port for `--serve` / `--port`. |
 | `CONDA_PRESTO_RESULT_CACHE_SIZE` | `256` | Maximum number of solve responses retained by the in-process content-addressed result cache. |

@@ -112,6 +112,7 @@ from .config import (
     MAX_CONCURRENCY,
     MAX_PLATFORMS,
     MAX_SPECS,
+    PARSE_TIMEOUT_S,
     RATE_LIMIT,
     RESULT_CACHE_BACKEND,
     RESULT_CACHE_DIR,
@@ -481,6 +482,33 @@ def validate_channels(channels: list[str]) -> Response | None:
     return None
 
 
+async def parse_input_for_request(
+    request: Request,
+    content: str,
+    filename: str | None,
+    target_platforms: list[str] | None = None,
+) -> ParsedInputFile | Response:
+    """Parse input off the event loop with a bounded wall-clock time."""
+    try:
+        with anyio.fail_after(PARSE_TIMEOUT_S):
+            return await anyio.to_thread.run_sync(
+                ParsedInputFile.from_content,
+                content,
+                filename,
+                target_platforms,
+                limiter=request.app.state.solver_limiter,
+                abandon_on_cancel=True,
+            )
+    except TimeoutError:
+        log.warning("Parse timeout after %ss", PARSE_TIMEOUT_S)
+        return Response(
+            {"error": f"Parse exceeded {PARSE_TIMEOUT_S}s timeout"},
+            status_code=HTTP_504_GATEWAY_TIMEOUT,
+        )
+    except ValueError as exc:
+        return Response({"error": str(exc)}, status_code=HTTP_400_BAD_REQUEST)
+
+
 async def run_solve(
     request: Request,
     specs: list[str],
@@ -821,12 +849,12 @@ async def resolve_post(
         )
 
     if file_content is not None:
-        try:
-            parsed_file = ParsedInputFile.from_content(
-                file_content, file_name, platforms or [NATIVE_SUBDIR]
-            )
-        except ValueError as exc:
-            return Response({"error": str(exc)}, status_code=HTTP_400_BAD_REQUEST)
+        parsed = await parse_input_for_request(
+            request, file_content, file_name, platforms or [NATIVE_SUBDIR]
+        )
+        if isinstance(parsed, Response):
+            return parsed
+        parsed_file = parsed
 
         specs = list(specs) + parsed_file.specs
         if not channels:
@@ -945,12 +973,12 @@ async def transcode_post(
             has_channel_override,
         )
 
-    try:
-        parsed_file = ParsedInputFile.from_content(
-            file_content, file_name, target_platforms
-        )
-    except ValueError as exc:
-        return Response({"error": str(exc)}, status_code=HTTP_400_BAD_REQUEST)
+    parsed = await parse_input_for_request(
+        request, file_content, file_name, target_platforms
+    )
+    if isinstance(parsed, Response):
+        return parsed
+    parsed_file = parsed
 
     if (
         parsed_file.is_lockfile
@@ -1056,13 +1084,10 @@ async def parse(request: Request) -> Response:
             {"error": "Field 'file' is required"},
             status_code=HTTP_400_BAD_REQUEST,
         )
-    try:
-        parsed_file = ParsedInputFile.from_content(data.file, data.filename)
-    except ValueError as exc:
-        return Response(
-            {"error": str(exc)},
-            status_code=HTTP_400_BAD_REQUEST,
-        )
+    parsed = await parse_input_for_request(request, data.file, data.filename)
+    if isinstance(parsed, Response):
+        return parsed
+    parsed_file = parsed
     if cap_error := validate_caps(
         parsed_file.specs, parsed_file.channels, []
     ):

@@ -1572,6 +1572,78 @@ async def test_parse_endpoint(client):
 
 
 @pytest.mark.anyio
+async def test_parse_endpoint_rejects_too_many_specs(client, monkeypatch):
+    monkeypatch.setattr("conda_presto.app.MAX_SPECS", 2)
+    yml = (
+        "name: test\n"
+        "channels:\n"
+        "  - conda-forge\n"
+        "dependencies:\n"
+        "  - a\n"
+        "  - b\n"
+        "  - c\n"
+    )
+    resp = await client.post(
+        "/parse",
+        json={"file": yml, "filename": "environment.yml"},
+    )
+    assert resp.status_code == 400
+    assert "Too many specs" in resp.json()["error"]
+
+
+@pytest.mark.anyio
+async def test_parse_endpoint_rejects_explicit_lockfile(client):
+    explicit = "@EXPLICIT\nhttps://example.invalid/linux-64/pkg-1.0-0.conda\n"
+    resp = await client.post(
+        "/parse",
+        json={"file": explicit, "filename": "explicit.txt"},
+    )
+    assert resp.status_code == 400
+    assert "Explicit package URL lockfiles" in resp.json()["error"]
+
+
+@pytest.mark.anyio
+async def test_parse_endpoint_timeout(client, monkeypatch):
+    monkeypatch.setattr("conda_presto.app.PARSE_TIMEOUT_S", 0.1)
+
+    def slow_parse(*args, **kwargs):
+        time.sleep(2)
+        return None
+
+    monkeypatch.setattr(
+        "conda_presto.app.ParsedInputFile.from_content", slow_parse
+    )
+    resp = await client.post(
+        "/parse",
+        json={
+            "file": "dependencies:\n  - zlib\n",
+            "filename": "environment.yml",
+        },
+    )
+    assert resp.status_code == 504
+    assert "timeout" in resp.json()["error"].lower()
+
+
+@pytest.mark.anyio
+async def test_resolve_file_rejects_explicit_lockfile(client, monkeypatch):
+    def fail_solve(*args, **kwargs):
+        raise AssertionError("solve should not run")
+
+    monkeypatch.setattr("conda_presto.app.solve", fail_solve)
+    explicit = "@EXPLICIT\nhttps://example.invalid/linux-64/pkg-1.0-0.conda\n"
+    resp = await client.post(
+        "/resolve",
+        json={
+            "file": explicit,
+            "filename": "explicit.txt",
+            "platforms": ["linux-64"],
+        },
+    )
+    assert resp.status_code == 400
+    assert "Explicit package URL lockfiles" in resp.json()["error"]
+
+
+@pytest.mark.anyio
 async def test_parse_endpoint_no_file(client):
     resp = await client.post("/parse", json={})
     assert resp.status_code == 400
