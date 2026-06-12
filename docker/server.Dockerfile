@@ -29,5 +29,8 @@ RUN mkdir -p /app/.pixi/envs/prod/pkgs/cache /home/app/.conda/pkgs \
 USER app
 EXPOSE 8000
 
+HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
+    CMD /app/.pixi/envs/prod/bin/python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3).read()"
+
 ENTRYPOINT ["/app/entrypoint.sh", "conda", "presto"]
 CMD ["--serve", "--host", "0.0.0.0"]
