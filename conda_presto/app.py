@@ -80,6 +80,7 @@ from pathlib import Path
 
 import anyio
 import msgspec
+from conda.base.constants import KNOWN_SUBDIRS
 from conda.core.subdir_data import SubdirData
 from conda.models.channel import Channel
 from litestar import Litestar, Request, get, post
@@ -101,11 +102,13 @@ from litestar.stores.base import Store
 from litestar.stores.file import FileStore
 
 from .config import (
+    CHANNEL_ALLOWLIST,
     CORS_ORIGINS,
     DEFAULT_CHANNELS,
     DEFAULT_PLATFORMS,
     LOG_LEVEL,
     MAX_BODY_BYTES,
+    MAX_CHANNELS,
     MAX_CONCURRENCY,
     MAX_PLATFORMS,
     MAX_SPECS,
@@ -395,7 +398,9 @@ class ResultCache:
         )
 
 
-def validate_caps(specs: list[str], platforms: list[str]) -> Response | None:
+def validate_caps(
+    specs: list[str], channels: list[str], platforms: list[str]
+) -> Response | None:
     """Return a 400 response if per-request caps are exceeded, else None."""
     if len(specs) > MAX_SPECS:
         return Response(
@@ -403,6 +408,16 @@ def validate_caps(specs: list[str], platforms: list[str]) -> Response | None:
                 "error": (
                     f"Too many specs: {len(specs)} > {MAX_SPECS} "
                     f"(CONDA_PRESTO_MAX_SPECS)"
+                )
+            },
+            status_code=HTTP_400_BAD_REQUEST,
+        )
+    if len(channels) > MAX_CHANNELS:
+        return Response(
+            {
+                "error": (
+                    f"Too many channels: {len(channels)} > {MAX_CHANNELS} "
+                    f"(CONDA_PRESTO_MAX_CHANNELS)"
                 )
             },
             status_code=HTTP_400_BAD_REQUEST,
@@ -415,6 +430,52 @@ def validate_caps(specs: list[str], platforms: list[str]) -> Response | None:
                     f"{MAX_PLATFORMS} (CONDA_PRESTO_MAX_PLATFORMS)"
                 )
             },
+            status_code=HTTP_400_BAD_REQUEST,
+        )
+    invalid_platforms = sorted(set(platforms) - set(KNOWN_SUBDIRS))
+    if invalid_platforms:
+        return Response(
+            {
+                "error": f"Unsupported platform(s): {', '.join(invalid_platforms)}",
+                "supported": sorted(KNOWN_SUBDIRS),
+            },
+            status_code=HTTP_400_BAD_REQUEST,
+        )
+    if channel_error := validate_channels(channels):
+        return channel_error
+    return None
+
+
+def canonical_channel_name(channel: str) -> str:
+    """Return conda's canonical channel name for allowlist comparison."""
+    return Channel(channel).canonical_name
+
+
+def validate_channels(channels: list[str]) -> Response | None:
+    """Return a 400 response when channels are outside the server allowlist."""
+    if "*" in CHANNEL_ALLOWLIST:
+        return None
+
+    try:
+        allowed = {canonical_channel_name(ch) for ch in CHANNEL_ALLOWLIST}
+    except Exception as exc:
+        return Response(
+            {"error": f"Invalid channel configuration: {exc}"},
+            status_code=HTTP_400_BAD_REQUEST,
+        )
+
+    invalid = []
+    for channel in channels:
+        try:
+            canonical = canonical_channel_name(channel)
+        except Exception:
+            invalid.append(channel)
+            continue
+        if not channel.strip() or canonical not in allowed:
+            invalid.append(channel)
+    if invalid:
+        return Response(
+            {"error": "Unsupported channel(s)"},
             status_code=HTTP_400_BAD_REQUEST,
         )
     return None
@@ -660,11 +721,11 @@ async def resolve_get(
             status_code=HTTP_400_BAD_REQUEST,
         )
 
-    if cap_error := validate_caps(specs, platforms):
-        return cap_error
-
     if not channels:
         channels = list(DEFAULT_CHANNELS)
+
+    if cap_error := validate_caps(specs, channels, platforms):
+        return cap_error
 
     return await run_cached_solve(
         request, specs, channels, platforms or None, format_name=format
@@ -789,11 +850,11 @@ async def resolve_post(
             status_code=HTTP_400_BAD_REQUEST,
         )
 
-    if cap_error := validate_caps(specs, platforms):
-        return cap_error
-
     if not channels:
         channels = list(DEFAULT_CHANNELS)
+
+    if cap_error := validate_caps(specs, channels, platforms):
+        return cap_error
 
     return await run_cached_solve(
         request, specs, channels, platforms or None, format_name=format
@@ -869,7 +930,8 @@ async def transcode_post(
         )
 
     target_platforms = platforms or [NATIVE_SUBDIR]
-    if cap_error := validate_caps([], target_platforms):
+    requested_channels = (channel or []) + body_channels
+    if cap_error := validate_caps([], requested_channels, target_platforms):
         return cap_error
 
     has_extra_specs = bool(spec) or bool(body_specs)
@@ -1001,6 +1063,10 @@ async def parse(request: Request) -> Response:
             {"error": str(exc)},
             status_code=HTTP_400_BAD_REQUEST,
         )
+    if cap_error := validate_caps(
+        parsed_file.specs, parsed_file.channels, []
+    ):
+        return cap_error
     return Response({"specs": parsed_file.specs, "channels": parsed_file.channels})
 
 

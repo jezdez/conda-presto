@@ -39,6 +39,7 @@ from __future__ import annotations
 
 import logging
 import threading
+from collections import OrderedDict
 from collections.abc import Callable
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from operator import attrgetter
@@ -54,6 +55,7 @@ from conda_rattler_solver.state import SolverInputState, SolverOutputState
 from .config import (
     GLIBC_VERSION,
     LINUX_VERSION,
+    MAX_INDEX_CACHE_ENTRIES,
     MAX_WORKERS,
     OSX_VERSION,
     WIN_VERSION,
@@ -82,7 +84,7 @@ platform_lock = threading.Lock()
 context_configured = False
 
 index_lock = threading.Lock()
-index_cache: dict[tuple[tuple[str, ...], str], object] = {}
+index_cache: OrderedDict[tuple[tuple[str, ...], str], object] = OrderedDict()
 
 
 def configure_platform(platform: str):
@@ -205,13 +207,18 @@ def build_index(
     with index_lock:
         cached = index_cache.get(key)
         if cached is not None:
+            index_cache.move_to_end(key)
             return cached
         log.debug("Building index for %s/%s", channels, platform)
         index = RattlerIndexHelper(
             channels=list(channels),
             subdirs=(platform, "noarch"),
         )
+        if MAX_INDEX_CACHE_ENTRIES <= 0:
+            return index
         index_cache[key] = index
+        while len(index_cache) > MAX_INDEX_CACHE_ENTRIES:
+            index_cache.popitem(last=False)
         return index
 
 

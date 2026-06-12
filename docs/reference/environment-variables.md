@@ -12,12 +12,15 @@ CLI and the HTTP server.
 | Variable | Default | Purpose |
 |---|---|---|
 | `CONDA_PRESTO_CHANNELS` | `conda-forge` | Comma-separated default channels when none are given in a request. Also used for cache warmup on server startup. |
+| `CONDA_PRESTO_ALLOWED_CHANNELS` | value of `CONDA_PRESTO_CHANNELS` | Comma-separated channel allowlist for the HTTP server. Set to `*` only for trusted deployments that intentionally accept caller-selected channels. |
 | `CONDA_PRESTO_PLATFORMS` | `linux-64,osx-arm64,osx-64` | Comma-separated platforms to pre-warm repodata caches for on server startup. |
 | `CONDA_PRESTO_CONCURRENCY` | `4` | Maximum concurrent solve requests (thread limiter). |
 | `CONDA_PRESTO_WORKERS` | `min(4, cpu_count)` | Process pool size for multi-platform parallel solves. |
 | `CONDA_PRESTO_MAX_BODY_BYTES` | `1048576` (1 MB) | Maximum request body size in bytes. Returns HTTP 413 if exceeded. |
 | `CONDA_PRESTO_MAX_SPECS` | `200` | Maximum number of specs per request. Returns HTTP 400 if exceeded. |
+| `CONDA_PRESTO_MAX_CHANNELS` | `8` | Maximum number of channels per request. Returns HTTP 400 if exceeded. |
 | `CONDA_PRESTO_MAX_PLATFORMS` | `8` | Maximum number of platforms per request. Returns HTTP 400 if exceeded. |
+| `CONDA_PRESTO_MAX_INDEX_CACHE_ENTRIES` | `128` | Maximum number of in-process solver index cache entries. Set to `0` to disable index caching. |
 | `CONDA_PRESTO_SOLVE_TIMEOUT_S` | `60` | Per-request solve timeout in seconds. Returns HTTP 504 if exceeded. |
 | `CONDA_PRESTO_HOST` | `127.0.0.1` | Default bind address for `--serve` / `--host`. |
 | `CONDA_PRESTO_PORT` | `8000` | Default port for `--serve` / `--port`. |

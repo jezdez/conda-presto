@@ -166,8 +166,16 @@ requests:
 
 - `CONDA_PRESTO_MAX_BODY_BYTES` caps upload size (default 1 MB)
 - `CONDA_PRESTO_MAX_SPECS` caps specs per request (default 200)
+- `CONDA_PRESTO_MAX_CHANNELS` caps channels per request (default 8)
 - `CONDA_PRESTO_MAX_PLATFORMS` caps platforms per request (default 8)
 - `CONDA_PRESTO_SOLVE_TIMEOUT_S` caps solve duration (default 60s)
+- `CONDA_PRESTO_MAX_INDEX_CACHE_ENTRIES` caps in-process solver index
+  cache entries (default 128; set to `0` to disable index caching)
+
+The HTTP server accepts channels from `CONDA_PRESTO_ALLOWED_CHANNELS`
+(defaulting to `CONDA_PRESTO_CHANNELS`). Set it to `*` only when the
+server is already protected by trusted callers and network egress
+controls.
 
 See [Environment variables](environment-variables.md) for the full
 list and their defaults.

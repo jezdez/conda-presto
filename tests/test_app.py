@@ -953,6 +953,60 @@ async def test_resolve_rejects_too_many_specs(client, monkeypatch):
 
 
 @pytest.mark.anyio
+async def test_resolve_rejects_too_many_channels(client, monkeypatch):
+    monkeypatch.setattr("conda_presto.app.MAX_CHANNELS", 1)
+
+    resp = await client.post(
+        "/resolve",
+        json={
+            "specs": ["zlib"],
+            "channels": ["conda-forge", "bioconda"],
+            "platforms": ["linux-64"],
+        },
+    )
+
+    assert resp.status_code == 400
+    assert "Too many channels" in resp.json()["error"]
+
+
+@pytest.mark.anyio
+async def test_resolve_rejects_unlisted_channel(client, monkeypatch):
+    monkeypatch.setattr("conda_presto.app.CHANNEL_ALLOWLIST", ["conda-forge"])
+
+    resp = await client.post(
+        "/resolve",
+        json={
+            "specs": ["zlib"],
+            "channels": ["https://example.invalid/private"],
+            "platforms": ["linux-64"],
+        },
+    )
+
+    assert resp.status_code == 400
+    assert resp.json()["error"] == "Unsupported channel(s)"
+
+
+@pytest.mark.anyio
+async def test_resolve_accepts_allowed_channel_url(client, monkeypatch):
+    monkeypatch.setattr("conda_presto.app.CHANNEL_ALLOWLIST", ["conda-forge"])
+    monkeypatch.setattr(
+        "conda_presto.app.solve",
+        lambda channels, specs, platforms: [],
+    )
+
+    resp = await client.post(
+        "/resolve",
+        json={
+            "specs": ["zlib"],
+            "channels": ["https://conda.anaconda.org/conda-forge"],
+            "platforms": ["linux-64"],
+        },
+    )
+
+    assert resp.status_code == 200
+
+
+@pytest.mark.anyio
 async def test_resolve_get_rejects_too_many_platforms(client, monkeypatch):
     monkeypatch.setattr("conda_presto.app.MAX_PLATFORMS", 1)
     resp = await client.get(

@@ -281,6 +281,32 @@ def test_clear_index_cache():
     assert idx2 is not idx1
 
 
+def test_build_index_cache_respects_entry_limit(monkeypatch):
+    """The index cache evicts the least-recently used entry at its limit."""
+    clear_index_cache()
+    built = []
+
+    class FakeIndex:
+        def __init__(self, channels, subdirs):
+            self.channels = channels
+            self.subdirs = subdirs
+            built.append((tuple(channels), tuple(subdirs)))
+
+    monkeypatch.setattr(resolve_module, "MAX_INDEX_CACHE_ENTRIES", 1)
+    monkeypatch.setattr(resolve_module, "RattlerIndexHelper", FakeIndex)
+
+    idx1 = build_index(("conda-forge",), "linux-64")
+    idx2 = build_index(("bioconda",), "linux-64")
+
+    assert idx1 is not idx2
+    assert (("conda-forge",), "linux-64") not in index_cache
+    assert (("bioconda",), "linux-64") in index_cache
+    assert built == [
+        (("conda-forge",), ("linux-64", "noarch")),
+        (("bioconda",), ("linux-64", "noarch")),
+    ]
+
+
 def test_cached_solve_produces_correct_results():
     """Two back-to-back solves produce identical results (cache hit)."""
     clear_index_cache()
