@@ -1,5 +1,5 @@
 name: conda-presto
-description: Resolve, transcode, and lint conda environments via the CLI (local) or HTTP API (remote)
+description: Resolve conda environments locally via the CLI or remotely via the HTTP API
 branding:
   icon: package
   color: green
@@ -10,7 +10,7 @@ inputs:
     required: false
     default: local
   command:
-    description: "Action to perform: solve, transcode, or lint"
+    description: Action to perform (solve is the only supported command today)
     required: true
     default: solve
   file:
@@ -35,37 +35,26 @@ inputs:
   endpoint:
     description: "conda-presto base URL (required when mode: remote)"
     required: false
-  ignore:
-    description: "Comma-separated lint rule codes to ignore (e.g. PIN001,FMT002). Only used with command: lint"
-    required: false
-  severity:
-    description: "Minimum severity for lint findings: info, warning, or error. Only used with command: lint"
-    required: false
 
 outputs:
   result:
     description: The response body from conda-presto
     value: ${{ steps.output.outputs.result }}
   solved:
-    description: Whether the solve/transcode succeeded without errors ("true" or "false")
+    description: Whether the solve succeeded without errors ("true" or "false")
     value: ${{ steps.output.outputs.solved }}
 
 runs:
   using: composite
   steps:
-    # ── Local mode: install pixi + conda-presto, run CLI ──
+    # Local mode: install pixi, then run conda-presto from this checkout.
     - name: Install pixi
       if: inputs.mode == 'local'
       uses: prefix-dev/setup-pixi@5185adfbffb4bd703da3010310260805d89ebb11 # v0.9.6
       with:
         run-install: false
 
-    - name: Install conda-presto
-      if: inputs.mode == 'local'
-      shell: bash
-      run: pixi global install --git https://github.com/jezdez/conda-presto.git
-
-    - name: Run (local)
+    - name: Resolve (local)
       id: local
       if: inputs.mode == 'local'
       shell: bash
@@ -76,71 +65,61 @@ runs:
         INPUT_CHANNELS: ${{ inputs.channels }}
         INPUT_PLATFORMS: ${{ inputs.platforms }}
         INPUT_FORMAT: ${{ inputs.format }}
-        INPUT_IGNORE: ${{ inputs.ignore }}
-        INPUT_SEVERITY: ${{ inputs.severity }}
       run: |
         set -euo pipefail
 
-        supported="solve, transcode, lint"
-        case "${INPUT_COMMAND}" in
-          solve|transcode)
-            args=()
+        if [[ "${INPUT_COMMAND}" != "solve" ]]; then
+          echo "::error::Unsupported command '${INPUT_COMMAND}'. Supported: solve"
+          exit 1
+        fi
 
-            if [[ -n "${INPUT_FILE:-}" ]]; then
-              if [[ ! -f "${INPUT_FILE}" ]]; then
-                echo "::error::File not found: ${INPUT_FILE}"
-                exit 1
-              fi
-              args+=(-f "${INPUT_FILE}")
-            fi
+        args=()
 
-            if [[ -n "${INPUT_CHANNELS:-}" ]]; then
-              IFS=',' read -ra channels <<< "${INPUT_CHANNELS}"
-              for ch in "${channels[@]}"; do args+=(-c "${ch}"); done
-            fi
-
-            if [[ -n "${INPUT_PLATFORMS:-}" ]]; then
-              IFS=',' read -ra platforms <<< "${INPUT_PLATFORMS}"
-              for pl in "${platforms[@]}"; do args+=(-p "${pl}"); done
-            fi
-
-            if [[ -n "${INPUT_FORMAT:-}" ]]; then
-              args+=(--format "${INPUT_FORMAT}")
-            fi
-
-            if [[ -n "${INPUT_SPECS:-}" ]]; then
-              IFS=',' read -ra specs <<< "${INPUT_SPECS}"
-              args+=("${specs[@]}")
-            fi
-
-            echo "::group::conda-presto ${INPUT_COMMAND} (local)"
-            echo "args: ${args[*]}"
-            echo "::endgroup::"
-
-            tmpout="$(mktemp)"
-            if conda-presto "${args[@]}" > "${tmpout}" 2>&1; then
-              echo "exit_code=0" >> "$GITHUB_OUTPUT"
-            else
-              echo "exit_code=$?" >> "$GITHUB_OUTPUT"
-            fi
-            echo "tmpout=${tmpout}" >> "$GITHUB_OUTPUT"
-            ;;
-
-          lint)
-            echo "::warning::lint command in local mode is not yet supported. Use mode: remote with a running conda-presto instance."
-            tmpout="$(mktemp)"
-            echo "exit_code=1" >> "$GITHUB_OUTPUT"
-            echo "tmpout=${tmpout}" >> "$GITHUB_OUTPUT"
-            ;;
-
-          *)
-            echo "::error::Unsupported command '${INPUT_COMMAND}'. Supported: ${supported}"
+        if [[ -n "${INPUT_FILE:-}" ]]; then
+          if [[ ! -f "${INPUT_FILE}" ]]; then
+            echo "::error::File not found: ${INPUT_FILE}"
             exit 1
-            ;;
-        esac
+          fi
+          args+=(-f "${INPUT_FILE}")
+        fi
 
-    # ── Remote mode: POST to hosted endpoint ──
-    - name: Run (remote)
+        if [[ -n "${INPUT_CHANNELS:-}" ]]; then
+          IFS=',' read -ra channels <<< "${INPUT_CHANNELS}"
+          for ch in "${channels[@]}"; do args+=(-c "${ch}"); done
+        fi
+
+        if [[ -n "${INPUT_PLATFORMS:-}" ]]; then
+          IFS=',' read -ra platforms <<< "${INPUT_PLATFORMS}"
+          for pl in "${platforms[@]}"; do args+=(-p "${pl}"); done
+        fi
+
+        if [[ -n "${INPUT_FORMAT:-}" ]]; then
+          args+=(--format "${INPUT_FORMAT}")
+        fi
+
+        if [[ -n "${INPUT_SPECS:-}" ]]; then
+          IFS=',' read -ra specs <<< "${INPUT_SPECS}"
+          args+=("${specs[@]}")
+        fi
+
+        echo "::group::conda-presto solve (local)"
+        [[ -n "${INPUT_FILE:-}" ]] && echo "file: provided" || echo "file: none"
+        [[ -n "${INPUT_SPECS:-}" ]] && echo "specs: provided" || echo "specs: none"
+        [[ -n "${INPUT_CHANNELS:-}" ]] && echo "channels: provided" || echo "channels: none"
+        [[ -n "${INPUT_PLATFORMS:-}" ]] && echo "platforms: provided" || echo "platforms: default"
+        [[ -n "${INPUT_FORMAT:-}" ]] && echo "format: provided" || echo "format: default"
+        echo "::endgroup::"
+
+        tmpout="$(mktemp)"
+        if pixi run --manifest-path "${GITHUB_ACTION_PATH}/pyproject.toml" -e cli conda-presto "${args[@]}" > "${tmpout}" 2>&1; then
+          echo "exit_code=0" >> "$GITHUB_OUTPUT"
+        else
+          echo "exit_code=$?" >> "$GITHUB_OUTPUT"
+        fi
+        echo "tmpout=${tmpout}" >> "$GITHUB_OUTPUT"
+
+    # Remote mode: POST to hosted endpoint.
+    - name: Resolve (remote)
       id: remote
       if: inputs.mode == 'remote'
       shell: bash
@@ -152,32 +131,20 @@ runs:
         INPUT_PLATFORMS: ${{ inputs.platforms }}
         INPUT_FORMAT: ${{ inputs.format }}
         INPUT_ENDPOINT: ${{ inputs.endpoint }}
-        INPUT_IGNORE: ${{ inputs.ignore }}
-        INPUT_SEVERITY: ${{ inputs.severity }}
       run: |
         set -euo pipefail
 
-        supported="solve, transcode, lint"
+        if [[ "${INPUT_COMMAND}" != "solve" ]]; then
+          echo "::error::Unsupported command '${INPUT_COMMAND}'. Supported: solve"
+          exit 1
+        fi
+
         if [[ -z "${INPUT_ENDPOINT:-}" ]]; then
           echo "::error::Input 'endpoint' is required when mode is 'remote'"
           exit 1
         fi
 
-        case "${INPUT_COMMAND}" in
-          solve)
-            url="${INPUT_ENDPOINT}/resolve"
-            ;;
-          transcode)
-            url="${INPUT_ENDPOINT}/transcode"
-            ;;
-          lint)
-            url="${INPUT_ENDPOINT}/lint"
-            ;;
-          *)
-            echo "::error::Unsupported command '${INPUT_COMMAND}'. Supported: ${supported}"
-            exit 1
-            ;;
-        esac
+        url="${INPUT_ENDPOINT}/resolve"
 
         body='{}'
 
@@ -209,28 +176,14 @@ runs:
           body=$(echo "${body}" | jq --argjson platforms "${platforms_json}" '. + {platforms: $platforms}')
         fi
 
-        query_params=""
         if [[ -n "${INPUT_FORMAT:-}" ]]; then
-          enc=$(printf '%s' "${INPUT_FORMAT}" | jq -sRr @uri)
-          query_params="format=${enc}"
-        fi
-        if [[ -n "${INPUT_IGNORE:-}" ]]; then
-          enc=$(printf '%s' "${INPUT_IGNORE}" | jq -sRr @uri)
-          [[ -n "${query_params}" ]] && query_params="${query_params}&"
-          query_params="${query_params}ignore=${enc}"
-        fi
-        if [[ -n "${INPUT_SEVERITY:-}" ]]; then
-          enc=$(printf '%s' "${INPUT_SEVERITY}" | jq -sRr @uri)
-          [[ -n "${query_params}" ]] && query_params="${query_params}&"
-          query_params="${query_params}severity=${enc}"
-        fi
-        if [[ -n "${query_params}" ]]; then
-          url="${url}?${query_params}"
+          url="${url}?format=${INPUT_FORMAT}"
         fi
 
-        echo "::group::conda-presto ${INPUT_COMMAND} (remote)"
-        echo "URL: ${url}"
-        echo "Body: $(echo "${body}" | jq -c '{specs, channels, platforms, filename}')"
+        echo "::group::conda-presto request (remote)"
+        echo "endpoint: configured"
+        echo "body_fields: $(echo "${body}" | jq -cr 'keys | join(",")')"
+        [[ -n "${INPUT_FORMAT:-}" ]] && echo "format: provided" || echo "format: default"
         echo "::endgroup::"
 
         tmpout="$(mktemp)"
@@ -248,14 +201,13 @@ runs:
         fi
         echo "tmpout=${tmpout}" >> "$GITHUB_OUTPUT"
 
-    # ── Shared output handling ──
+    # Shared output handling.
     - name: Process output
       id: output
       if: always()
       shell: bash
       env:
         INPUT_MODE: ${{ inputs.mode }}
-        INPUT_COMMAND: ${{ inputs.command }}
         INPUT_FORMAT: ${{ inputs.format }}
         INPUT_OUTPUT: ${{ inputs.output }}
         LOCAL_EXIT: ${{ steps.local.outputs.exit_code }}
@@ -282,6 +234,16 @@ runs:
         response_body="$(cat "${tmpout}")"
         rm -f "${tmpout}"
 
+        make_delimiter() {
+          if command -v uuidgen >/dev/null 2>&1; then
+            printf 'CONDA_PRESTO_%s\n' "$(uuidgen | tr '[:lower:]' '[:upper:]' | tr -d '-')"
+          elif command -v openssl >/dev/null 2>&1; then
+            printf 'CONDA_PRESTO_%s\n' "$(openssl rand -hex 16)"
+          else
+            printf 'CONDA_PRESTO_%s_%s\n' "${RANDOM}" "$$"
+          fi
+        }
+
         if [[ "${exit_code}" != "0" ]]; then
           echo "solved=false" >> "$GITHUB_OUTPUT"
           echo "${response_body}"
@@ -289,20 +251,11 @@ runs:
         fi
 
         solved="true"
-        if [[ "${INPUT_COMMAND}" == "solve" && -z "${INPUT_FORMAT:-}" ]]; then
+        if [[ -z "${INPUT_FORMAT:-}" ]]; then
           error_count=$(echo "${response_body}" | jq '[.[] | select(.error != null)] | length' 2>/dev/null || echo "0")
           if [[ "${error_count}" -gt 0 ]]; then
             solved="false"
             echo "::warning::${error_count} platform(s) had solver errors"
-          fi
-        elif [[ "${INPUT_COMMAND}" == "lint" ]]; then
-          error_count=$(echo "${response_body}" | jq '.summary.errors' 2>/dev/null || echo "0")
-          warning_count=$(echo "${response_body}" | jq '.summary.warnings' 2>/dev/null || echo "0")
-          if [[ "${error_count}" -gt 0 ]]; then
-            solved="false"
-            echo "::error::Lint found ${error_count} error(s) and ${warning_count} warning(s)"
-          elif [[ "${warning_count}" -gt 0 ]]; then
-            echo "::warning::Lint found ${warning_count} warning(s)"
           fi
         fi
 
@@ -319,9 +272,13 @@ runs:
         if [[ ${result_size} -gt 100000 ]]; then
           echo "result=(output too large, written to ${INPUT_OUTPUT:-stdout})" >> "$GITHUB_OUTPUT"
         else
+          delimiter="$(make_delimiter)"
+          while grep -Fqx "${delimiter}" <<< "${response_body}"; do
+            delimiter="$(make_delimiter)"
+          done
           {
-            echo "result<<CONDA_PRESTO_EOF"
-            echo "${response_body}"
-            echo "CONDA_PRESTO_EOF"
+            echo "result<<${delimiter}"
+            printf '%s\n' "${response_body}"
+            echo "${delimiter}"
           } >> "$GITHUB_OUTPUT"
         fi
