@@ -9,7 +9,6 @@
 
 ## 0.3.0
 
-- Added MCP endpoint (`/mcp`) via litestar-mcp
 - Added `POST /parse` endpoint for file parsing without solving
 - Added `GET /platforms` and `GET /version` endpoints
 - Added rate limiting (`CONDA_PRESTO_RATE_LIMIT`)

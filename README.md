@@ -16,7 +16,6 @@ the result as native JSON or any conda exporter format
 - Multi-platform parallel solves via `ProcessPoolExecutor`
 - Output as JSON or any conda exporter format (`--format` / `?format=`)
 - HTTP API with interactive docs (Scalar UI), compression, rate limiting
-- MCP endpoint for AI agent integration
 - GitHub Action for CI pipelines (local and remote modes)
 - Docker images for server and CLI deployment
 - Uses `conda-rattler-solver` for fast SAT solving

@@ -20,7 +20,7 @@ Install conda-presto and run your first resolve in under a minute.
 :link: tutorials/index
 :link-type: doc
 
-Step-by-step guides for the CLI, HTTP API, CI pipelines, and MCP.
+Step-by-step guides for the CLI, HTTP API, and CI pipelines.
 :::
 
 :::{grid-item-card} {octicon}`book` Reference
