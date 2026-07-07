@@ -1,7 +1,7 @@
 # HTTP API
 
 This tutorial covers the conda-presto HTTP API: resolving specs,
-uploading environment files, converting between lockfile formats, and
+uploading input files, converting between lockfile formats, and
 inspecting the server.
 
 ```{note}
@@ -26,7 +26,7 @@ the CLI emits.
 
 ## Resolving from files
 
-Upload an environment file directly. The Content-Type header tells
+Upload an input file directly. The Content-Type header tells
 the server which parser to use.
 
 `````{tab-set}

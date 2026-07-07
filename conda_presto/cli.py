@@ -36,7 +36,7 @@ from conda.cli.helpers import (
 from .config import DEFAULT_CHANNELS, DEFAULT_HOST, DEFAULT_PORT
 from .exceptions import SAFE_ERROR_TYPES, UnknownFormatError
 from .exporter import is_lockfile_format, render_envs
-from .inputs import ParsedInputFile, parse_environment_path
+from .inputs import ParsedInputFile, parse_input_path
 from .resolve import NATIVE_SUBDIR, solve, solve_environments
 
 
@@ -125,7 +125,7 @@ def load_parsed_files(
     target_platforms = target_platforms or [NATIVE_SUBDIR]
     for fpath in files:
         try:
-            parsed = parse_environment_path(fpath, target_platforms)
+            parsed = parse_input_path(fpath, target_platforms)
         except ValueError:
             print(
                 f"No environment spec plugin can handle: {fpath}",

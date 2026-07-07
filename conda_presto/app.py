@@ -99,7 +99,7 @@ from .config import (
 )
 from .exceptions import UnknownFormatError
 from .exporter import available_formats, is_lockfile_format, render_envs
-from .inputs import ParsedInputFile, parse_environment_content
+from .inputs import ParsedInputFile, parse_input_content
 from .resolve import (
     NATIVE_SUBDIR,
     shutdown_process_pool,
@@ -324,7 +324,7 @@ async def resolve_post(
     format: str | None = None,
     filename: str | None = None,
 ) -> Response:
-    """Resolve package specs and/or an environment file via POST body.
+    """Resolve package specs and/or an input file via POST body.
 
     Dispatch on ``Content-Type``:
 
@@ -334,7 +334,7 @@ async def resolve_post(
       query param; an omitted field falls through.
     * ``application/yaml`` / ``application/x-yaml`` / ``text/yaml`` /
       ``application/toml`` / ``text/plain``: the body *is* the raw
-      environment file content (e.g. an ``environment.yml``).  Specs,
+      input file content (e.g. an ``environment.yml``).  Specs,
       channels, and platforms come from query params only.  The
       parser is picked from ``Content-Type``; pass ``?filename=`` to
       override (e.g. ``?filename=pixi.lock`` to force the lockfile
@@ -390,7 +390,7 @@ async def resolve_post(
                     f"Unsupported Content-Type {content_type!r}. "
                     "Use application/json for a ResolveRequest envelope, "
                     "or application/yaml / application/toml / text/plain "
-                    "for a raw environment file body."
+                    "for a raw input file body."
                 ),
                 "supported": [
                     "application/json",
@@ -402,7 +402,7 @@ async def resolve_post(
 
     if file_content is not None:
         try:
-            parsed_file = parse_environment_content(
+            parsed_file = parse_input_content(
                 file_content, file_name, platforms or [NATIVE_SUBDIR]
             )
         except ValueError as exc:
@@ -525,7 +525,7 @@ async def transcode_post(
         )
 
     try:
-        parsed_file = parse_environment_content(
+        parsed_file = parse_input_content(
             file_content, file_name, target_platforms
         )
     except ValueError as exc:
@@ -603,7 +603,7 @@ async def version() -> dict[str, str]:
     status_code=200,
 )
 async def parse(request: Request) -> Response:
-    """Parse an environment file and return its specs and channels."""
+    """Parse an input file and return its specs and channels."""
     body = await request.body()
     if not body:
         return Response(
@@ -623,7 +623,7 @@ async def parse(request: Request) -> Response:
             status_code=HTTP_400_BAD_REQUEST,
         )
     try:
-        parsed_file = parse_environment_content(data.file, data.filename)
+        parsed_file = parse_input_content(data.file, data.filename)
     except ValueError as exc:
         return Response(
             {"error": str(exc)},

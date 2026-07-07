@@ -29,11 +29,11 @@ class ParsedInputFile:
         return self.environment_format == EnvironmentFormat.lockfile
 
 
-def parse_environment_path(
+def parse_input_path(
     path: str | os.PathLike[str],
     target_platforms: list[str] | tuple[str, ...] | None = None,
 ) -> ParsedInputFile:
-    """Parse an environment file through conda's plugin registry.
+    """Parse an input file through conda's plugin registry.
 
     ``target_platforms`` is only used for lockfiles. When every target
     platform is present, ``environments`` contains the corresponding
@@ -84,12 +84,12 @@ def parse_environment_path(
     )
 
 
-def parse_environment_content(
+def parse_input_content(
     content: str,
     filename: str | None = None,
     target_platforms: list[str] | tuple[str, ...] | None = None,
 ) -> ParsedInputFile:
-    """Parse in-memory file content through conda's plugin registry."""
+    """Parse in-memory input file content through conda's plugin registry."""
     filename = os.path.basename(filename or "environment.yml")
     ext = os.path.splitext(filename)[1].lower()
     if ext not in ALLOWED_EXTENSIONS:
@@ -101,4 +101,4 @@ def parse_environment_content(
     with tempfile.TemporaryDirectory() as tmpdir:
         path = Path(tmpdir) / filename
         path.write_text(content)
-        return parse_environment_path(path, target_platforms)
+        return parse_input_path(path, target_platforms)

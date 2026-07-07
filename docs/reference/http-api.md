@@ -38,7 +38,7 @@ curl 'http://localhost:8000/resolve?spec=python=3.12&spec=numpy&channel=conda-fo
 
 ### `POST /resolve`
 
-Resolve specs via a JSON body, or upload a raw environment file with
+Resolve specs via a JSON body, or upload a raw input file with
 Content-Type dispatch.
 
 #### JSON body
@@ -66,7 +66,7 @@ curl -sS http://localhost:8000/resolve \
 
 #### Raw file upload
 
-Upload an environment file directly by setting an appropriate
+Upload an input file directly by setting an appropriate
 Content-Type header. No JSON wrapping is needed.
 
 Accepted Content-Types:
@@ -198,7 +198,7 @@ curl http://localhost:8000/version
 
 ### `POST /parse`
 
-Parse an environment file and extract its specs and channels without
+Parse an input file and extract its specs and channels without
 solving. Useful for validation or for building a UI on top of the
 solver.
 
