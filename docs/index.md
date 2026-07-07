@@ -38,7 +38,7 @@ Architecture, performance characteristics, and security model.
 :::
 
 :::{grid-item-card} {octicon}`light-bulb` Proposals
-:link: proposals/index
+:link: proposals
 :link-type: doc
 
 Design proposals organized by stream: capability, integration, trust.
@@ -78,7 +78,7 @@ explanation/index
 ```{toctree}
 :hidden:
 
-proposals/index
+proposals
 ```
 
 ```{toctree}
