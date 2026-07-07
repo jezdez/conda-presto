@@ -45,4 +45,4 @@ These proposals follow conda enhancement proposals (CEPs) where applicable,
 so that signatures, attestations, and policy formats are interoperable across
 the conda ecosystem rather than specific to conda-presto.
 
-See the [trust proposals](../proposals/index.md) for detailed designs.
+See the [trust proposals](../proposals.md) for detailed designs.
