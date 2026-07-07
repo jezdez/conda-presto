@@ -78,6 +78,7 @@ from litestar.logging import LoggingConfig
 from litestar.middleware.logging import LoggingMiddlewareConfig
 from litestar.middleware.rate_limit import RateLimitConfig
 from litestar.openapi import OpenAPIConfig
+from litestar.params import FromQuery
 from litestar.response import Response
 from litestar.status_codes import (
     HTTP_400_BAD_REQUEST,
@@ -280,10 +281,10 @@ def transcode_rejection(
 @get("/resolve")
 async def resolve_get(
     request: Request,
-    spec: list[str] | None = None,
-    channel: list[str] | None = None,
-    platform: list[str] | None = None,
-    format: str | None = None,
+    spec: FromQuery[list[str] | None] = None,
+    channel: FromQuery[list[str] | None] = None,
+    platform: FromQuery[list[str] | None] = None,
+    format: FromQuery[str | None] = None,
 ) -> Response:
     """Resolve package specs via query params.
 
@@ -318,11 +319,11 @@ async def resolve_get(
 )
 async def resolve_post(
     request: Request,
-    spec: list[str] | None = None,
-    channel: list[str] | None = None,
-    platform: list[str] | None = None,
-    format: str | None = None,
-    filename: str | None = None,
+    spec: FromQuery[list[str] | None] = None,
+    channel: FromQuery[list[str] | None] = None,
+    platform: FromQuery[list[str] | None] = None,
+    format: FromQuery[str | None] = None,
+    filename: FromQuery[str | None] = None,
 ) -> Response:
     """Resolve package specs and/or an input file via POST body.
 
@@ -447,11 +448,11 @@ async def resolve_post(
 )
 async def transcode_post(
     request: Request,
-    spec: list[str] | None = None,
-    channel: list[str] | None = None,
-    platform: list[str] | None = None,
-    format: str | None = None,
-    filename: str | None = None,
+    spec: FromQuery[list[str] | None] = None,
+    channel: FromQuery[list[str] | None] = None,
+    platform: FromQuery[list[str] | None] = None,
+    format: FromQuery[str | None] = None,
+    filename: FromQuery[str | None] = None,
 ) -> Response:
     """Convert one lockfile format to another without solving."""
     content_type = request.headers.get("content-type", "").split(";")[0].strip().lower()
@@ -629,9 +630,7 @@ async def parse(request: Request) -> Response:
             {"error": str(exc)},
             status_code=HTTP_400_BAD_REQUEST,
         )
-    return Response(
-        {"specs": parsed_file.specs, "channels": parsed_file.channels}
-    )
+    return Response({"specs": parsed_file.specs, "channels": parsed_file.channels})
 
 
 @get("/health")
