@@ -29,14 +29,6 @@ Run conda-presto in GitHub Actions. Local mode installs on the
 runner automatically; remote mode calls a hosted deployment.
 :::
 
-:::{grid-item-card} {octicon}`dependabot` MCP integration
-:link: mcp
-:link-type: doc
-
-Connect AI agents to conda-presto via the Model Context Protocol.
-Discover tools, resources, and the Streamable HTTP transport.
-:::
-
 ::::
 
 ```{toctree}
@@ -45,5 +37,4 @@ Discover tools, resources, and the Streamable HTTP transport.
 cli-resolve
 http-api
 ci-pipeline
-mcp
 ```

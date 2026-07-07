@@ -239,7 +239,6 @@ async def test_resolve_post_invalid_json(client):
     )
     assert resp.status_code == 400
 
-
 @pytest.mark.anyio
 async def test_resolve_post_not_object(client):
     resp = await client.post(
@@ -735,28 +734,6 @@ async def test_on_startup_initializes(monkeypatch):
     assert len(warmup_calls) == 1
 
 
-def test_production_app_has_mcp_plugin():
-    from litestar_mcp import LitestarMCP
-
-    from conda_presto.app import app
-
-    mcp_plugins = [p for p in app.plugins if isinstance(p, LitestarMCP)]
-    assert len(mcp_plugins) == 1
-
-
-def test_resolve_handlers_have_mcp_tool_opt():
-    assert resolve_get.opt.get("mcp_tool") == "resolve"
-    assert resolve_post.opt.get("mcp_tool") == "resolve_file"
-
-
-def test_health_handler_has_mcp_resource_opt():
-    assert health.opt.get("mcp_resource") == "health"
-
-
-def test_formats_handler_has_mcp_resource_opt():
-    assert formats.opt.get("mcp_resource") == "formats"
-
-
 @pytest.mark.anyio
 async def test_formats_endpoint(client):
     resp = await client.get("/formats")
@@ -781,10 +758,6 @@ async def test_platforms_endpoint(client):
     assert data["platforms"] == sorted(data["platforms"])
 
 
-def test_platforms_handler_has_mcp_resource_opt():
-    assert platforms.opt.get("mcp_resource") == "platforms"
-
-
 @pytest.mark.anyio
 async def test_version_endpoint(client):
     resp = await client.get("/version")
@@ -792,10 +765,6 @@ async def test_version_endpoint(client):
     data = resp.json()
     assert "conda-presto" in data
     assert "conda" in data
-
-
-def test_version_handler_has_mcp_resource_opt():
-    assert version.opt.get("mcp_resource") == "version"
 
 
 @pytest.mark.anyio
@@ -835,7 +804,3 @@ async def test_parse_endpoint_empty_body(client):
         headers={"content-type": "application/json"},
     )
     assert resp.status_code == 400
-
-
-def test_parse_handler_has_mcp_tool_opt():
-    assert parse.opt.get("mcp_tool") == "parse_file"

@@ -974,7 +974,6 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/noarch/urllib3-2.7.0-pyhd8ed1ab_0.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/uvicorn-0.49.0-pyhc90fa1f_0.conda
       - pypi: ./
-      - pypi: https://files.pythonhosted.org/packages/e9/0a/bf1630a5c1a27175050a8e9f0a8b9b2e48381f43f381485f3e6b1c5c1bf8/litestar_mcp-0.6.0-py3-none-any.whl
       linux-aarch64:
       - conda: https://conda.anaconda.org/conda-canary/label/dev/linux-aarch64/conda-26.5.1.23+g67d56e22a-py313_0.conda
       - conda: https://conda.anaconda.org/conda-canary/label/dev/noarch/conda-libmamba-solver-26.6.0.4+ga641410-py_0.conda
@@ -1100,7 +1099,6 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/noarch/urllib3-2.7.0-pyhd8ed1ab_0.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/uvicorn-0.49.0-pyhc90fa1f_0.conda
       - pypi: ./
-      - pypi: https://files.pythonhosted.org/packages/e9/0a/bf1630a5c1a27175050a8e9f0a8b9b2e48381f43f381485f3e6b1c5c1bf8/litestar_mcp-0.6.0-py3-none-any.whl
       osx-64:
       - conda: https://conda.anaconda.org/conda-canary/label/dev/noarch/conda-libmamba-solver-26.4.2.17_g6394307-py_0.conda
       - conda: https://conda.anaconda.org/conda-canary/label/dev/noarch/conda-lockfiles-0.2.0+2_g4e2389e-py_0.conda
@@ -1221,7 +1219,6 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/osx-64/zstandard-0.25.0-py313hcb05632_1.conda
       - conda: https://conda.anaconda.org/conda-forge/osx-64/zstd-1.5.7-h3eecb57_6.conda
       - pypi: ./
-      - pypi: https://files.pythonhosted.org/packages/e9/0a/bf1630a5c1a27175050a8e9f0a8b9b2e48381f43f381485f3e6b1c5c1bf8/litestar_mcp-0.6.0-py3-none-any.whl
       osx-arm64:
       - conda: https://conda.anaconda.org/conda-canary/label/dev/noarch/conda-libmamba-solver-26.6.0.4+ga641410-py_0.conda
       - conda: https://conda.anaconda.org/conda-canary/label/dev/noarch/conda-lockfiles-0.2.0+2_g4e2389e-py_0.conda
@@ -1341,7 +1338,6 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/zstandard-0.25.0-py313h9734d34_1.conda
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/zstd-1.5.7-hbf9d68e_6.conda
       - pypi: ./
-      - pypi: https://files.pythonhosted.org/packages/e9/0a/bf1630a5c1a27175050a8e9f0a8b9b2e48381f43f381485f3e6b1c5c1bf8/litestar_mcp-0.6.0-py3-none-any.whl
   docs:
     channels:
     - url: https://conda.anaconda.org/conda-canary/label/dev/
@@ -2003,7 +1999,6 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/noarch/urllib3-2.7.0-pyhd8ed1ab_0.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/uvicorn-0.49.0-pyhc90fa1f_0.conda
       - pypi: ./
-      - pypi: https://files.pythonhosted.org/packages/e9/0a/bf1630a5c1a27175050a8e9f0a8b9b2e48381f43f381485f3e6b1c5c1bf8/litestar_mcp-0.6.0-py3-none-any.whl
       linux-aarch64:
       - conda: https://conda.anaconda.org/conda-canary/label/dev/linux-aarch64/conda-26.5.1.23+g67d56e22a-py313_0.conda
       - conda: https://conda.anaconda.org/conda-canary/label/dev/noarch/conda-libmamba-solver-26.6.0.4+ga641410-py_0.conda
@@ -2128,7 +2123,6 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/noarch/urllib3-2.7.0-pyhd8ed1ab_0.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/uvicorn-0.49.0-pyhc90fa1f_0.conda
       - pypi: ./
-      - pypi: https://files.pythonhosted.org/packages/e9/0a/bf1630a5c1a27175050a8e9f0a8b9b2e48381f43f381485f3e6b1c5c1bf8/litestar_mcp-0.6.0-py3-none-any.whl
       osx-64:
       - conda: https://conda.anaconda.org/conda-canary/label/dev/noarch/conda-libmamba-solver-26.4.2.17_g6394307-py_0.conda
       - conda: https://conda.anaconda.org/conda-canary/label/dev/noarch/conda-lockfiles-0.2.0+2_g4e2389e-py_0.conda
@@ -2248,7 +2242,6 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/osx-64/zstandard-0.25.0-py313hcb05632_1.conda
       - conda: https://conda.anaconda.org/conda-forge/osx-64/zstd-1.5.7-h3eecb57_6.conda
       - pypi: ./
-      - pypi: https://files.pythonhosted.org/packages/e9/0a/bf1630a5c1a27175050a8e9f0a8b9b2e48381f43f381485f3e6b1c5c1bf8/litestar_mcp-0.6.0-py3-none-any.whl
       osx-arm64:
       - conda: https://conda.anaconda.org/conda-canary/label/dev/noarch/conda-libmamba-solver-26.6.0.4+ga641410-py_0.conda
       - conda: https://conda.anaconda.org/conda-canary/label/dev/noarch/conda-lockfiles-0.2.0+2_g4e2389e-py_0.conda
@@ -2367,7 +2360,6 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/zstandard-0.25.0-py313h9734d34_1.conda
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/zstd-1.5.7-hbf9d68e_6.conda
       - pypi: ./
-      - pypi: https://files.pythonhosted.org/packages/e9/0a/bf1630a5c1a27175050a8e9f0a8b9b2e48381f43f381485f3e6b1c5c1bf8/litestar_mcp-0.6.0-py3-none-any.whl
   test:
     channels:
     - url: https://conda.anaconda.org/conda-canary/label/dev/
@@ -2508,7 +2500,6 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/noarch/urllib3-2.7.0-pyhd8ed1ab_0.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/uvicorn-0.49.0-pyhc90fa1f_0.conda
       - pypi: ./
-      - pypi: https://files.pythonhosted.org/packages/e9/0a/bf1630a5c1a27175050a8e9f0a8b9b2e48381f43f381485f3e6b1c5c1bf8/litestar_mcp-0.6.0-py3-none-any.whl
       linux-aarch64:
       - conda: https://conda.anaconda.org/conda-canary/label/dev/linux-aarch64/conda-26.5.1.23+g67d56e22a-py313_0.conda
       - conda: https://conda.anaconda.org/conda-canary/label/dev/noarch/conda-libmamba-solver-26.6.0.4+ga641410-py_0.conda
@@ -2641,7 +2632,6 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/noarch/urllib3-2.7.0-pyhd8ed1ab_0.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/uvicorn-0.49.0-pyhc90fa1f_0.conda
       - pypi: ./
-      - pypi: https://files.pythonhosted.org/packages/e9/0a/bf1630a5c1a27175050a8e9f0a8b9b2e48381f43f381485f3e6b1c5c1bf8/litestar_mcp-0.6.0-py3-none-any.whl
       osx-64:
       - conda: https://conda.anaconda.org/conda-canary/label/dev/noarch/conda-libmamba-solver-26.4.2.17_g6394307-py_0.conda
       - conda: https://conda.anaconda.org/conda-canary/label/dev/noarch/conda-lockfiles-0.2.0+2_g4e2389e-py_0.conda
@@ -2769,7 +2759,6 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/osx-64/zstandard-0.25.0-py313hcb05632_1.conda
       - conda: https://conda.anaconda.org/conda-forge/osx-64/zstd-1.5.7-h3eecb57_6.conda
       - pypi: ./
-      - pypi: https://files.pythonhosted.org/packages/e9/0a/bf1630a5c1a27175050a8e9f0a8b9b2e48381f43f381485f3e6b1c5c1bf8/litestar_mcp-0.6.0-py3-none-any.whl
       osx-arm64:
       - conda: https://conda.anaconda.org/conda-canary/label/dev/noarch/conda-libmamba-solver-26.6.0.4+ga641410-py_0.conda
       - conda: https://conda.anaconda.org/conda-canary/label/dev/noarch/conda-lockfiles-0.2.0+2_g4e2389e-py_0.conda
@@ -2896,7 +2885,6 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/zstandard-0.25.0-py313h9734d34_1.conda
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/zstd-1.5.7-hbf9d68e_6.conda
       - pypi: ./
-      - pypi: https://files.pythonhosted.org/packages/e9/0a/bf1630a5c1a27175050a8e9f0a8b9b2e48381f43f381485f3e6b1c5c1bf8/litestar_mcp-0.6.0-py3-none-any.whl
 packages:
 - conda: https://conda.anaconda.org/conda-canary/label/dev/linux-64/conda-26.5.1.23+g67d56e22a-py313_0.conda
   sha256: 887853a05ade3510dd053a1cc1579dc4a735b8c771f36ab0a0c18188703965a9
@@ -7567,12 +7555,3 @@ packages:
 - pypi: ./
   name: conda-presto
   requires_python: '>=3.13'
-- pypi: https://files.pythonhosted.org/packages/e9/0a/bf1630a5c1a27175050a8e9f0a8b9b2e48381f43f381485f3e6b1c5c1bf8/litestar_mcp-0.6.0-py3-none-any.whl
-  name: litestar-mcp
-  version: 0.6.0
-  sha256: ddf5ac96f60bf509e79c92a7697f3b0d0ec036907e024236b4cc2ea3e702b431
-  requires_dist:
-  - httpx>=0.24.1
-  - litestar[jwt]>=2.23.0
-  - typing-extensions>=4.0.0
-  requires_python: '>=3.10'

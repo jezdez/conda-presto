@@ -9,8 +9,8 @@ Background and design rationale for how conda-presto works.
 :link: architecture
 :link-type: doc
 
-Process model, caching layers, repodata flow, and how the CLI,
-HTTP API, and MCP endpoint share a common solver core.
+Process model, caching layers, repodata flow, and how the CLI and
+HTTP API share a common solver core.
 :::
 
 :::{grid-item-card} {octicon}`zap` Performance
