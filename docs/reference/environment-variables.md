@@ -21,6 +21,12 @@ CLI and the HTTP server.
 | `CONDA_PRESTO_SOLVE_TIMEOUT_S` | `60` | Per-request solve timeout in seconds. Returns HTTP 504 if exceeded. |
 | `CONDA_PRESTO_HOST` | `127.0.0.1` | Default bind address for `--serve` / `--host`. |
 | `CONDA_PRESTO_PORT` | `8000` | Default port for `--serve` / `--port`. |
+| `CONDA_PRESTO_RESULT_CACHE_SIZE` | `256` | Maximum number of solve responses retained by the in-process content-addressed result cache. |
+| `CONDA_PRESTO_RESULT_CACHE_MAX_MEMORY_MB` | `64` | Maximum payload megabytes retained by the in-process result cache. Set to `0` to disable the byte cap. |
+| `CONDA_PRESTO_RESULT_CACHE_BACKEND` | auto | Result cache backend: `memory`, `file`, or `redis`. Defaults to `redis` when `CONDA_PRESTO_RESULT_CACHE_REDIS_URL` is set, `file` when `CONDA_PRESTO_RESULT_CACHE_DIR` is set, otherwise `memory`. |
+| `CONDA_PRESTO_RESULT_CACHE_DIR` | unset | Directory for the `file` result cache backend. Entries are keyed by the same content-addressed `/r/<sha256>` hash as the in-process cache. |
+| `CONDA_PRESTO_RESULT_CACHE_REDIS_URL` | unset | Redis URL for the `redis` result cache backend. If `CONDA_PRESTO_RESULT_CACHE_BACKEND=redis` is set without this value, `redis://localhost:6379/0` is used. |
+| `CONDA_PRESTO_RESULT_CACHE_REDIS_NAMESPACE` | `conda-presto` | Redis key namespace for result cache entries. |
 | `CONDA_PRESTO_RATE_LIMIT` | `300` | Maximum requests per minute per client IP. Set to `0` to disable. Behind a reverse proxy, start uvicorn with `--forwarded-allow-ips` so the rate-limit key is the real client IP, not the proxy. |
 | `CONDA_PRESTO_CORS_ORIGINS` | `*` | Comma-separated allowed CORS origins. |
 | `CONDA_PRESTO_LOG_LEVEL` | `INFO` | Application log level (`DEBUG`, `INFO`, `WARNING`, `ERROR`). |

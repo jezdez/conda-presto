@@ -22,6 +22,20 @@ Server tuning:
         Default bind address for ``--serve`` (default: ``127.0.0.1``).
     ``CONDA_PRESTO_PORT``
         Default port for ``--serve`` (default: ``8000``).
+    ``CONDA_PRESTO_RESULT_CACHE_SIZE``
+        Max number of solve responses retained by the in-process result
+        cache (default: ``256``).
+    ``CONDA_PRESTO_RESULT_CACHE_MAX_MEMORY_MB``
+        Max payload megabytes retained by the in-process result cache
+        (default: ``64``). Set to ``0`` to disable the byte cap.
+    ``CONDA_PRESTO_RESULT_CACHE_BACKEND``
+        Result cache backend: ``memory``, ``file``, or ``redis``.
+        Defaults to ``redis`` when a Redis URL is set, ``file`` when a
+        cache directory is set, otherwise ``memory``.
+    ``CONDA_PRESTO_RESULT_CACHE_DIR``
+        Optional directory for a persistent file-backed result cache.
+    ``CONDA_PRESTO_RESULT_CACHE_REDIS_URL``
+        Optional Redis URL for a Redis-backed result cache.
 
 Request limits (abuse/DoS protection):
     ``CONDA_PRESTO_SOLVE_TIMEOUT_S``
@@ -57,6 +71,7 @@ Cross-platform virtual packages:
         The ``__win`` virtual package is usually unversioned; the value
         exists to keep the override dict shape consistent.
 """
+
 from __future__ import annotations
 
 import os
@@ -84,9 +99,7 @@ def env_list(name: str, default: str) -> list[str]:
 
 DEFAULT_CHANNELS = env_list("CONDA_PRESTO_CHANNELS", "conda-forge")
 
-DEFAULT_PLATFORMS = env_list(
-    "CONDA_PRESTO_PLATFORMS", "linux-64,osx-arm64,osx-64"
-)
+DEFAULT_PLATFORMS = env_list("CONDA_PRESTO_PLATFORMS", "linux-64,osx-arm64,osx-64")
 
 MAX_BODY_BYTES = env_int("CONDA_PRESTO_MAX_BODY_BYTES", 1_024 * 1_024)
 
@@ -104,6 +117,31 @@ WIN_VERSION = os.environ.get("CONDA_PRESTO_WIN_VERSION", "0")
 
 DEFAULT_HOST = os.environ.get("CONDA_PRESTO_HOST", "127.0.0.1")
 DEFAULT_PORT = env_int("CONDA_PRESTO_PORT", 8000)
+RESULT_CACHE_SIZE = env_int("CONDA_PRESTO_RESULT_CACHE_SIZE", 256)
+RESULT_CACHE_MAX_MEMORY_MB = env_int(
+    "CONDA_PRESTO_RESULT_CACHE_MAX_MEMORY_MB",
+    64,
+)
+RESULT_CACHE_MAX_MEMORY_BYTES = RESULT_CACHE_MAX_MEMORY_MB * 1024 * 1024
+RESULT_CACHE_DIR = os.environ.get("CONDA_PRESTO_RESULT_CACHE_DIR") or None
+RESULT_CACHE_REDIS_URL = os.environ.get("CONDA_PRESTO_RESULT_CACHE_REDIS_URL") or None
+RESULT_CACHE_REDIS_NAMESPACE = os.environ.get(
+    "CONDA_PRESTO_RESULT_CACHE_REDIS_NAMESPACE",
+    "conda-presto",
+)
+RESULT_CACHE_BACKEND = os.environ.get("CONDA_PRESTO_RESULT_CACHE_BACKEND")
+if RESULT_CACHE_BACKEND is None:
+    if RESULT_CACHE_REDIS_URL:
+        RESULT_CACHE_BACKEND = "redis"
+    elif RESULT_CACHE_DIR:
+        RESULT_CACHE_BACKEND = "file"
+    else:
+        RESULT_CACHE_BACKEND = "memory"
+RESULT_CACHE_BACKEND = RESULT_CACHE_BACKEND.lower()
+if RESULT_CACHE_BACKEND not in {"memory", "file", "redis"}:
+    raise ValueError(
+        f"Invalid value for CONDA_PRESTO_RESULT_CACHE_BACKEND: {RESULT_CACHE_BACKEND!r}"
+    )
 
 RATE_LIMIT = env_int("CONDA_PRESTO_RATE_LIMIT", 300)
 CORS_ORIGINS = env_list("CONDA_PRESTO_CORS_ORIGINS", "*")

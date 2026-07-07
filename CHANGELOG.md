@@ -13,6 +13,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   pages, published through GitHub Pages.
 - `POST /transcode` for lockfile-to-lockfile conversion without solving
   when the requested platforms are already present in the input lockfile.
+- Content-addressed resolve result cache with stable `Location: /r/{hash}`
+  permalinks for successful HTTP solve responses and an optional
+  file-backed or Redis-backed persistent layer.
 
 ### Changed
 
