@@ -15,7 +15,7 @@ from conda.exceptions import PackagesNotFoundError
 from conda_presto.cli import (
     cmd_serve,
     execute,
-    load_files,
+    load_parsed_files,
     main,
 )
 
@@ -217,7 +217,7 @@ def test_solve_multiple_files(run_cli, tmp_path):
     assert "bzip2" in names
 
 
-def test_load_files_unhandled(tmp_path, monkeypatch, capsys):
+def test_load_parsed_files_unhandled(tmp_path, monkeypatch, capsys):
     bad = tmp_path / "env.yml"
     bad.write_text("name: test\nchannels:\n  - conda-forge\ndependencies:\n  - zlib\n")
 
@@ -234,7 +234,7 @@ def test_load_files_unhandled(tmp_path, monkeypatch, capsys):
         lambda fpath: FakePlugin(),
     )
     with pytest.raises(SystemExit, match="1"):
-        load_files([str(bad)])
+        load_parsed_files([str(bad)])
     assert "No environment spec plugin can handle" in capsys.readouterr().err
 
 

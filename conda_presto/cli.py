@@ -138,12 +138,6 @@ def load_parsed_files(
     return deps, channels, parsed_files
 
 
-def load_files(files: list[str]) -> tuple[list[str], list[str]]:
-    """Parse input files and return accumulated dependencies/channels."""
-    deps, channels, _ = load_parsed_files(files)
-    return deps, channels
-
-
 def transcode_envs(
     parsed_files: list[ParsedInputFile],
     output_format: str,

@@ -23,7 +23,6 @@ class ParsedInputFile:
     environment_format: EnvironmentFormat
     available_platforms: tuple[str, ...] = ()
     environments: tuple[Environment, ...] = ()
-    specifier_name: str = ""
 
     @property
     def is_lockfile(self) -> bool:
@@ -31,23 +30,18 @@ class ParsedInputFile:
 
 
 def _channels_from_envs(envs: tuple[Environment, ...]) -> list[str]:
-    channels: list[str] = []
-    seen: set[str] = set()
-    for env in envs:
-        if not env.config or not env.config.channels:
-            continue
-        for channel in env.config.channels:
-            if channel not in seen:
-                channels.append(channel)
-                seen.add(channel)
-    return channels
+    return list(
+        dict.fromkeys(
+            channel
+            for env in envs
+            if env.config and env.config.channels
+            for channel in env.config.channels
+        )
+    )
 
 
 def _specs_from_envs(envs: tuple[Environment, ...]) -> list[str]:
-    specs: list[str] = []
-    for env in envs:
-        specs.extend(str(spec) for spec in env.requested_packages)
-    return specs
+    return [str(spec) for env in envs for spec in env.requested_packages]
 
 
 def parse_environment_path(
@@ -80,7 +74,6 @@ def parse_environment_path(
             environment_format=specifier.environment_format,
             available_platforms=available,
             environments=envs,
-            specifier_name=specifier.name,
         )
 
     env = spec.env
@@ -92,7 +85,6 @@ def parse_environment_path(
         channels=channels,
         environment_format=specifier.environment_format,
         environments=(env,),
-        specifier_name=specifier.name,
     )
 
 

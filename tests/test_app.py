@@ -741,26 +741,6 @@ async def test_resolve_post_lockfile_extra_specs_fall_back_to_solver(
     assert calls == [(["conda-forge"], ["zlib"], ["linux-64"])]
 
 
-def test_render_formatted_response_maps_unknown_format(monkeypatch):
-    def raise_unknown_format(envs, format_name):
-        raise app_module.UnknownFormatError(format_name, ["explicit"])
-
-    monkeypatch.setattr(app_module, "render_envs", raise_unknown_format)
-    resp = app_module.render_formatted_response([], "does-not-exist")
-
-    assert resp.status_code == 400
-
-
-def test_render_formatted_response_maps_generic_error(monkeypatch):
-    def raise_error(*args, **kwargs):
-        raise RuntimeError("export failed")
-
-    monkeypatch.setattr(app_module, "render_envs", raise_error)
-    resp = app_module.render_formatted_response([], "conda-lock-v1")
-
-    assert resp.status_code == 500
-
-
 @pytest.mark.anyio
 async def test_resolve_post_raw_body_invalid_utf8(client):
     resp = await client.post(

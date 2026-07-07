@@ -229,24 +229,6 @@ async def run_solve(
     return Response(body, media_type=media_type)
 
 
-def render_formatted_response(envs: tuple | list, format_name: str) -> Response:
-    """Render parsed or solved environments with exporter errors mapped."""
-    try:
-        body, media_type = render_envs(list(envs), format_name)
-    except UnknownFormatError as exc:
-        return Response(
-            {"error": str(exc), "available_formats": exc.available},
-            status_code=HTTP_400_BAD_REQUEST,
-        )
-    except Exception:
-        log.exception("Environment export failed")
-        return Response(
-            {"error": "Internal solver error"},
-            status_code=HTTP_500_INTERNAL_SERVER_ERROR,
-        )
-    return Response(body, media_type=media_type)
-
-
 def transcode_rejection(
     parsed: ParsedInputFile | None,
     format_name: str | None,
@@ -445,7 +427,22 @@ async def resolve_post(
                     status_code=HTTP_400_BAD_REQUEST,
                 )
             if output_is_lockfile and parsed_file.environments:
-                return render_formatted_response(parsed_file.environments, format)
+                try:
+                    body, media_type = render_envs(
+                        list(parsed_file.environments), format
+                    )
+                except UnknownFormatError as exc:
+                    return Response(
+                        {"error": str(exc), "available_formats": exc.available},
+                        status_code=HTTP_400_BAD_REQUEST,
+                    )
+                except Exception:
+                    log.exception("Environment export failed")
+                    return Response(
+                        {"error": "Internal solver error"},
+                        status_code=HTTP_500_INTERNAL_SERVER_ERROR,
+                    )
+                return Response(body, media_type=media_type)
 
         if solve is False:
             return transcode_rejection(
