@@ -10,9 +10,13 @@ from conda.models.environment import Environment
 from httpx import ASGITransport, AsyncClient
 from litestar import Litestar
 from litestar.openapi import OpenAPIConfig
+from litestar.stores.file import FileStore
+from litestar.stores.memory import MemoryStore
+from litestar.stores.redis import RedisStore
 
 import conda_presto.app as app_module
 from conda_presto.app import (
+    ResultCache,
     formats,
     health,
     on_shutdown,
@@ -21,9 +25,11 @@ from conda_presto.app import (
     platforms,
     resolve_get,
     resolve_post,
+    result_get,
     transcode_post,
     version,
 )
+from conda_presto.resolve import SolveResult
 
 
 @pytest.fixture()
@@ -33,6 +39,7 @@ def test_app():
             resolve_get,
             resolve_post,
             transcode_post,
+            result_get,
             formats,
             platforms,
             version,
@@ -47,6 +54,7 @@ def test_app():
         request_max_body_size=1_024 * 1_024,
     )
     app.state.solver_limiter = None
+    app.state.result_cache = ResultCache(max_size=256)
     return app
 
 
@@ -127,6 +135,381 @@ async def test_resolve_post_defaults(client):
     data = resp.json()
     assert len(data) == 1
     assert data[0]["error"] is None
+
+
+@pytest.mark.anyio
+async def test_resolve_post_returns_content_addressed_location(client, monkeypatch):
+    calls = 0
+
+    def fake_solve(channels, specs, platforms):
+        nonlocal calls
+        calls += 1
+        return [SolveResult(platform="linux-64", packages=[])]
+
+    monkeypatch.setattr(app_module, "solve", fake_solve)
+
+    first = await client.post(
+        "/resolve",
+        json={
+            "channels": ["conda-forge"],
+            "specs": ["zlib"],
+            "platforms": ["linux-64"],
+        },
+    )
+    second = await client.post(
+        "/resolve",
+        json={
+            "channels": ["conda-forge"],
+            "specs": ["zlib"],
+            "platforms": ["linux-64"],
+        },
+    )
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert calls == 1
+    assert first.headers["location"].startswith("/r/")
+    assert second.headers["location"] == first.headers["location"]
+    assert first.headers["cache-control"] == app_module.RESULT_CACHE_CONTROL
+    assert second.json() == [{"platform": "linux-64", "packages": [], "error": None}]
+
+
+@pytest.mark.anyio
+async def test_result_permalink_returns_stored_body_and_media_type(client, monkeypatch):
+    monkeypatch.setattr(
+        app_module,
+        "solve",
+        lambda channels, specs, platforms: [
+            SolveResult(platform="linux-64", packages=[])
+        ],
+    )
+
+    resolved = await client.post(
+        "/resolve",
+        json={
+            "channels": ["conda-forge"],
+            "specs": ["zlib"],
+            "platforms": ["linux-64"],
+        },
+    )
+    cached = await client.get(resolved.headers["location"])
+
+    assert cached.status_code == 200
+    assert cached.content == resolved.content
+    assert cached.headers["content-type"].startswith("application/json")
+    assert cached.headers["cache-control"] == app_module.RESULT_CACHE_CONTROL
+
+
+@pytest.mark.anyio
+async def test_result_permalink_missing_returns_404(client):
+    resp = await client.get("/r/not-in-cache")
+
+    assert resp.status_code == 404
+    assert resp.json()["error"] == "result not in cache; re-POST to recompute"
+
+
+@pytest.mark.anyio
+async def test_result_cache_evicts_oldest_result(client, test_app, monkeypatch):
+    test_app.state.result_cache = ResultCache(max_size=1)
+    monkeypatch.setattr(
+        app_module,
+        "solve",
+        lambda channels, specs, platforms: [
+            SolveResult(platform="linux-64", packages=[])
+        ],
+    )
+
+    first = await client.post(
+        "/resolve",
+        json={
+            "channels": ["conda-forge"],
+            "specs": ["first"],
+            "platforms": ["linux-64"],
+        },
+    )
+    second = await client.post(
+        "/resolve",
+        json={
+            "channels": ["conda-forge"],
+            "specs": ["second"],
+            "platforms": ["linux-64"],
+        },
+    )
+
+    assert (await client.get(first.headers["location"])).status_code == 404
+    assert (await client.get(second.headers["location"])).status_code == 200
+
+
+@pytest.mark.anyio
+async def test_result_cache_uses_litestar_store_layer(monkeypatch):
+    app = Litestar(
+        route_handlers=[resolve_post, result_get],
+        stores={app_module.RESULT_CACHE_STORE_NAME: MemoryStore()},
+    )
+    app.state.solver_limiter = None
+    app.state.result_cache = ResultCache(
+        max_size=256,
+        store_name=app_module.RESULT_CACHE_STORE_NAME,
+    )
+    calls = 0
+
+    def fake_solve(channels, specs, platforms):
+        nonlocal calls
+        calls += 1
+        return [SolveResult(platform="linux-64", packages=[])]
+
+    monkeypatch.setattr(app_module, "solve", fake_solve)
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app),
+        base_url="http://test",
+    ) as store_client:
+        first = await store_client.post(
+            "/resolve",
+            json={
+                "channels": ["conda-forge"],
+                "specs": ["zlib"],
+                "platforms": ["linux-64"],
+            },
+        )
+        app.state.result_cache = ResultCache(
+            max_size=256,
+            store_name=app_module.RESULT_CACHE_STORE_NAME,
+        )
+        second = await store_client.post(
+            "/resolve",
+            json={
+                "channels": ["conda-forge"],
+                "specs": ["zlib"],
+                "platforms": ["linux-64"],
+            },
+        )
+        cached = await store_client.get(first.headers["location"])
+
+    assert calls == 1
+    assert second.headers["location"] == first.headers["location"]
+    assert second.content == first.content
+    assert cached.content == first.content
+
+
+def test_result_cache_stores_for_config_registers_file_store(tmp_path):
+    stores = ResultCache.stores_for_config(
+        "file",
+        str(tmp_path),
+        None,
+        "conda-presto",
+    )
+
+    assert isinstance(stores[app_module.RESULT_CACHE_STORE_NAME], FileStore)
+
+
+def test_result_cache_stores_for_config_registers_redis_store():
+    stores = ResultCache.stores_for_config(
+        "redis",
+        None,
+        "redis://localhost:6379/0",
+        "conda-presto-test",
+    )
+
+    assert isinstance(stores[app_module.RESULT_CACHE_STORE_NAME], RedisStore)
+
+
+@pytest.mark.parametrize(
+    "backend, error",
+    [
+        pytest.param("file", "CONDA_PRESTO_RESULT_CACHE_DIR", id="file-dir"),
+        pytest.param("sqlite", "Unsupported result cache backend", id="unknown"),
+    ],
+)
+def test_result_cache_stores_for_config_rejects_invalid_config(backend, error):
+    with pytest.raises(ValueError, match=error):
+        ResultCache.stores_for_config(backend, None, None, "conda-presto")
+
+
+@pytest.mark.parametrize(
+    "max_bytes, writes, expected_retained, expected_keys, expected_bytes",
+    [
+        pytest.param(
+            30,
+            (("first", 20), ("second", 20)),
+            (True, True),
+            ["second"],
+            30,
+            id="evict-oldest-by-bytes",
+        ),
+        pytest.param(
+            100,
+            (("same", 10), ("same", 20)),
+            (True, True),
+            ["same"],
+            30,
+            id="replace-existing-accounting",
+        ),
+        pytest.param(
+            10,
+            (("oversized", 20),),
+            (False,),
+            [],
+            0,
+            id="skip-oversized",
+        ),
+        pytest.param(
+            20,
+            (("same", 5), ("same", 20)),
+            (True, False),
+            [],
+            0,
+            id="drop-existing-oversized-replacement",
+        ),
+    ],
+)
+def test_result_cache_memory_limit(
+    max_bytes,
+    writes,
+    expected_retained,
+    expected_keys,
+    expected_bytes,
+):
+    cache = ResultCache(max_size=10, max_bytes=max_bytes)
+
+    retained = tuple(
+        cache.remember_memory(
+            key,
+            app_module.StoredResult(b"x" * body_size, "text/plain"),
+        )
+        for key, body_size in writes
+    )
+
+    assert retained == expected_retained
+    assert list(cache.entries) == expected_keys
+    assert cache.current_bytes == expected_bytes
+
+
+@pytest.mark.anyio
+async def test_result_cache_remember_omits_permalink_when_memory_rejects_result():
+    cache = ResultCache(max_size=10, max_bytes=10)
+
+    response = await cache.remember("oversized", b"x" * 20, "text/plain")
+
+    assert "Location" not in response.headers
+    assert not cache.entries
+
+
+@pytest.mark.anyio
+async def test_spec_order_canonicalization_reuses_cached_result(client, monkeypatch):
+    calls = 0
+
+    def fake_solve(channels, specs, platforms):
+        nonlocal calls
+        calls += 1
+        return [SolveResult(platform="linux-64", packages=[])]
+
+    monkeypatch.setattr(app_module, "solve", fake_solve)
+
+    first = await client.post(
+        "/resolve",
+        json={
+            "channels": ["conda-forge"],
+            "specs": ["python", "zlib"],
+            "platforms": ["linux-64"],
+        },
+    )
+    second = await client.post(
+        "/resolve",
+        json={
+            "channels": ["conda-forge"],
+            "specs": ["zlib", "python"],
+            "platforms": ["linux-64"],
+        },
+    )
+
+    assert calls == 1
+    assert second.headers["location"] == first.headers["location"]
+
+
+def test_different_output_formats_produce_different_cache_keys():
+    default_key = ResultCache.key_for(["zlib"], ["conda-forge"], ["linux-64"], None)
+    explicit_key = ResultCache.key_for(
+        ["zlib"], ["conda-forge"], ["linux-64"], "explicit"
+    )
+
+    assert explicit_key != default_key
+
+
+def test_different_solver_versions_produce_different_cache_keys(monkeypatch):
+    def version_one(package):
+        if package == "conda-rattler-solver":
+            return "one"
+        return "test"
+
+    def version_two(package):
+        if package == "conda-rattler-solver":
+            return "two"
+        return "test"
+
+    monkeypatch.setattr(app_module, "pkg_version", version_one)
+    first = ResultCache.key_for(["zlib"], ["conda-forge"], ["linux-64"], None)
+    monkeypatch.setattr(app_module, "pkg_version", version_two)
+    second = ResultCache.key_for(["zlib"], ["conda-forge"], ["linux-64"], None)
+
+    assert second != first
+
+
+@pytest.mark.anyio
+async def test_resolve_get_uses_default_channels(client, monkeypatch):
+    captured = {}
+
+    def capture(channels, specs, platforms):
+        captured["channels"] = channels
+        return [SolveResult(platform="linux-64", packages=[])]
+
+    monkeypatch.setattr(app_module, "solve", capture)
+
+    resp = await client.get(
+        "/resolve",
+        params=[("spec", "zlib"), ("platform", "linux-64")],
+    )
+
+    assert resp.status_code == 200
+    assert captured["channels"] == app_module.DEFAULT_CHANNELS
+
+
+@pytest.mark.anyio
+async def test_resolve_post_empty_body_uses_query_params(client, monkeypatch):
+    captured = {}
+
+    def capture(channels, specs, platforms):
+        captured["specs"] = specs
+        return [SolveResult(platform="linux-64", packages=[])]
+
+    monkeypatch.setattr(app_module, "solve", capture)
+
+    resp = await client.post(
+        "/resolve?spec=zlib&platform=linux-64",
+        content=b"",
+        headers={"content-type": "application/json"},
+    )
+
+    assert resp.status_code == 200
+    assert captured["specs"] == ["zlib"]
+
+
+@pytest.mark.anyio
+async def test_version_omits_missing_optional_dependency(client, monkeypatch):
+    def fake_version(package):
+        if package == "conda-lockfiles":
+            raise RuntimeError("missing")
+        return "test"
+
+    monkeypatch.setattr(app_module, "pkg_version", fake_version)
+
+    resp = await client.get("/version")
+    data = resp.json()
+
+    assert resp.status_code == 200
+    assert data["conda-presto"] == "test"
+    assert data["conda-rattler-solver"] == "test"
+    assert "conda-lockfiles" not in data
 
 
 @pytest.mark.anyio
@@ -883,6 +1266,7 @@ async def test_openapi_schema(client):
     assert "openapi" in data
     assert "/resolve" in data["paths"]
     assert "/transcode" in data["paths"]
+    assert "/r/{key}" in data["paths"]
     assert "/health" in data["paths"]
 
 
@@ -897,6 +1281,7 @@ async def test_on_startup_initializes(monkeypatch):
     dummy_app = Litestar(route_handlers=[health])
     await on_startup(dummy_app)
     assert dummy_app.state.solver_limiter is not None
+    assert dummy_app.state.result_cache is not None
     assert len(warmup_calls) == 1
 
 

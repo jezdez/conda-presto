@@ -5,6 +5,7 @@ Endpoints:
 - ``GET /resolve`` — resolve specs via query params
 - ``POST /resolve`` — resolve specs and/or file content via JSON body
 - ``POST /transcode`` — convert one lockfile format to another
+- ``GET /r/{hash}`` — fetch a stored content-addressed resolve result
 - ``GET /formats`` — list registered output format names
 - ``GET /platforms`` — list known conda platform subdirs
 - ``GET /version`` — version info for conda-presto and dependencies
@@ -65,12 +66,18 @@ Performance design:
 
 from __future__ import annotations
 
+import hashlib
+import json
 import logging
-from dataclasses import dataclass
+from collections import OrderedDict
+from dataclasses import dataclass, field
 from importlib.metadata import version as pkg_version
+from pathlib import Path
 
 import anyio
 import msgspec
+from conda.core.subdir_data import SubdirData
+from conda.models.channel import Channel
 from litestar import Litestar, Request, get, post
 from litestar.config.compression import CompressionConfig
 from litestar.config.cors import CORSConfig
@@ -78,13 +85,16 @@ from litestar.logging import LoggingConfig
 from litestar.middleware.logging import LoggingMiddlewareConfig
 from litestar.middleware.rate_limit import RateLimitConfig
 from litestar.openapi import OpenAPIConfig
-from litestar.params import FromQuery
+from litestar.params import FromPath, FromQuery
 from litestar.response import Response
 from litestar.status_codes import (
     HTTP_400_BAD_REQUEST,
+    HTTP_404_NOT_FOUND,
     HTTP_500_INTERNAL_SERVER_ERROR,
     HTTP_504_GATEWAY_TIMEOUT,
 )
+from litestar.stores.base import Store
+from litestar.stores.file import FileStore
 
 from .config import (
     CORS_ORIGINS,
@@ -96,6 +106,12 @@ from .config import (
     MAX_PLATFORMS,
     MAX_SPECS,
     RATE_LIMIT,
+    RESULT_CACHE_BACKEND,
+    RESULT_CACHE_DIR,
+    RESULT_CACHE_MAX_MEMORY_BYTES,
+    RESULT_CACHE_REDIS_NAMESPACE,
+    RESULT_CACHE_REDIS_URL,
+    RESULT_CACHE_SIZE,
     SOLVE_TIMEOUT_S,
 )
 from .exceptions import UnknownFormatError
@@ -121,6 +137,12 @@ RAW_CONTENT_TYPE_EXTENSIONS: dict[str, str] = {
     "text/toml": ".toml",
     "text/plain": ".txt",
 }
+
+RESULT_CACHE_CONTROL = "public, max-age=86400, immutable"
+DEFAULT_RESOLVE_FORMAT = "conda-presto-json-v1"
+CACHE_ENVELOPE_VERSION = 1
+RESULT_CACHE_STORE_NAME = "result_cache"
+RESULT_CACHE_STORE_PREFIX = "resolve-v1:"
 
 
 @dataclass
@@ -149,6 +171,216 @@ class TranscodeRequest:
     platforms: list[str] | None = None
     specs: list[str] | None = None
     channels: list[str] | None = None
+
+
+class StoredResult(msgspec.Struct):
+    body: bytes
+    media_type: str
+
+    @property
+    def memory_size(self) -> int:
+        return len(self.body) + len(self.media_type)
+
+
+@dataclass
+class ResultCache:
+    max_size: int
+    max_bytes: int = 0
+    store_name: str | None = None
+    entries: OrderedDict[str, StoredResult] = field(default_factory=OrderedDict)
+    current_bytes: int = 0
+
+    @classmethod
+    def key_for(
+        cls,
+        specs: list[str],
+        channels: list[str],
+        platforms: list[str] | None,
+        format_name: str | None,
+    ) -> str:
+        """Return the SHA-256 key for a canonical resolve request."""
+        resolved_platforms = list(platforms or [NATIVE_SUBDIR])
+        versions: dict[str, str] = {}
+        for package in ("conda-presto", "conda", "conda-rattler-solver"):
+            try:
+                versions[package] = pkg_version(package)
+            except Exception:
+                versions[package] = "unknown"
+
+        repodata: list[dict[str, object]] = []
+        seen_urls: set[str] = set()
+        for channel in channels:
+            for platform in resolved_platforms:
+                for url in Channel(channel).urls(subdirs=(platform, "noarch")):
+                    if url in seen_urls:
+                        continue
+                    seen_urls.add(url)
+                    subdir_data = SubdirData(
+                        Channel.from_url(url),
+                        repodata_fn="repodata.json",
+                    )
+                    repodata.append(
+                        {
+                            "url": url,
+                            "json": cls.file_marker(subdir_data.cache_path_json),
+                            "state": cls.file_marker(subdir_data.cache_path_state),
+                        }
+                    )
+
+        envelope = {
+            "version": CACHE_ENVELOPE_VERSION,
+            "specs": sorted(specs),
+            "channels": list(channels),
+            "platforms": resolved_platforms,
+            "format": format_name or DEFAULT_RESOLVE_FORMAT,
+            "dependency_versions": versions,
+            "repodata": repodata,
+        }
+        body = json.dumps(
+            envelope,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode()
+        return hashlib.sha256(body).hexdigest()
+
+    @staticmethod
+    def file_marker(path: Path) -> dict[str, object]:
+        try:
+            stat = path.stat()
+        except FileNotFoundError:
+            return {"exists": False}
+        return {
+            "exists": True,
+            "size": stat.st_size,
+            "mtime_ns": stat.st_mtime_ns,
+        }
+
+    def store_from(self, request: Request) -> Store | None:
+        """Return the configured persistent store, if enabled."""
+        if self.store_name is None:
+            return None
+        return request.app.stores.get(self.store_name)
+
+    @staticmethod
+    def store_key(key: str) -> str:
+        return f"{RESULT_CACHE_STORE_PREFIX}{key}"
+
+    @classmethod
+    def stores_for_config(
+        cls,
+        backend: str,
+        cache_dir: str | None,
+        redis_url: str | None,
+        redis_namespace: str,
+    ) -> dict[str, Store]:
+        if backend == "memory":
+            return {}
+        if backend == "file":
+            if cache_dir is None:
+                raise ValueError(
+                    "CONDA_PRESTO_RESULT_CACHE_DIR is required "
+                    "when CONDA_PRESTO_RESULT_CACHE_BACKEND=file"
+                )
+            return {
+                RESULT_CACHE_STORE_NAME: FileStore(
+                    Path(cache_dir),
+                    create_directories=True,
+                )
+            }
+        if backend == "redis":
+            try:
+                from litestar.stores.redis import RedisStore
+            except ModuleNotFoundError as exc:
+                raise RuntimeError(
+                    "Redis result cache requires the redis-py package. "
+                    "Install conda-presto with the redis extra or use "
+                    "the Pixi redis environment."
+                ) from exc
+            return {
+                RESULT_CACHE_STORE_NAME: RedisStore.with_client(
+                    url=redis_url or "redis://localhost:6379/0",
+                    namespace=redis_namespace,
+                )
+            }
+        raise ValueError(f"Unsupported result cache backend: {backend}")
+
+    def remember_memory(self, key: str, stored: StoredResult) -> bool:
+        if self.max_bytes > 0 and stored.memory_size > self.max_bytes:
+            if previous := self.entries.pop(key, None):
+                self.current_bytes -= previous.memory_size
+            return False
+
+        if previous := self.entries.get(key):
+            self.current_bytes -= previous.memory_size
+
+        self.entries[key] = stored
+        self.current_bytes += stored.memory_size
+        self.entries.move_to_end(key)
+        while len(self.entries) > self.max_size or (
+            self.max_bytes > 0 and self.current_bytes > self.max_bytes
+        ):
+            _, evicted = self.entries.popitem(last=False)
+            self.current_bytes -= evicted.memory_size
+        return key in self.entries
+
+    async def get_response(
+        self, key: str, store: Store | None = None
+    ) -> Response | None:
+        stored = self.entries.get(key)
+        if stored is not None:
+            self.entries.move_to_end(key)
+            return self.response_for(key, stored)
+
+        if store is None:
+            return None
+
+        try:
+            stored_payload = await store.get(self.store_key(key))
+        except Exception:
+            log.warning("Persistent result cache read failed", exc_info=True)
+            return None
+        if stored_payload is None:
+            return None
+
+        try:
+            stored = msgspec.msgpack.decode(stored_payload, type=StoredResult)
+        except (msgspec.DecodeError, msgspec.ValidationError):
+            log.warning("Ignoring corrupt persistent result cache entry for %s", key)
+            await store.delete(self.store_key(key))
+            return None
+
+        self.remember_memory(key, stored)
+        return self.response_for(key, stored)
+
+    async def remember(
+        self,
+        key: str,
+        body: bytes,
+        media_type: str,
+        store: Store | None = None,
+    ) -> Response:
+        stored = StoredResult(body=body, media_type=media_type)
+        retained = self.remember_memory(key, stored)
+        if store is not None:
+            try:
+                await store.set(self.store_key(key), msgspec.msgpack.encode(stored))
+                retained = True
+            except Exception:
+                log.warning("Persistent result cache write failed", exc_info=True)
+        if retained:
+            return self.response_for(key, stored)
+        return Response(stored.body, media_type=stored.media_type)
+
+    @staticmethod
+    def response_for(key: str, stored: StoredResult) -> Response:
+        return Response(
+            stored.body,
+            media_type=stored.media_type,
+            headers={
+                "Location": f"/r/{key}",
+                "Cache-Control": RESULT_CACHE_CONTROL,
+            },
+        )
 
 
 def validate_caps(specs: list[str], platforms: list[str]) -> Response | None:
@@ -182,7 +414,7 @@ async def run_solve(
     channels: list[str],
     platforms: list[str] | None,
     format_name: str | None = None,
-) -> Response:
+) -> Response | tuple[bytes, str]:
     """Shared solve runner: threadpool + timeout + error sanitization.
 
     When *format_name* is ``None``, runs the native path
@@ -229,9 +461,38 @@ async def run_solve(
         )
 
     if format_name is None:
-        return Response(result)
+        return msgspec.json.encode(result), "application/json"
     body, media_type = result
-    return Response(body, media_type=media_type)
+    if isinstance(body, str):
+        body = body.encode()
+    return body, media_type
+
+
+async def run_cached_solve(
+    request: Request,
+    specs: list[str],
+    channels: list[str],
+    platforms: list[str] | None,
+    format_name: str | None = None,
+) -> Response:
+    """Run a solve through the content-addressed result cache."""
+    cache: ResultCache = request.app.state.result_cache
+    store = cache.store_from(request)
+    key = cache.key_for(specs, channels, platforms, format_name)
+    if cached_response := await cache.get_response(key, store):
+        return cached_response
+
+    payload = await run_solve(
+        request, specs, channels, platforms, format_name=format_name
+    )
+    if isinstance(payload, Response):
+        return payload
+
+    # Recompute after solving so a cold repodata cache stores under the
+    # marker that exists after conda has fetched repodata.
+    key = cache.key_for(specs, channels, platforms, format_name)
+    body, media_type = payload
+    return await cache.remember(key, body, media_type, store)
 
 
 def transcode_rejection(
@@ -308,7 +569,7 @@ async def resolve_get(
     if not channels:
         channels = list(DEFAULT_CHANNELS)
 
-    return await run_solve(
+    return await run_cached_solve(
         request, specs, channels, platforms or None, format_name=format
     )
 
@@ -437,7 +698,7 @@ async def resolve_post(
     if not channels:
         channels = list(DEFAULT_CHANNELS)
 
-    return await run_solve(
+    return await run_cached_solve(
         request, specs, channels, platforms or None, format_name=format
     )
 
@@ -570,6 +831,19 @@ async def transcode_post(
     )
 
 
+@get("/r/{key:str}")
+async def result_get(request: Request, key: FromPath[str]) -> Response:
+    """Return a stored content-addressed solve result."""
+    cache: ResultCache = request.app.state.result_cache
+    cached_response = await cache.get_response(key, cache.store_from(request))
+    if cached_response is None:
+        return Response(
+            {"error": "result not in cache; re-POST to recompute"},
+            status_code=HTTP_404_NOT_FOUND,
+        )
+    return cached_response
+
+
 @get("/formats")
 async def formats() -> dict[str, list[str]]:
     """Return the list of registered exporter format names."""
@@ -642,6 +916,13 @@ async def health() -> dict[str, str]:
 async def on_startup(app: Litestar) -> None:
     """Initialize solver limiter and pre-warm repodata caches."""
     app.state.solver_limiter = anyio.CapacityLimiter(MAX_CONCURRENCY)
+    app.state.result_cache = ResultCache(
+        max_size=RESULT_CACHE_SIZE,
+        max_bytes=RESULT_CACHE_MAX_MEMORY_BYTES,
+        store_name=(
+            RESULT_CACHE_STORE_NAME if RESULT_CACHE_BACKEND != "memory" else None
+        ),
+    )
     log.info(
         "Pre-warming repodata cache for %s on %s",
         DEFAULT_CHANNELS,
@@ -663,11 +944,13 @@ middleware = [LoggingMiddlewareConfig().middleware]
 if RATE_LIMIT:
     middleware.append(RateLimitConfig(rate_limit=("minute", RATE_LIMIT)).middleware)
 
+
 app = Litestar(
     route_handlers=[
         resolve_get,
         resolve_post,
         transcode_post,
+        result_get,
         formats,
         platforms,
         version,
@@ -682,6 +965,12 @@ app = Litestar(
     ),
     on_startup=[on_startup],
     on_shutdown=[on_shutdown],
+    stores=ResultCache.stores_for_config(
+        RESULT_CACHE_BACKEND,
+        RESULT_CACHE_DIR,
+        RESULT_CACHE_REDIS_URL,
+        RESULT_CACHE_REDIS_NAMESPACE,
+    ),
     request_max_body_size=MAX_BODY_BYTES,
     compression_config=CompressionConfig(backend="brotli", brotli_gzip_fallback=True),
     cors_config=CORSConfig(allow_origins=CORS_ORIGINS),

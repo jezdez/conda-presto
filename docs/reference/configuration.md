@@ -185,6 +185,41 @@ export CONDA_PRESTO_CHANNELS="conda-forge,bioconda"
 export CONDA_PRESTO_PLATFORMS="linux-64,osx-arm64"
 ```
 
+### Result cache
+
+Successful `/resolve` responses are stored in a content-addressed
+in-process LRU cache and returned with a `Location: /r/<sha256>`
+header. Configure the maximum number of retained responses with
+`CONDA_PRESTO_RESULT_CACHE_SIZE` (default 256) and the maximum bytes
+held in memory with `CONDA_PRESTO_RESULT_CACHE_MAX_MEMORY_MB`
+(default 64, `0` disables the byte cap).
+
+Set `CONDA_PRESTO_RESULT_CACHE_DIR` to add a persistent file-backed
+cache layer:
+
+```bash
+export CONDA_PRESTO_RESULT_CACHE_DIR=/var/cache/conda-presto/results
+```
+
+Set `CONDA_PRESTO_RESULT_CACHE_REDIS_URL` to use Redis instead:
+
+```bash
+export CONDA_PRESTO_RESULT_CACHE_BACKEND=redis
+export CONDA_PRESTO_RESULT_CACHE_REDIS_URL=redis://localhost:6379/0
+```
+
+The server still checks the in-process LRU first, then looks up the
+same content-addressed key in the persistent store before running the
+solver. Persistent entries survive server restarts and are stored under
+the same CAS key used by `/r/<sha256>`. Redis support requires the
+`redis` optional dependency; in Pixi, use the `redis` environment or
+include the `redis` feature.
+
+The key includes the normalized specs, ordered channels, target
+platforms, output format, conda-presto and solver versions, and local
+repodata cache file markers. Repodata refreshes therefore produce new
+keys instead of reusing stale solve results.
+
 ### Concurrency tuning
 
 Two variables control parallelism:

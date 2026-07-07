@@ -10,6 +10,9 @@ license = "BSD-3-Clause"
 requires-python = ">=3.13"
 dependencies = []
 
+[project.optional-dependencies]
+redis = ["redis>=5.0"]
+
 [project.scripts]
 conda-presto = "conda_presto.cli:main"
 
@@ -82,10 +85,14 @@ pyjwt = ">=2.0"
 uvicorn = ">=0.34"
 brotli-python = ">=1.1"
 
+[tool.pixi.feature.redis.dependencies]
+redis-py = ">=5.0"
+
 [tool.pixi.environments]
 dev = { features = ["dev", "server"], solve-group = "default" }
-test = { features = ["test", "server"], solve-group = "default" }
+test = { features = ["test", "server", "redis"], solve-group = "default" }
 prod = { features = ["server"], solve-group = "default" }
+redis = { features = ["server", "redis"], solve-group = "default" }
 cli = { solve-group = "default" }
 docs = { features = ["docs"], solve-group = "default" }
 

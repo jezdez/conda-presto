@@ -1,8 +1,12 @@
 """Tests for conda_presto.config env-var parsing helpers."""
+
 from __future__ import annotations
+
+import importlib
 
 import pytest
 
+import conda_presto.config as config_module
 from conda_presto.config import env_int, env_list
 
 
@@ -44,3 +48,20 @@ def test_env_int_uses_default(monkeypatch, raw):
     else:
         monkeypatch.setenv("CONDA_PRESTO_TEST_INT", raw)
     assert env_int("CONDA_PRESTO_TEST_INT", 42) == 42
+
+
+@pytest.mark.parametrize(
+    "raw, expected_bytes",
+    [
+        pytest.param("2", 2 * 1024 * 1024, id="two-mb"),
+        pytest.param("0", 0, id="disabled"),
+    ],
+)
+def test_result_cache_max_memory_mb_converts_to_bytes(monkeypatch, raw, expected_bytes):
+    monkeypatch.setenv("CONDA_PRESTO_RESULT_CACHE_MAX_MEMORY_MB", raw)
+    reloaded = importlib.reload(config_module)
+    try:
+        assert reloaded.RESULT_CACHE_MAX_MEMORY_BYTES == expected_bytes
+    finally:
+        monkeypatch.delenv("CONDA_PRESTO_RESULT_CACHE_MAX_MEMORY_MB", raising=False)
+        importlib.reload(config_module)

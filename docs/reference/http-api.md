@@ -7,6 +7,10 @@ and served by uvicorn. Start it with `conda presto --serve` or
 All endpoints return JSON unless a `format` parameter redirects the
 response through a conda exporter plugin.
 
+Successful `/resolve` responses include a content-addressed `Location`
+header such as `/r/<sha256>`. Repeating the same request against the
+same channel metadata returns the same location.
+
 ## Endpoints
 
 ### `GET /resolve`
@@ -62,6 +66,13 @@ precedence when both are present. `format` is a query-only option.
 ```bash
 curl -sS http://localhost:8000/resolve \
   --json '{"specs":["python=3.12","numpy"],"channels":["conda-forge"],"platforms":["linux-64"]}'
+```
+
+Successful responses include:
+
+```text
+Location: /r/3a7f...e91b
+Cache-Control: public, max-age=86400, immutable
 ```
 
 #### Raw file upload
@@ -135,6 +146,41 @@ The request fails with HTTP 400 and a `reasons` array if the input is
 not a lockfile, the output format is not a lockfile, the requested
 platforms are missing from the input lockfile, or the request includes
 specs or channel overrides that would require solving.
+
+---
+
+### `GET /r/{hash}`
+
+Fetch a stored content-addressed resolve result. The body and
+Content-Type are the exact stored response from the original `/resolve`
+request.
+
+```bash
+curl -sS http://localhost:8000/r/3a7f...e91b
+```
+
+```text
+Cache-Control: public, max-age=86400, immutable
+```
+
+Missing entries return HTTP 404:
+
+```json
+{"error": "result not in cache; re-POST to recompute"}
+```
+
+The current implementation checks a bounded in-process LRU store first.
+`CONDA_PRESTO_RESULT_CACHE_SIZE` caps entry count, and
+`CONDA_PRESTO_RESULT_CACHE_MAX_MEMORY_MB` caps retained payload bytes.
+When `CONDA_PRESTO_RESULT_CACHE_DIR` or
+`CONDA_PRESTO_RESULT_CACHE_REDIS_URL` is set, conda-presto also checks
+a file-backed or Redis-backed persistent store using the same
+`resolve-v1:<sha256>` CAS key. The hash key includes the normalized
+specs, ordered channels, platforms, output format, conda-presto and
+solver versions, and metadata from conda's local repodata cache files.
+That keeps cached results sensitive to repodata refreshes. A future
+sharded repodata index can replace the file metadata marker with exact
+shard or sparse-index digests.
 
 ---
 
