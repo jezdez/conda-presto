@@ -2,6 +2,7 @@
 
 ## 0.4.0 (unreleased)
 
+- Added `POST /transcode` for lockfile-to-lockfile conversion without solving
 - Added documentation site (Sphinx + MyST + conda-sphinx-theme)
 - Added GitHub Pages deployment workflow
 - Moved design proposals from `plans/` to `docs/proposals.md`

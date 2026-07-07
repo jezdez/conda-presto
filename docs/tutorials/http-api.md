@@ -120,14 +120,14 @@ curl -sS \
 
 ### Converting an existing lockfile
 
-When the input and output are both lockfiles, the server can reuse the
-package records already present in the uploaded lockfile. Add
-`solve=false` to make that a strict requirement:
+Use `/transcode` when the input and output are both lockfiles. The
+server reuses the package records already present in the uploaded
+lockfile and never invokes the solver:
 
 ```bash
 curl -sS --data-binary @pixi.lock \
   -H 'Content-Type: application/yaml' \
-  "$CONDA_PRESTO_URL/resolve?filename=pixi.lock&platform=linux-64&format=conda-lock-v1&solve=false" \
+  "$CONDA_PRESTO_URL/transcode?filename=pixi.lock&platform=linux-64&format=conda-lock-v1" \
   -o conda-lock.yml
 ```
 

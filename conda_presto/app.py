@@ -4,6 +4,7 @@ Endpoints:
 
 - ``GET /resolve`` — resolve specs via query params
 - ``POST /resolve`` — resolve specs and/or file content via JSON body
+- ``POST /transcode`` — convert one lockfile format to another
 - ``GET /formats`` — list registered output format names
 - ``GET /platforms`` — list known conda platform subdirs
 - ``GET /version`` — version info for conda-presto and dependencies
@@ -138,6 +139,17 @@ class ResolveRequest:
     platforms: list[str] | None = None
 
 
+@dataclass
+class TranscodeRequest:
+    """JSON body for ``POST /transcode``."""
+
+    file: str | None = None
+    filename: str | None = None
+    platforms: list[str] | None = None
+    specs: list[str] | None = None
+    channels: list[str] | None = None
+
+
 def parse_file_content(
     content: str, filename: str | None = None
 ) -> tuple[list[str], list[str]]:
@@ -236,7 +248,7 @@ def transcode_rejection(
     has_extra_specs: bool,
     has_channel_override: bool,
 ) -> Response:
-    """Return a structured ``solve=false`` rejection response."""
+    """Return a structured transcode rejection response."""
     reasons: list[str] = []
     if parsed is None:
         reasons.append("no file input was provided")
@@ -266,7 +278,7 @@ def transcode_rejection(
         reasons.append("channel overrides require solving")
     return Response(
         {
-            "error": "Request cannot be satisfied with solve=false",
+            "error": "Request cannot be transcoded",
             "reasons": reasons,
         },
         status_code=HTTP_400_BAD_REQUEST,
@@ -319,7 +331,6 @@ async def resolve_post(
     platform: list[str] | None = None,
     format: str | None = None,
     filename: str | None = None,
-    solve: bool | None = None,
 ) -> Response:
     """Resolve package specs and/or an environment file via POST body.
 
@@ -397,61 +408,13 @@ async def resolve_post(
             status_code=HTTP_400_BAD_REQUEST,
         )
 
-    if solve is False and file_content is None:
-        return transcode_rejection(
-            None, format, platforms or [], bool(specs), bool(channels)
-        )
-
     if file_content is not None:
-        target_platforms = platforms or [NATIVE_SUBDIR]
         try:
             parsed_file = parse_environment_content(
-                file_content, file_name, target_platforms
+                file_content, file_name, platforms or [NATIVE_SUBDIR]
             )
         except ValueError as exc:
             return Response({"error": str(exc)}, status_code=HTTP_400_BAD_REQUEST)
-
-        has_extra_specs = bool(specs)
-        has_channel_override = bool(channels)
-        if (
-            parsed_file.is_lockfile
-            and format is not None
-            and not has_extra_specs
-            and not has_channel_override
-        ):
-            try:
-                output_is_lockfile = is_lockfile_format(format)
-            except UnknownFormatError as exc:
-                return Response(
-                    {"error": str(exc), "available_formats": exc.available},
-                    status_code=HTTP_400_BAD_REQUEST,
-                )
-            if output_is_lockfile and parsed_file.environments:
-                try:
-                    body, media_type = render_envs(
-                        list(parsed_file.environments), format
-                    )
-                except UnknownFormatError as exc:
-                    return Response(
-                        {"error": str(exc), "available_formats": exc.available},
-                        status_code=HTTP_400_BAD_REQUEST,
-                    )
-                except Exception:
-                    log.exception("Environment export failed")
-                    return Response(
-                        {"error": "Internal solver error"},
-                        status_code=HTTP_500_INTERNAL_SERVER_ERROR,
-                    )
-                return Response(body, media_type=media_type)
-
-        if solve is False:
-            return transcode_rejection(
-                parsed_file,
-                format,
-                target_platforms,
-                has_extra_specs,
-                has_channel_override,
-            )
 
         specs = list(specs) + parsed_file.specs
         if not channels:
@@ -483,6 +446,134 @@ async def resolve_post(
 
     return await run_solve(
         request, specs, channels, platforms or None, format_name=format
+    )
+
+
+@post(
+    "/transcode",
+    status_code=200,
+)
+async def transcode_post(
+    request: Request,
+    spec: list[str] | None = None,
+    channel: list[str] | None = None,
+    platform: list[str] | None = None,
+    format: str | None = None,
+    filename: str | None = None,
+) -> Response:
+    """Convert one lockfile format to another without solving."""
+    content_type = request.headers.get("content-type", "").split(";")[0].strip().lower()
+
+    file_content: str | None = None
+    file_name: str | None = None
+    platforms: list[str] = platform or []
+    body_specs: list[str] = []
+    body_channels: list[str] = []
+
+    if content_type in ("", "application/json"):
+        body = await request.body()
+        if body:
+            try:
+                data = msgspec.json.decode(body, type=TranscodeRequest)
+            except (msgspec.DecodeError, msgspec.ValidationError) as exc:
+                return Response(
+                    {"error": f"Invalid JSON body: {exc}"},
+                    status_code=HTTP_400_BAD_REQUEST,
+                )
+        else:
+            data = TranscodeRequest()
+
+        file_content = data.file
+        file_name = data.filename or filename
+        platforms = data.platforms if data.platforms is not None else platforms
+        body_specs = data.specs or []
+        body_channels = data.channels or []
+    elif content_type in RAW_CONTENT_TYPE_EXTENSIONS:
+        body = await request.body()
+        try:
+            file_content = body.decode("utf-8")
+        except UnicodeDecodeError as exc:
+            return Response(
+                {"error": f"Body is not valid UTF-8: {exc}"},
+                status_code=HTTP_400_BAD_REQUEST,
+            )
+        file_name = filename or (
+            f"environment{RAW_CONTENT_TYPE_EXTENSIONS[content_type]}"
+        )
+    else:
+        return Response(
+            {
+                "error": (
+                    f"Unsupported Content-Type {content_type!r}. "
+                    "Use application/json for a TranscodeRequest envelope, "
+                    "or application/yaml / application/toml / text/plain "
+                    "for a raw lockfile body."
+                ),
+                "supported": [
+                    "application/json",
+                    *sorted(RAW_CONTENT_TYPE_EXTENSIONS),
+                ],
+            },
+            status_code=HTTP_400_BAD_REQUEST,
+        )
+
+    target_platforms = platforms or [NATIVE_SUBDIR]
+    if cap_error := validate_caps([], target_platforms):
+        return cap_error
+
+    has_extra_specs = bool(spec) or bool(body_specs)
+    has_channel_override = bool(channel) or bool(body_channels)
+    if file_content is None:
+        return transcode_rejection(
+            None,
+            format,
+            target_platforms,
+            has_extra_specs,
+            has_channel_override,
+        )
+
+    try:
+        parsed_file = parse_environment_content(
+            file_content, file_name, target_platforms
+        )
+    except ValueError as exc:
+        return Response({"error": str(exc)}, status_code=HTTP_400_BAD_REQUEST)
+
+    if (
+        parsed_file.is_lockfile
+        and format is not None
+        and not has_extra_specs
+        and not has_channel_override
+    ):
+        try:
+            output_is_lockfile = is_lockfile_format(format)
+        except UnknownFormatError as exc:
+            return Response(
+                {"error": str(exc), "available_formats": exc.available},
+                status_code=HTTP_400_BAD_REQUEST,
+            )
+        if output_is_lockfile and parsed_file.environments:
+            try:
+                body, media_type = render_envs(list(parsed_file.environments), format)
+            except UnknownFormatError as exc:
+                return Response(
+                    {"error": str(exc), "available_formats": exc.available},
+                    status_code=HTTP_400_BAD_REQUEST,
+                )
+            except Exception:
+                log.exception("Environment export failed")
+                return Response(
+                    {"error": "Internal solver error"},
+                    status_code=HTTP_500_INTERNAL_SERVER_ERROR,
+                )
+            return Response(body, media_type=media_type)
+
+    return transcode_rejection(
+        parsed_file,
+        format,
+        target_platforms,
+        has_extra_specs,
+        has_channel_override,
     )
 
 
@@ -583,6 +674,7 @@ app = Litestar(
     route_handlers=[
         resolve_get,
         resolve_post,
+        transcode_post,
         formats,
         platforms,
         version,

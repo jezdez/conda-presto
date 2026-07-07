@@ -21,6 +21,7 @@ from conda_presto.app import (
     platforms,
     resolve_get,
     resolve_post,
+    transcode_post,
     version,
 )
 
@@ -31,6 +32,7 @@ def test_app():
         route_handlers=[
             resolve_get,
             resolve_post,
+            transcode_post,
             formats,
             platforms,
             version,
@@ -226,6 +228,7 @@ async def test_resolve_post_invalid_json(client):
         headers={"content-type": "application/json"},
     )
     assert resp.status_code == 400
+
 
 @pytest.mark.anyio
 async def test_resolve_post_not_object(client):
@@ -571,7 +574,7 @@ async def test_resolve_post_raw_body_pixi_lock_pipeline(client):
 
 
 @pytest.mark.anyio
-async def test_resolve_post_lockfile_to_lockfile_transcodes_without_solver(
+async def test_transcode_post_lockfile_to_lockfile_without_solver(
     client, monkeypatch, pixi_lock_v6_text
 ):
     def fail_solve(*args, **kwargs):
@@ -579,7 +582,7 @@ async def test_resolve_post_lockfile_to_lockfile_transcodes_without_solver(
 
     monkeypatch.setattr(app_module, "solve_environments", fail_solve)
     resp = await client.post(
-        "/resolve?format=conda-lock-v1",
+        "/transcode?format=conda-lock-v1",
         json={
             "file": pixi_lock_v6_text,
             "filename": "pixi.lock",
@@ -596,7 +599,7 @@ async def test_resolve_post_lockfile_to_lockfile_transcodes_without_solver(
 
 
 @pytest.mark.anyio
-async def test_resolve_post_lockfile_solve_false_transcodes_without_solver(
+async def test_transcode_post_raw_lockfile_without_solver(
     client, monkeypatch, pixi_lock_v6_text
 ):
     def fail_solve(*args, **kwargs):
@@ -604,12 +607,9 @@ async def test_resolve_post_lockfile_solve_false_transcodes_without_solver(
 
     monkeypatch.setattr(app_module, "solve_environments", fail_solve)
     resp = await client.post(
-        "/resolve?format=pixi-lock-v6&solve=false",
-        json={
-            "file": pixi_lock_v6_text,
-            "filename": "pixi.lock",
-            "platforms": ["linux-64"],
-        },
+        "/transcode?format=pixi-lock-v6&filename=pixi.lock&platform=linux-64",
+        content=pixi_lock_v6_text,
+        headers={"content-type": "application/yaml"},
     )
 
     assert resp.status_code == 200
@@ -617,9 +617,9 @@ async def test_resolve_post_lockfile_solve_false_transcodes_without_solver(
 
 
 @pytest.mark.anyio
-async def test_resolve_post_solve_false_rejects_environment_input(client):
+async def test_transcode_post_rejects_environment_input(client):
     resp = await client.post(
-        "/resolve?format=pixi-lock-v6&solve=false",
+        "/transcode?format=pixi-lock-v6",
         json={
             "file": ("channels:\n  - conda-forge\ndependencies:\n  - zlib\n"),
             "filename": "environment.yml",
@@ -629,27 +629,25 @@ async def test_resolve_post_solve_false_rejects_environment_input(client):
 
     assert resp.status_code == 400
     body = resp.json()
-    assert body["error"] == "Request cannot be satisfied with solve=false"
+    assert body["error"] == "Request cannot be transcoded"
     assert "input file is not a lockfile" in body["reasons"]
 
 
 @pytest.mark.anyio
-async def test_resolve_post_solve_false_rejects_without_file(client):
-    resp = await client.post("/resolve?solve=false")
+async def test_transcode_post_rejects_without_file(client):
+    resp = await client.post("/transcode")
 
     assert resp.status_code == 400
     body = resp.json()
-    assert body["error"] == "Request cannot be satisfied with solve=false"
+    assert body["error"] == "Request cannot be transcoded"
     assert "no file input was provided" in body["reasons"]
     assert "no output format was requested" in body["reasons"]
 
 
 @pytest.mark.anyio
-async def test_resolve_post_solve_false_rejects_non_lockfile_output(
-    client, pixi_lock_v6_text
-):
+async def test_transcode_post_rejects_non_lockfile_output(client, pixi_lock_v6_text):
     resp = await client.post(
-        "/resolve?format=environment-yaml&solve=false",
+        "/transcode?format=environment-yaml",
         json={
             "file": pixi_lock_v6_text,
             "filename": "pixi.lock",
@@ -659,16 +657,16 @@ async def test_resolve_post_solve_false_rejects_non_lockfile_output(
 
     assert resp.status_code == 400
     body = resp.json()
-    assert body["error"] == "Request cannot be satisfied with solve=false"
+    assert body["error"] == "Request cannot be transcoded"
     assert "output format is not a lockfile" in body["reasons"]
 
 
 @pytest.mark.anyio
-async def test_resolve_post_solve_false_rejects_missing_lockfile_platform(
+async def test_transcode_post_rejects_missing_lockfile_platform(
     client, pixi_lock_v6_text
 ):
     resp = await client.post(
-        "/resolve?format=conda-lock-v1&solve=false",
+        "/transcode?format=conda-lock-v1",
         json={
             "file": pixi_lock_v6_text,
             "filename": "pixi.lock",
@@ -678,16 +676,14 @@ async def test_resolve_post_solve_false_rejects_missing_lockfile_platform(
 
     assert resp.status_code == 400
     body = resp.json()
-    assert body["error"] == "Request cannot be satisfied with solve=false"
+    assert body["error"] == "Request cannot be transcoded"
     assert "requested platforms not present in lockfile: osx-arm64" in body["reasons"]
 
 
 @pytest.mark.anyio
-async def test_resolve_post_lockfile_unknown_format_returns_400(
-    client, pixi_lock_v6_text
-):
+async def test_transcode_post_unknown_format_returns_400(client, pixi_lock_v6_text):
     resp = await client.post(
-        "/resolve?format=does-not-exist",
+        "/transcode?format=does-not-exist",
         json={
             "file": pixi_lock_v6_text,
             "filename": "pixi.lock",
@@ -700,7 +696,27 @@ async def test_resolve_post_lockfile_unknown_format_returns_400(
 
 
 @pytest.mark.anyio
-async def test_resolve_post_lockfile_missing_platform_without_solve_false(
+async def test_transcode_post_rejects_specs_and_channels(client, pixi_lock_v6_text):
+    resp = await client.post(
+        "/transcode?format=conda-lock-v1&spec=zlib&channel=conda-forge",
+        json={
+            "file": pixi_lock_v6_text,
+            "filename": "pixi.lock",
+            "platforms": ["linux-64"],
+            "specs": ["python"],
+            "channels": ["defaults"],
+        },
+    )
+
+    assert resp.status_code == 400
+    body = resp.json()
+    assert body["error"] == "Request cannot be transcoded"
+    assert "additional specs require solving" in body["reasons"]
+    assert "channel overrides require solving" in body["reasons"]
+
+
+@pytest.mark.anyio
+async def test_resolve_post_lockfile_missing_platform_without_transcode(
     client, pixi_lock_v6_text
 ):
     resp = await client.post(
@@ -861,6 +877,7 @@ async def test_openapi_schema(client):
     data = resp.json()
     assert "openapi" in data
     assert "/resolve" in data["paths"]
+    assert "/transcode" in data["paths"]
     assert "/health" in data["paths"]
 
 
