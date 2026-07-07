@@ -29,21 +29,6 @@ class ParsedInputFile:
         return self.environment_format == EnvironmentFormat.lockfile
 
 
-def _channels_from_envs(envs: tuple[Environment, ...]) -> list[str]:
-    return list(
-        dict.fromkeys(
-            channel
-            for env in envs
-            if env.config and env.config.channels
-            for channel in env.config.channels
-        )
-    )
-
-
-def _specs_from_envs(envs: tuple[Environment, ...]) -> list[str]:
-    return [str(spec) for env in envs for spec in env.requested_packages]
-
-
 def parse_environment_path(
     path: str | os.PathLike[str],
     target_platforms: list[str] | tuple[str, ...] | None = None,
@@ -69,8 +54,19 @@ def parse_environment_path(
         if targets and available and set(targets).issubset(available):
             envs = tuple(spec.env_for(platform) for platform in targets)
         return ParsedInputFile(
-            specs=_specs_from_envs(envs),
-            channels=_channels_from_envs(envs),
+            specs=[
+                str(spec)
+                for env in envs
+                for spec in env.requested_packages
+            ],
+            channels=list(
+                dict.fromkeys(
+                    channel
+                    for env in envs
+                    if env.config and env.config.channels
+                    for channel in env.config.channels
+                )
+            ),
             environment_format=specifier.environment_format,
             available_platforms=available,
             environments=envs,
