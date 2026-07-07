@@ -38,7 +38,7 @@ Full documentation is available at the [conda-presto docs site](docs/index.md):
 - [CI pipeline](docs/tutorials/ci-pipeline.md) — GitHub Action setup
 - [Reference](docs/reference/cli.md) — CLI flags, endpoints, formats, env vars
 - [Architecture](docs/explanation/architecture.md) — how it works
-- [Proposals](docs/proposals/index.md) — future feature designs
+- [Proposals](docs/proposals.md) — future feature designs
 
 ## Development
 
