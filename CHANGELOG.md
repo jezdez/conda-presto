@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Documentation site with reference, explanation, tutorial, and proposal
+  pages, published through GitHub Pages.
+- `POST /transcode` for lockfile-to-lockfile conversion without solving
+  when the requested platforms are already present in the input lockfile.
+
+### Changed
+
+- GitHub Action documentation and examples now focus on CI lockfile
+  workflows.
+- Proposal documentation is now a concise roadmap page that links to
+  GitHub issues for the detailed design records.
+
+### Removed
+
+- Experimental external integration surface and tutorial.
+
 ## [0.4.0] - 2026-04-16
 
 ### Added
@@ -248,6 +266,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Dependabot configuration for GitHub Actions version updates.
 - BSD 3-Clause license.
 
+[Unreleased]: https://github.com/jezdez/conda-presto/compare/v0.4.0...HEAD
 [0.4.0]: https://github.com/jezdez/conda-presto/releases/tag/v0.4.0
 [0.3.0]: https://github.com/jezdez/conda-presto/releases/tag/v0.3.0
 [0.2.1]: https://github.com/jezdez/conda-presto/releases/tag/v0.2.1

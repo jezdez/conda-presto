@@ -38,7 +38,7 @@ curl 'http://localhost:8000/resolve?spec=python=3.12&spec=numpy&channel=conda-fo
 
 ### `POST /resolve`
 
-Resolve specs via a JSON body, or upload a raw environment file with
+Resolve specs via a JSON body, or upload a raw input file with
 Content-Type dispatch.
 
 #### JSON body
@@ -50,14 +50,14 @@ Send a `ResolveRequest` object:
   "specs": ["python=3.12", "numpy"],
   "channels": ["conda-forge"],
   "platforms": ["linux-64", "osx-arm64"],
-  "format": null,
   "filename": null
 }
 ```
 
-All fields except `specs` are optional. Query parameters (`spec`,
-`channel`, `platform`, `format`, `filename`) are accepted alongside
-the body; body fields take precedence when both are present.
+All fields are optional, but normal requests must provide either
+`specs` or `file`. Query parameters (`spec`, `channel`, `platform`,
+`format`, `filename`) are accepted alongside the body; body fields take
+precedence when both are present. `format` is a query-only option.
 
 ```bash
 curl -sS http://localhost:8000/resolve \
@@ -66,7 +66,7 @@ curl -sS http://localhost:8000/resolve \
 
 #### Raw file upload
 
-Upload an environment file directly by setting an appropriate
+Upload an input file directly by setting an appropriate
 Content-Type header. No JSON wrapping is needed.
 
 Accepted Content-Types:
@@ -86,6 +86,55 @@ curl -sS --data-binary @environment.yml \
 Use the `filename` query parameter to pick a specific parser when the
 Content-Type is ambiguous. For example, `?filename=pixi.lock` forces
 the lockfile parser on a generic YAML upload.
+
+Use `POST /transcode` to convert an existing lockfile without solving.
+
+---
+
+### `POST /transcode`
+
+Convert one lockfile format to another without running the solver. The
+input must already be a lockfile, and `format` must name a lockfile
+exporter such as `conda-lock-v1` or `pixi-lock-v6`.
+
+Query parameters
+: `format`
+  : Required output format name.
+
+  `platform` (repeatable)
+  : Target platform subdir. Defaults to the host platform when omitted.
+
+  `filename`
+  : Hint for the parser when uploading a raw file body.
+
+#### JSON body
+
+Send a `TranscodeRequest` object:
+
+```json
+{
+  "file": "...pixi.lock content...",
+  "filename": "pixi.lock",
+  "platforms": ["linux-64"]
+}
+```
+
+#### Raw lockfile upload
+
+Upload a lockfile directly by setting an appropriate Content-Type
+header. Use `filename` when the content type does not identify the
+lockfile format.
+
+```bash
+curl -sS --data-binary @pixi.lock \
+  -H 'Content-Type: application/yaml' \
+  'http://localhost:8000/transcode?filename=pixi.lock&platform=linux-64&format=conda-lock-v1'
+```
+
+The request fails with HTTP 400 and a `reasons` array if the input is
+not a lockfile, the output format is not a lockfile, the requested
+platforms are missing from the input lockfile, or the request includes
+specs or channel overrides that would require solving.
 
 ---
 
@@ -149,7 +198,7 @@ curl http://localhost:8000/version
 
 ### `POST /parse`
 
-Parse an environment file and extract its specs and channels without
+Parse an input file and extract its specs and channels without
 solving. Useful for validation or for building a UI on top of the
 solver.
 

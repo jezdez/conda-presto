@@ -111,6 +111,12 @@ Convert `environment.yml` to `pixi.lock`:
 conda presto -f environment.yml -p linux-64 --format pixi-lock-v6 > pixi.lock
 ```
 
+Convert one lockfile format to another without solving:
+
+```bash
+conda presto -f pixi.lock -p linux-64 --format conda-lock-v1 > conda-lock.yml
+```
+
 Start the HTTP server on a custom port:
 
 ```bash

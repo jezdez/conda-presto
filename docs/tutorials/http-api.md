@@ -1,7 +1,7 @@
 # HTTP API
 
 This tutorial covers the conda-presto HTTP API: resolving specs,
-uploading environment files, converting between lockfile formats, and
+uploading input files, converting between lockfile formats, and
 inspecting the server.
 
 ```{note}
@@ -26,7 +26,7 @@ the CLI emits.
 
 ## Resolving from files
 
-Upload an environment file directly. The Content-Type header tells
+Upload an input file directly. The Content-Type header tells
 the server which parser to use.
 
 `````{tab-set}
@@ -117,6 +117,23 @@ curl -sS \
   "$CONDA_PRESTO_URL/resolve?spec=python%3D3.12&spec=pytorch&spec=torchvision&platform=linux-64&format=explicit" \
   -o pytorch.explicit.txt
 ```
+
+### Converting an existing lockfile
+
+Use `/transcode` when the input and output are both lockfiles. The
+server reuses the package records already present in the uploaded
+lockfile and never invokes the solver:
+
+```bash
+curl -sS --data-binary @pixi.lock \
+  -H 'Content-Type: application/yaml' \
+  "$CONDA_PRESTO_URL/transcode?filename=pixi.lock&platform=linux-64&format=conda-lock-v1" \
+  -o conda-lock.yml
+```
+
+The request fails with HTTP 400 if `pixi.lock` does not contain the
+requested platform, if the output format is not a lockfile, or if extra
+specs or channel overrides would require a solve.
 
 ```{tip}
 The full lockfile pipeline works in a single shell session: resolve

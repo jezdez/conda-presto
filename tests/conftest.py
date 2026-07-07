@@ -1,4 +1,5 @@
 """Shared fixtures for conda-presto tests."""
+
 from __future__ import annotations
 
 import pytest
@@ -129,3 +130,41 @@ def environment_yml_path(tmp_path, environment_yml_bytes):
     path = tmp_path / "environment.yml"
     path.write_bytes(environment_yml_bytes)
     return path
+
+
+@pytest.fixture()
+def pixi_lock_v6_text():
+    return """\
+version: 6
+environments:
+  default:
+    channels: []
+    packages:
+      linux-64:
+        - conda:
+            https://conda.anaconda.org/conda-forge/linux-64/libzlib-1.3.2-h25fd6f3_2.conda
+        - conda:
+            https://conda.anaconda.org/conda-forge/linux-64/zlib-1.3.2-h25fd6f3_2.conda
+packages:
+  - conda:
+      https://conda.anaconda.org/conda-forge/linux-64/libzlib-1.3.2-h25fd6f3_2.conda
+    sha256: 55044c403570f0dc26e6364de4dc5368e5f3fc7ff103e867c487e2b5ab2bcda9
+    md5: d87ff7921124eccd67248aa483c23fec
+    license: Zlib
+    license_family: Other
+    size: 63629
+    depends:
+      - __glibc >=2.17,<3.0.a0
+    constrains:
+      - zlib 1.3.2 *_2
+  - conda:
+      https://conda.anaconda.org/conda-forge/linux-64/zlib-1.3.2-h25fd6f3_2.conda
+    sha256: 245c9ee8d688e23661b95e3c6dd7272ca936fabc03d423cdb3cdee1bbcf9f2f2
+    md5: c2a01a08fc991620a74b32420e97868a
+    license: Zlib
+    license_family: Other
+    size: 95931
+    depends:
+      - __glibc >=2.17,<3.0.a0
+      - libzlib 1.3.2 h25fd6f3_2
+"""

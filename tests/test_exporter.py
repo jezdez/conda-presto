@@ -1,4 +1,4 @@
-"""Tests for conda_presto.exporter (render_envs adapter only).
+"""Tests for conda_presto.exporter.
 
 The native JSON output produced by the CLI and HTTP API is covered by
 ``tests/test_resolve.py`` and ``tests/test_app.py``; those paths do
@@ -9,15 +9,10 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 import pytest
-from conda.base.context import context
 from conda.models.environment import Environment
 
 from conda_presto.exceptions import UnknownFormatError
-from conda_presto.exporter import (
-    available_formats,
-    media_type_for,
-    render_envs,
-)
+from conda_presto.exporter import OutputFormat
 
 
 @pytest.fixture()
@@ -58,58 +53,57 @@ def env_with_records(make_package_record):
         ),
     ],
 )
-def test_media_type_for(format_name, expected):
-    exporter = (
-        context.plugin_manager.get_environment_exporter_by_format(
-            format_name
-        )
-    )
-    assert media_type_for(exporter) == expected
+def test_output_format_media_type(format_name, expected):
+    output_format = OutputFormat.named(format_name)
+    assert output_format.media_type == expected
 
 
-def test_media_type_for_unknown_extension_falls_back_to_text():
+def test_output_format_unknown_extension_falls_back_to_text():
     """Extensions not in the lookup table get plain text."""
     fake = SimpleNamespace(default_filenames=("output.xyz",))
-    assert media_type_for(fake) == "text/plain; charset=utf-8"
+    output_format = OutputFormat("test-fmt", fake)
+    assert output_format.media_type == "text/plain; charset=utf-8"
 
 
-def test_media_type_for_no_default_filenames():
+def test_output_format_no_default_filenames():
     """Exporters without default_filenames get plain text."""
     fake = SimpleNamespace(default_filenames=())
-    assert media_type_for(fake) == "text/plain; charset=utf-8"
+    assert OutputFormat("test-fmt", fake).media_type == "text/plain; charset=utf-8"
 
 
-def test_available_formats_lists_builtins():
-    formats = available_formats()
+def test_output_format_available_lists_builtins():
+    formats = OutputFormat.available()
     assert "explicit" in formats
     assert "environment-yaml" in formats
     assert formats == sorted(formats)
 
 
-def test_available_formats_includes_conda_lockfiles():
+def test_output_format_available_includes_conda_lockfiles():
     """conda-lockfiles is a base dependency; its formats must be available."""
-    formats = available_formats()
+    formats = OutputFormat.available()
     assert "conda-lock-v1" in formats
     assert "rattler-lock-v6" in formats
     assert "pixi-lock-v6" in formats
 
 
-def test_render_envs_unknown_format_raises(env_with_records):
+def test_output_format_unknown_format_raises():
     with pytest.raises(UnknownFormatError) as excinfo:
-        render_envs([env_with_records], "nope-not-a-format")
+        OutputFormat.named("nope-not-a-format")
     assert excinfo.value.format_name == "nope-not-a-format"
     assert "explicit" in excinfo.value.available
     assert "nope-not-a-format" in str(excinfo.value)
 
 
-def test_render_envs_explicit(env_with_records):
-    body, media_type = render_envs([env_with_records], "explicit")
+def test_output_format_renders_explicit(env_with_records):
+    body, media_type = OutputFormat.named("explicit").render([env_with_records])
     assert media_type.startswith("text/plain")
     assert "@EXPLICIT" in body
 
 
-def test_render_envs_environment_yaml(env_with_records):
-    body, media_type = render_envs([env_with_records], "environment-yaml")
+def test_output_format_renders_environment_yaml(env_with_records):
+    body, media_type = OutputFormat.named("environment-yaml").render(
+        [env_with_records]
+    )
     assert media_type == "application/yaml"
     assert "dependencies:" in body
 
@@ -137,10 +131,10 @@ def test_render_envs_environment_yaml(env_with_records):
         ),
     ],
 )
-def test_render_envs_dispatches_to_exporter_methods(
+def test_output_format_dispatches_to_exporter_methods(
     monkeypatch, exporter_attrs, envs, expected
 ):
-    """render_envs prefers multiplatform_export, falls back to export."""
+    """OutputFormat.render prefers multiplatform_export, falls back to export."""
     attrs = {
         "multiplatform_export": None,
         "export": None,
@@ -152,11 +146,11 @@ def test_render_envs_dispatches_to_exporter_methods(
         ".get_environment_exporter_by_format",
         lambda fmt: SimpleNamespace(**attrs),
     )
-    body, _ = render_envs(envs, "test-fmt")
+    body, _ = OutputFormat.named("test-fmt").render(envs)
     assert body == expected
 
 
-def test_render_envs_no_export_method_raises(monkeypatch):
+def test_output_format_no_export_method_raises(monkeypatch):
     """An exporter with neither method raises UnknownFormatError."""
     fake = SimpleNamespace(
         multiplatform_export=None, export=None,
@@ -168,5 +162,5 @@ def test_render_envs_no_export_method_raises(monkeypatch):
         lambda fmt: fake,
     )
     with pytest.raises(UnknownFormatError) as excinfo:
-        render_envs(["env1"], "test-fmt")
+        OutputFormat.named("test-fmt").render(["env1"])
     assert excinfo.value.format_name == "test-fmt"

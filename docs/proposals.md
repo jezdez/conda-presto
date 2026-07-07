@@ -23,7 +23,7 @@ and preflight.
 
 | Proposal | Status | Summary |
 |---|:---:|---|
-| [Lockfile transcoder mode](https://github.com/jezdez/conda-presto/issues/11) | {bdg-secondary}`proposed` | Lockfile-in / lockfile-out fast path plus `?solve=false` guardrail |
+| [Lockfile transcoder mode](https://github.com/jezdez/conda-presto/issues/11) | {bdg-secondary}`proposed` | Lockfile-in / lockfile-out `/transcode` endpoint |
 | [Preflight validation](https://github.com/jezdez/conda-presto/issues/16) | {bdg-secondary}`proposed` | Fast validation surface, including lint-style findings |
 | [Repair suggestions](https://github.com/jezdez/conda-presto/issues/13) | {bdg-secondary}`proposed` | Verified, ranked repair suggestions for infeasible solves |
 | [Environment / lockfile diff](https://github.com/jezdez/conda-presto/issues/14) | {bdg-secondary}`proposed` | Diff between two environments |
