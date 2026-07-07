@@ -47,17 +47,12 @@ outputs:
 runs:
   using: composite
   steps:
-    # ── Local mode: install pixi + conda-presto, run CLI ──
+    # Local mode: install pixi, then run conda-presto from this checkout.
     - name: Install pixi
       if: inputs.mode == 'local'
       uses: prefix-dev/setup-pixi@5185adfbffb4bd703da3010310260805d89ebb11 # v0.9.6
       with:
         run-install: false
-
-    - name: Install conda-presto
-      if: inputs.mode == 'local'
-      shell: bash
-      run: pixi global install --path "${GITHUB_ACTION_PATH}" --force-reinstall
 
     - name: Resolve (local)
       id: local
@@ -116,14 +111,14 @@ runs:
         echo "::endgroup::"
 
         tmpout="$(mktemp)"
-        if conda-presto "${args[@]}" > "${tmpout}" 2>&1; then
+        if pixi run --manifest-path "${GITHUB_ACTION_PATH}/pyproject.toml" -e cli conda-presto "${args[@]}" > "${tmpout}" 2>&1; then
           echo "exit_code=0" >> "$GITHUB_OUTPUT"
         else
           echo "exit_code=$?" >> "$GITHUB_OUTPUT"
         fi
         echo "tmpout=${tmpout}" >> "$GITHUB_OUTPUT"
 
-    # ── Remote mode: POST to hosted endpoint ──
+    # Remote mode: POST to hosted endpoint.
     - name: Resolve (remote)
       id: remote
       if: inputs.mode == 'remote'
@@ -206,7 +201,7 @@ runs:
         fi
         echo "tmpout=${tmpout}" >> "$GITHUB_OUTPUT"
 
-    # ── Shared output handling ──
+    # Shared output handling.
     - name: Process output
       id: output
       if: always()
