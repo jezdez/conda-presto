@@ -150,14 +150,6 @@ class TranscodeRequest:
     channels: list[str] | None = None
 
 
-def parse_file_content(
-    content: str, filename: str | None = None
-) -> tuple[list[str], list[str]]:
-    """Parse file content and return ``(specs, channels)``."""
-    parsed = parse_environment_content(content, filename)
-    return parsed.specs, parsed.channels
-
-
 def validate_caps(specs: list[str], platforms: list[str]) -> Response | None:
     """Return a 400 response if per-request caps are exceeded, else None."""
     if len(specs) > MAX_SPECS:
@@ -631,13 +623,15 @@ async def parse(request: Request) -> Response:
             status_code=HTTP_400_BAD_REQUEST,
         )
     try:
-        specs, channels = parse_file_content(data.file, data.filename)
+        parsed_file = parse_environment_content(data.file, data.filename)
     except ValueError as exc:
         return Response(
             {"error": str(exc)},
             status_code=HTTP_400_BAD_REQUEST,
         )
-    return Response({"specs": specs, "channels": channels})
+    return Response(
+        {"specs": parsed_file.specs, "channels": parsed_file.channels}
+    )
 
 
 @get("/health")
