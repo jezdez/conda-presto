@@ -37,7 +37,7 @@ Tuning knobs for caching, rate limiting, server behaviour, and solver.
 :link: configuration
 :link-type: doc
 
-`.condarc` settings, channel priority, and solver options.
+Server, Docker, cache, and development settings.
 :::
 
 ::::

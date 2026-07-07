@@ -1,85 +1,116 @@
 # How conda-presto works
 
-conda-presto is a solver and format bridge, not an installer. It connects
-conda's env-spec plugins (input parsers) to conda's exporter plugins (output
-formatters) via a solve step. You hand it specs or environment files, it
-resolves fully pinned packages for one or more platforms, and it emits results
-as JSON or any conda exporter format. Nothing is installed.
+conda-presto is a solve-only bridge between conda input formats and conda
+output formats. It reads specs or environment files, resolves fully pinned
+package records for one or more platforms, and writes JSON or a conda exporter
+format. It does not create prefixes, link packages, or install anything.
 
 ## Data flow
 
 ```{mermaid}
 flowchart LR
-    A["Input\n(env file / specs)"] --> B["Parser\n(env-spec plugin)"]
-    B --> C["Solver\n(rattler)"]
-    C --> D["Exporter\n(format plugin)"]
-    D --> E["Output\n(JSON / lockfile / etc.)"]
+    A["Request\n(specs or file)"] --> B["Input parser\n(env-spec plugin)"]
+    B --> C{"Lockfile fast path?"}
+    C -->|"yes"| D["Reuse package records\nfrom input lockfile"]
+    C -->|"no"| E["Solve\n(conda-rattler-solver)"]
+    E --> F["Result cache\n/r/<hash>"]
+    D --> G["Exporter or\nnative JSON"]
+    F --> G
+    G --> H["CLI stdout or\nHTTP response"]
 ```
+
+The `/transcode` endpoint and the CLI lockfile-to-lockfile path take the fast
+branch only when the input is already a lockfile, the requested platforms are
+present in that lockfile, the requested output format is also a lockfile, and
+the request does not add specs or override channels. Everything else is a solve.
 
 ## Input
 
-conda-presto accepts any format that conda's env-spec plugins understand:
+Input parsing is delegated to conda's env-spec plugin registry. That keeps
+conda-presto out of the business of hand-parsing every file format. Installed
+env-spec plugins decide how to read files such as:
 
 - `environment.yml`
 - `pixi.toml`
 - `pyproject.toml`
 - `requirements.txt`
-- `conda-lock` / `pixi-lock`
-- inline specs on the command line
+- `conda-lock.yml`
+- `pixi.lock`
 
-Because input parsing is delegated to env-spec plugins, any new format that
-gets a plugin automatically works with conda-presto.
+Inline command-line specs and HTTP query/body specs skip file parsing and go
+straight into the solve request.
 
-## Processing
+## Solving
 
-Solving is handled by conda-rattler-solver, a SAT-based solver. For
-multi-platform solves, conda-presto fans out across platforms using a
-`ProcessPoolExecutor`, running each platform solve in its own process.
+Solving is handled by `conda-rattler-solver`. For multi-platform requests,
+conda-presto dispatches each target platform through a persistent
+`ProcessPoolExecutor`. Each worker can retain its own warm repodata/index state
+across requests.
 
-Cross-platform solving relies on automatic virtual package injection. When
-solving for a foreign platform (say, `linux-64` on a macOS host), conda-presto
-injects the appropriate virtual packages (`__glibc`, `__linux`, `__osx`,
-`__win`) so the solver sees the same constraints a native machine would.
+Cross-platform solving relies on virtual package injection. When solving for a
+foreign target such as `linux-64` from macOS, conda-presto sets the target
+subdir and virtual package values (`__glibc`, `__linux`, `__osx`, `__win`) on
+conda's context before constructing the solver input.
+
+The default HTTP and CLI output path returns lightweight `msgspec.Struct`
+objects. The exporter path returns conda `Environment` objects because conda
+exporter plugins consume that model directly.
 
 ## Output
 
-The default output is native JSON using the `SolveResult` model. When you
-request a different format, conda-presto routes the result through conda's
-exporter plugins. Any exporter plugin installed in the environment is available,
-so adding new output formats is a matter of installing the right plugin.
+Without `--format` or `?format=`, conda-presto emits native JSON: one
+`SolveResult` per requested platform, each containing resolved package records
+or a per-platform error string.
+
+With `--format` or `?format=`, conda-presto routes successful solved
+environments through conda's exporter plugin registry. This exposes built-in
+formats such as `explicit` and plugin-provided formats such as `conda-lock-v1`
+and `pixi-lock-v6` without separate output implementations.
 
 ## Caching
 
-Two layers of caching keep solves fast:
+conda-presto has three caching layers:
 
 On-disk repodata cache
-: conda's standard repodata cache with TTL-based expiration. This is shared
-  with the rest of conda, so if you have recently run `conda install`, the
-  repodata is already warm.
+: conda's standard cache for channel metadata. It is shared with other conda
+  tools and expires according to conda's repodata TTL settings.
 
-In-memory index cache
-: A `RattlerIndexHelper` instance is cached in memory, keyed by
-  `(channels, platform)`. The first solve for a given channel/platform pair pays
-  roughly 700 ms to build the index. Subsequent solves with the same key pay
-  only SAT solving time.
+In-memory solver index cache
+: a `RattlerIndexHelper` is cached by `(channels, platform)` inside each
+  process. Repeated solves for the same channel/platform pair skip index
+  construction and pay mostly SAT solving time.
+
+Content-addressed result cache
+: successful HTTP `/resolve` responses are stored under a SHA-256 key and
+  returned with `Location: /r/<hash>` when retained. The key includes normalized
+  specs, ordered channels, target platforms, output format, relevant dependency
+  versions, and markers for conda's local repodata cache files. Repodata
+  refreshes therefore create new keys instead of reusing stale solve results.
+  The in-process LRU can be backed by Litestar file or Redis stores.
 
 ## HTTP layer
 
-conda-presto can run as an HTTP server using Litestar and uvicorn. The server
-adds:
+The HTTP API is a Litestar app served by uvicorn. The server adds compression,
+CORS handling, rate limiting, request body limits, a solve timeout, startup
+cache warmup, a health endpoint, OpenAPI, and interactive API documentation.
 
-- Brotli and gzip response compression
-- CORS headers for browser clients
-- Rate limiting per endpoint
-- Request size limits to prevent abuse
-
-The server is optional. You can use conda-presto purely as a CLI tool or call
-its Python API directly.
+The server is optional. The same core parsing, solving, transcode, and export
+helpers are used by the `conda presto` CLI path.
 
 ## Plugin integration
 
-conda-presto registers as a conda subcommand via the standard plugin system.
-It can run standalone (`conda presto resolve ...`) or as a long-lived HTTP
-server (`conda presto serve`). The plugin hooks into conda's env-spec and
-exporter plugin registries, so it benefits from any plugins already installed
-in the environment.
+conda-presto registers as a conda subcommand. Normal one-shot use is:
+
+```bash
+conda presto -f environment.yml -p linux-64 --format pixi-lock-v6
+```
+
+Server use is:
+
+```bash
+conda presto --serve
+```
+
+The project also relies on conda's env-spec and exporter plugin registries, so
+new parser or exporter plugins become available without conda-presto-specific
+registration code.

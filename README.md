@@ -15,8 +15,10 @@ the result as native JSON or any conda exporter format
 - Cross-platform solving with automatic virtual package injection
 - Multi-platform parallel solves via `ProcessPoolExecutor`
 - Output as JSON or any conda exporter format (`--format` / `?format=`)
+- Lockfile-to-lockfile transcode path that skips solving when possible
+- Content-addressed HTTP result cache with `/r/<sha256>` lookups
 - HTTP API with interactive docs (Scalar UI), compression, rate limiting
-- GitHub Action for CI pipelines (local and remote modes)
+- GitHub Action for CI pipelines (local CLI and hosted API modes)
 - Docker images for server and CLI deployment
 - Uses `conda-rattler-solver` for fast SAT solving
 
@@ -35,9 +37,9 @@ Full documentation is available at the [conda-presto docs site](docs/index.md):
 - [CLI tutorial](docs/tutorials/cli-resolve.md) — in-depth CLI usage
 - [HTTP API tutorial](docs/tutorials/http-api.md) — HTTP workflows
 - [CI pipeline](docs/tutorials/ci-pipeline.md) — GitHub Action setup
-- [Reference](docs/reference/cli.md) — CLI flags, endpoints, formats, env vars
+- [Reference](docs/reference/index.md) — CLI flags, endpoints, formats, env vars
 - [Architecture](docs/explanation/architecture.md) — how it works
-- [Proposals](docs/proposals.md) — future feature designs
+- [Roadmap](docs/proposals.md) — shipped foundations and linked future work
 
 ## Development
 

@@ -436,14 +436,18 @@ def test_different_output_formats_produce_different_cache_keys():
     assert explicit_key != default_key
 
 
-def test_different_solver_versions_produce_different_cache_keys(monkeypatch):
+@pytest.mark.parametrize("package_name", app_module.CACHE_DEPENDENCY_PACKAGES)
+def test_different_dependency_versions_produce_different_cache_keys(
+    monkeypatch,
+    package_name,
+):
     def version_one(package):
-        if package == "conda-rattler-solver":
+        if package == package_name:
             return "one"
         return "test"
 
     def version_two(package):
-        if package == "conda-rattler-solver":
+        if package == package_name:
             return "two"
         return "test"
 

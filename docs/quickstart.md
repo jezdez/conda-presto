@@ -26,9 +26,9 @@ pixi install
 
 `````
 
-Requires conda >= 25.3 and Python >= 3.13. For best performance, use
-the `conda-canary/label/dev` channel which includes the latest solver
-and startup optimizations.
+Requires conda >= 25.3 and Python >= 3.13. The conda install example
+uses `conda-canary/label/dev` because conda-presto may depend on conda
+and solver packages that have not reached the default channels yet.
 
 ## First resolve
 

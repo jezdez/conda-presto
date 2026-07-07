@@ -127,7 +127,7 @@ picked up automatically.
 
 Because conda-presto reads any format conda understands and writes
 any exporter format, you can pipe them together into a lockfile
-conversion workflow:
+creation workflow:
 
 ```bash
 conda presto -f environment.yml --format pixi-lock-v6 > pixi.lock
@@ -146,8 +146,9 @@ conda presto -f pyproject.toml -p linux-64 --format conda-lock-v1 > conda-lock.y
 conda presto -f requirements.txt -c conda-forge -p linux-64 --format explicit > lockfile.txt
 ```
 
-If both sides are lockfile formats, conda-presto reuses the package
-records for the requested platforms and skips the solver:
+If both sides are lockfile formats and the requested platforms are
+already present in the input lockfile, conda-presto reuses the package
+records and skips the solver:
 
 ```bash
 conda presto -f pixi.lock -p linux-64 --format conda-lock-v1 > conda-lock.yml
@@ -179,4 +180,5 @@ needs different versions:
 CONDA_PRESTO_GLIBC_VERSION=2.28 conda presto -c conda-forge -p linux-64 python=3.12
 ```
 
-See the [environment variables reference](../index) for the full list.
+See the [environment variables reference](../reference/environment-variables.md)
+for the full list.

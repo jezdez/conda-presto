@@ -2,17 +2,18 @@
 
 This tutorial shows how to use the `jezdez/conda-presto` GitHub
 Action to resolve environments in CI. The action supports two modes:
-local (installs on the runner) and remote (calls a hosted endpoint).
+local (runs on the runner) and remote (calls a hosted endpoint).
 
 ## Local mode
 
 Local mode is the default. It installs conda-presto on the runner
-via pixi and runs the CLI directly. No infrastructure required.
+via pixi from the checked-out action path and runs the CLI directly.
+No infrastructure required.
 
 ### Basic solve
 
 ```yaml
-- uses: jezdez/conda-presto@v0.4.0
+- uses: jezdez/conda-presto@v0.5.0
   with:
     command: solve
     file: environment.yml
@@ -24,7 +25,7 @@ via pixi and runs the CLI directly. No infrastructure required.
 Add `format` and `output` to write the result to a file:
 
 ```yaml
-- uses: jezdez/conda-presto@v0.4.0
+- uses: jezdez/conda-presto@v0.5.0
   with:
     command: solve
     file: environment.yml
@@ -41,7 +42,7 @@ as an artifact or pass it to `conda env create`.
 Instead of an environment file, pass specs directly:
 
 ```yaml
-- uses: jezdez/conda-presto@v0.4.0
+- uses: jezdez/conda-presto@v0.5.0
   with:
     command: solve
     specs: python=3.12,numpy,pandas
@@ -56,7 +57,7 @@ for teams that already run a server (shared repodata cache, no
 install step on the runner).
 
 ```yaml
-- uses: jezdez/conda-presto@v0.4.0
+- uses: jezdez/conda-presto@v0.5.0
   with:
     mode: remote
     endpoint: ${{ vars.CONDA_PRESTO_URL }}
@@ -71,7 +72,7 @@ rather than hardcoding it.
 ### Remote with lockfile output
 
 ```yaml
-- uses: jezdez/conda-presto@v0.4.0
+- uses: jezdez/conda-presto@v0.5.0
   with:
     mode: remote
     endpoint: ${{ vars.CONDA_PRESTO_URL }}
@@ -99,7 +100,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: jezdez/conda-presto@v0.4.0
+      - uses: jezdez/conda-presto@v0.5.0
         id: solve
         with:
           command: solve

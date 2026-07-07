@@ -57,6 +57,9 @@ Performance design:
       ``CONDA_PRESTO_CONCURRENCY``).
     - The ``on_startup`` hook pre-warms repodata caches so the first
       request doesn't pay cold-start costs.
+    - Successful ``/resolve`` responses are stored in a content-addressed
+      result cache and can be fetched again from ``/r/{hash}`` while the
+      backing cache entry remains available.
     - Response compression (brotli with gzip fallback) reduces
       bandwidth for large solve results.
     - ``SolveResult`` / ``ResolvedPackage`` are ``msgspec.Struct`` and
@@ -143,6 +146,12 @@ DEFAULT_RESOLVE_FORMAT = "conda-presto-json-v1"
 CACHE_ENVELOPE_VERSION = 1
 RESULT_CACHE_STORE_NAME = "result_cache"
 RESULT_CACHE_STORE_PREFIX = "resolve-v1:"
+CACHE_DEPENDENCY_PACKAGES = (
+    "conda-presto",
+    "conda",
+    "conda-rattler-solver",
+    "conda-lockfiles",
+)
 
 
 @dataclass
@@ -201,7 +210,7 @@ class ResultCache:
         """Return the SHA-256 key for a canonical resolve request."""
         resolved_platforms = list(platforms or [NATIVE_SUBDIR])
         versions: dict[str, str] = {}
-        for package in ("conda-presto", "conda", "conda-rattler-solver"):
+        for package in CACHE_DEPENDENCY_PACKAGES:
             try:
                 versions[package] = pkg_version(package)
             except Exception:
