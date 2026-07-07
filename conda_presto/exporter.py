@@ -16,6 +16,7 @@ parallel implementation or conda plugin registration needed.
 from __future__ import annotations
 
 import os
+from dataclasses import dataclass
 
 from conda.base.context import context
 from conda.exceptions import CondaValueError
@@ -36,63 +37,67 @@ EXTENSION_MEDIA_TYPES: dict[str, str] = {
 DEFAULT_MEDIA_TYPE = "text/plain; charset=utf-8"
 
 
-def available_formats() -> list[str]:
-    """Return the sorted list of registered exporter format names.
+@dataclass(frozen=True)
+class OutputFormat:
+    """Named conda exporter plugin used for non-default output formats."""
 
-    Includes both primary names and aliases, so e.g. both
-    ``rattler-lock-v6`` and ``pixi-lock-v6`` are listed when
-    ``conda-lockfiles`` is installed.
-    """
-    return sorted(context.plugin_manager.get_exporter_format_mapping().keys())
+    name: str
+    exporter: CondaEnvironmentExporter
 
+    @classmethod
+    def available(cls) -> list[str]:
+        """Return the sorted list of registered exporter format names.
 
-def exporter_for(format_name: str) -> CondaEnvironmentExporter:
-    """Return the named exporter or raise ``UnknownFormatError``."""
-    try:
-        return context.plugin_manager.get_environment_exporter_by_format(format_name)
-    except CondaValueError as exc:
-        raise UnknownFormatError(format_name, available_formats()) from exc
+        Includes both primary names and aliases, so e.g. both
+        ``rattler-lock-v6`` and ``pixi-lock-v6`` are listed when
+        ``conda-lockfiles`` is installed.
+        """
+        return sorted(context.plugin_manager.get_exporter_format_mapping().keys())
 
+    @classmethod
+    def named(cls, name: str) -> OutputFormat:
+        """Return the named output format or raise ``UnknownFormatError``."""
+        try:
+            exporter = context.plugin_manager.get_environment_exporter_by_format(name)
+        except CondaValueError as exc:
+            raise UnknownFormatError(name, cls.available()) from exc
+        return cls(name=name, exporter=exporter)
 
-def is_lockfile_format(format_name: str) -> bool:
-    """Return whether *format_name* names a lockfile exporter."""
-    return exporter_for(format_name).environment_format == EnvironmentFormat.lockfile
+    @property
+    def is_lockfile(self) -> bool:
+        return self.exporter.environment_format == EnvironmentFormat.lockfile
 
+    @property
+    def media_type(self) -> str:
+        """Pick a reasonable Content-Type for this format's output.
 
-def media_type_for(exporter: CondaEnvironmentExporter) -> str:
-    """Pick a reasonable Content-Type for an exporter's output.
+        Derived from the first recognized extension in the exporter's
+        ``default_filenames`` — a conda plugin attribute — so new
+        exporters are handled correctly without any per-format wiring
+        here.  Unknown extensions fall back to UTF-8 plain text.
 
-    Derived from the first recognized extension in the exporter's
-    ``default_filenames`` — a conda plugin attribute — so new
-    exporters are handled correctly without any per-format wiring
-    here.  Unknown extensions fall back to UTF-8 plain text.
+        Note that ``pixi.lock`` (extension ``.lock``) is YAML content,
+        so ``.lock`` is mapped to ``application/yaml``.
+        """
+        for filename in self.exporter.default_filenames or ():
+            ext = os.path.splitext(filename)[1].lower()
+            if ext in EXTENSION_MEDIA_TYPES:
+                return EXTENSION_MEDIA_TYPES[ext]
+        return DEFAULT_MEDIA_TYPE
 
-    Note that ``pixi.lock`` (extension ``.lock``) is YAML content,
-    so ``.lock`` is mapped to ``application/yaml``.
-    """
-    for filename in exporter.default_filenames or ():
-        ext = os.path.splitext(filename)[1].lower()
-        if ext in EXTENSION_MEDIA_TYPES:
-            return EXTENSION_MEDIA_TYPES[ext]
-    return DEFAULT_MEDIA_TYPE
+    def render(self, envs: list[Environment]) -> tuple[str, str]:
+        """Render *envs* via this exporter plugin.
 
+        Returns ``(body, media_type)``.  Raises :class:`UnknownFormatError`
+        if the exporter has neither ``multiplatform_export`` nor
+        ``export`` set. The latter is a defensive check; conda itself
+        rejects such plugins at registration time.
+        """
+        if self.exporter.multiplatform_export:
+            body = self.exporter.multiplatform_export(envs)
+        elif self.exporter.export:
+            body = "\n".join(self.exporter.export(env) for env in envs)
+        else:
+            raise UnknownFormatError(self.name, self.available())
 
-def render_envs(envs: list[Environment], format_name: str) -> tuple[str, str]:
-    """Render *envs* via the named exporter plugin.
-
-    Returns ``(body, media_type)``.  Raises :class:`UnknownFormatError`
-    if the format is not registered or the exporter has neither
-    ``multiplatform_export`` nor ``export`` set (the latter is a
-    defensive check; conda itself rejects such plugins at registration
-    time).
-    """
-    exporter = exporter_for(format_name)
-
-    if exporter.multiplatform_export:
-        body = exporter.multiplatform_export(envs)
-    elif exporter.export:
-        body = "\n".join(exporter.export(env) for env in envs)
-    else:
-        raise UnknownFormatError(format_name, available_formats())
-
-    return body, media_type_for(exporter)
+        return body, self.media_type

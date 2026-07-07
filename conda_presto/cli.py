@@ -35,8 +35,8 @@ from conda.cli.helpers import (
 
 from .config import DEFAULT_CHANNELS, DEFAULT_HOST, DEFAULT_PORT
 from .exceptions import SAFE_ERROR_TYPES, UnknownFormatError
-from .exporter import is_lockfile_format, render_envs
-from .inputs import ParsedInputFile, parse_input_path
+from .exporter import OutputFormat
+from .inputs import ParsedInputFile
 from .resolve import NATIVE_SUBDIR, solve, solve_environments
 
 
@@ -125,7 +125,7 @@ def load_parsed_files(
     target_platforms = target_platforms or [NATIVE_SUBDIR]
     for fpath in files:
         try:
-            parsed = parse_input_path(fpath, target_platforms)
+            parsed = ParsedInputFile.from_path(fpath, target_platforms)
         except ValueError:
             print(
                 f"No environment spec plugin can handle: {fpath}",
@@ -140,7 +140,7 @@ def load_parsed_files(
 
 def transcode_envs(
     parsed_files: list[ParsedInputFile],
-    output_format: str,
+    output_format: OutputFormat,
     specs: list[str],
     has_channel_override: bool,
 ) -> tuple | None:
@@ -148,7 +148,11 @@ def transcode_envs(
     if len(parsed_files) != 1 or specs or has_channel_override:
         return None
     parsed = parsed_files[0]
-    if parsed.is_lockfile and parsed.environments and is_lockfile_format(output_format):
+    if (
+        parsed.is_lockfile
+        and parsed.environments
+        and output_format.is_lockfile
+    ):
         return parsed.environments
     return None
 
@@ -183,9 +187,10 @@ def cmd_solve(args: argparse.Namespace):
         sys.stdout.buffer.write(body + b"\n")
     else:
         try:
+            output_format = OutputFormat.named(args.output_format)
             envs = transcode_envs(
                 parsed_files,
-                args.output_format,
+                output_format,
                 specs,
                 has_channel_override,
             )
@@ -197,7 +202,7 @@ def cmd_solve(args: argparse.Namespace):
                     )
                     raise SystemExit(1)
                 envs = solve_environments(channels, deps, platforms)
-            body, _ = render_envs(envs, args.output_format)
+            body, _ = output_format.render(envs)
         except UnknownFormatError as exc:
             print(str(exc), file=sys.stderr)
             raise SystemExit(1)

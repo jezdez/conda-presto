@@ -98,8 +98,8 @@ from .config import (
     SOLVE_TIMEOUT_S,
 )
 from .exceptions import UnknownFormatError
-from .exporter import available_formats, is_lockfile_format, render_envs
-from .inputs import ParsedInputFile, parse_input_content
+from .exporter import OutputFormat
+from .inputs import ParsedInputFile
 from .resolve import (
     NATIVE_SUBDIR,
     shutdown_process_pool,
@@ -194,7 +194,7 @@ async def run_solve(
         if format_name is None:
             return solve(channels, specs, platforms)
         envs = solve_environments(channels, specs, platforms)
-        return render_envs(envs, format_name)
+        return OutputFormat.named(format_name).render(envs)
 
     try:
         with anyio.fail_after(SOLVE_TIMEOUT_S):
@@ -256,13 +256,13 @@ def transcode_rejection(
         reasons.append("no output format was requested")
     else:
         try:
-            output_is_lockfile = is_lockfile_format(format_name)
+            output_format = OutputFormat.named(format_name)
         except UnknownFormatError as exc:
             return Response(
                 {"error": str(exc), "available_formats": exc.available},
                 status_code=HTTP_400_BAD_REQUEST,
             )
-        if not output_is_lockfile:
+        if not output_format.is_lockfile:
             reasons.append("output format is not a lockfile")
     if has_extra_specs:
         reasons.append("additional specs require solving")
@@ -402,7 +402,7 @@ async def resolve_post(
 
     if file_content is not None:
         try:
-            parsed_file = parse_input_content(
+            parsed_file = ParsedInputFile.from_content(
                 file_content, file_name, platforms or [NATIVE_SUBDIR]
             )
         except ValueError as exc:
@@ -525,7 +525,7 @@ async def transcode_post(
         )
 
     try:
-        parsed_file = parse_input_content(
+        parsed_file = ParsedInputFile.from_content(
             file_content, file_name, target_platforms
         )
     except ValueError as exc:
@@ -538,15 +538,15 @@ async def transcode_post(
         and not has_channel_override
     ):
         try:
-            output_is_lockfile = is_lockfile_format(format)
+            output_format = OutputFormat.named(format)
         except UnknownFormatError as exc:
             return Response(
                 {"error": str(exc), "available_formats": exc.available},
                 status_code=HTTP_400_BAD_REQUEST,
             )
-        if output_is_lockfile and parsed_file.environments:
+        if output_format.is_lockfile and parsed_file.environments:
             try:
-                body, media_type = render_envs(list(parsed_file.environments), format)
+                body, media_type = output_format.render(list(parsed_file.environments))
             except UnknownFormatError as exc:
                 return Response(
                     {"error": str(exc), "available_formats": exc.available},
@@ -572,7 +572,7 @@ async def transcode_post(
 @get("/formats")
 async def formats() -> dict[str, list[str]]:
     """Return the list of registered exporter format names."""
-    return {"formats": available_formats()}
+    return {"formats": OutputFormat.available()}
 
 
 @get("/platforms")
@@ -623,7 +623,7 @@ async def parse(request: Request) -> Response:
             status_code=HTTP_400_BAD_REQUEST,
         )
     try:
-        parsed_file = parse_input_content(data.file, data.filename)
+        parsed_file = ParsedInputFile.from_content(data.file, data.filename)
     except ValueError as exc:
         return Response(
             {"error": str(exc)},
