@@ -61,17 +61,15 @@ Performance design:
       returned directly; Litestar encodes them natively without an
       intermediate dict conversion.
 """
+
 from __future__ import annotations
 
 import logging
-import os
-import tempfile
 from dataclasses import dataclass
 from importlib.metadata import version as pkg_version
 
 import anyio
 import msgspec
-from conda.base.context import context
 from litestar import Litestar, Request, get, post
 from litestar.config.compression import CompressionConfig
 from litestar.config.cors import CORSConfig
@@ -99,8 +97,10 @@ from .config import (
     SOLVE_TIMEOUT_S,
 )
 from .exceptions import UnknownFormatError
-from .exporter import available_formats, render_envs
+from .exporter import available_formats, is_lockfile_format, render_envs
+from .inputs import ParsedInputFile, parse_environment_content
 from .resolve import (
+    NATIVE_SUBDIR,
     shutdown_process_pool,
     solve,
     solve_environments,
@@ -108,8 +108,6 @@ from .resolve import (
 )
 
 log = logging.getLogger(__name__)
-
-ALLOWED_EXTENSIONS = {".yml", ".yaml", ".txt", ".lock", ".toml", ".json"}
 
 RAW_CONTENT_TYPE_EXTENSIONS: dict[str, str] = {
     "application/yaml": ".yml",
@@ -141,58 +139,14 @@ class ResolveRequest:
 
 
 def parse_file_content(
-    content: str,
-    filename: str | None = None,
+    content: str, filename: str | None = None
 ) -> tuple[list[str], list[str]]:
-    """Parse file content through conda's env spec plugin system.
-
-    Writes *content* to a temp file and runs it through
-    ``detect_environment_specifier``, the same codepath the CLI uses.
-    Returns ``(specs, channels)``.
-
-    The *filename* controls which parser conda selects (via extension).
-    Only extensions in ``ALLOWED_EXTENSIONS`` are accepted.  Directory
-    components are stripped to prevent path traversal.
-
-    The tempfile is kept alive for the entire duration of attribute
-    access on the parsed environment, since some env-spec plugins read
-    the file lazily on ``requested_packages`` / ``config.channels``
-    access.
-    """
-    filename = os.path.basename(filename or "environment.yml")
-    ext = os.path.splitext(filename)[1].lower()
-    if ext not in ALLOWED_EXTENSIONS:
-        raise ValueError(
-            f"Unsupported file extension '{ext}', "
-            f"allowed: {', '.join(sorted(ALLOWED_EXTENSIONS))}"
-        )
-
-    with tempfile.NamedTemporaryFile(
-        mode="w", suffix=ext, delete=True
-    ) as tmp:
-        tmp.write(content)
-        tmp.flush()
-
-        spec_plugin = context.plugin_manager.detect_environment_specifier(
-            tmp.name
-        )
-        spec = spec_plugin.environment_spec(filename=tmp.name)
-        if not spec.can_handle():
-            raise ValueError(
-                f"No conda environment spec plugin can handle "
-                f"this file format ({ext})"
-            )
-        env = spec.env
-        specs = [str(s) for s in env.requested_packages]
-        channels: list[str] = []
-        if env.config and env.config.channels:
-            channels.extend(env.config.channels)
-    return specs, channels
+    """Parse file content and return ``(specs, channels)``."""
+    parsed = parse_environment_content(content, filename)
+    return parsed.specs, parsed.channels
 
 
-def validate_caps(
-    specs: list[str], platforms: list[str]
-) -> Response | None:
+def validate_caps(specs: list[str], platforms: list[str]) -> Response | None:
     """Return a 400 response if per-request caps are exceeded, else None."""
     if len(specs) > MAX_SPECS:
         return Response(
@@ -275,6 +229,68 @@ async def run_solve(
     return Response(body, media_type=media_type)
 
 
+def render_formatted_response(envs: tuple | list, format_name: str) -> Response:
+    """Render parsed or solved environments with exporter errors mapped."""
+    try:
+        body, media_type = render_envs(list(envs), format_name)
+    except UnknownFormatError as exc:
+        return Response(
+            {"error": str(exc), "available_formats": exc.available},
+            status_code=HTTP_400_BAD_REQUEST,
+        )
+    except Exception:
+        log.exception("Environment export failed")
+        return Response(
+            {"error": "Internal solver error"},
+            status_code=HTTP_500_INTERNAL_SERVER_ERROR,
+        )
+    return Response(body, media_type=media_type)
+
+
+def transcode_rejection(
+    parsed: ParsedInputFile | None,
+    format_name: str | None,
+    target_platforms: list[str],
+    has_extra_specs: bool,
+    has_channel_override: bool,
+) -> Response:
+    """Return a structured ``solve=false`` rejection response."""
+    reasons: list[str] = []
+    if parsed is None:
+        reasons.append("no file input was provided")
+    elif not parsed.is_lockfile:
+        reasons.append("input file is not a lockfile")
+    else:
+        missing = sorted(set(target_platforms) - set(parsed.available_platforms))
+        if missing:
+            reasons.append(
+                "requested platforms not present in lockfile: " + ", ".join(missing)
+            )
+    if format_name is None:
+        reasons.append("no output format was requested")
+    else:
+        try:
+            output_is_lockfile = is_lockfile_format(format_name)
+        except UnknownFormatError as exc:
+            return Response(
+                {"error": str(exc), "available_formats": exc.available},
+                status_code=HTTP_400_BAD_REQUEST,
+            )
+        if not output_is_lockfile:
+            reasons.append("output format is not a lockfile")
+    if has_extra_specs:
+        reasons.append("additional specs require solving")
+    if has_channel_override:
+        reasons.append("channel overrides require solving")
+    return Response(
+        {
+            "error": "Request cannot be satisfied with solve=false",
+            "reasons": reasons,
+        },
+        status_code=HTTP_400_BAD_REQUEST,
+    )
+
+
 @get("/resolve")
 async def resolve_get(
     request: Request,
@@ -321,6 +337,7 @@ async def resolve_post(
     platform: list[str] | None = None,
     format: str | None = None,
     filename: str | None = None,
+    solve: bool | None = None,
 ) -> Response:
     """Resolve package specs and/or an environment file via POST body.
 
@@ -342,15 +359,11 @@ async def resolve_post(
     through conda's exporter plugin registry.  ``format`` is
     query-only; it is not read from the JSON body.
     """
-    content_type = (
-        request.headers.get("content-type", "")
-        .split(";")[0]
-        .strip()
-        .lower()
-    )
+    content_type = request.headers.get("content-type", "").split(";")[0].strip().lower()
 
     file_content: str | None = None
     file_name: str | None = None
+    parsed_file: ParsedInputFile | None = None
 
     if content_type in ("", "application/json"):
         body = await request.body()
@@ -366,14 +379,8 @@ async def resolve_post(
             data = ResolveRequest()
 
         specs = data.specs if data.specs is not None else (spec or [])
-        channels = (
-            data.channels if data.channels is not None else (channel or [])
-        )
-        platforms = (
-            data.platforms
-            if data.platforms is not None
-            else (platform or [])
-        )
+        channels = data.channels if data.channels is not None else (channel or [])
+        platforms = data.platforms if data.platforms is not None else (platform or [])
         file_content = data.file
         file_name = data.filename or filename
     elif content_type in RAW_CONTENT_TYPE_EXTENSIONS:
@@ -408,20 +415,64 @@ async def resolve_post(
             status_code=HTTP_400_BAD_REQUEST,
         )
 
+    if solve is False and file_content is None:
+        return transcode_rejection(
+            None, format, platforms or [], bool(specs), bool(channels)
+        )
+
     if file_content is not None:
+        target_platforms = platforms or [NATIVE_SUBDIR]
         try:
-            file_specs, file_channels = parse_file_content(
-                file_content, file_name
+            parsed_file = parse_environment_content(
+                file_content, file_name, target_platforms
             )
         except ValueError as exc:
-            return Response(
-                {"error": str(exc)}, status_code=HTTP_400_BAD_REQUEST
+            return Response({"error": str(exc)}, status_code=HTTP_400_BAD_REQUEST)
+
+        has_extra_specs = bool(specs)
+        has_channel_override = bool(channels)
+        if (
+            parsed_file.is_lockfile
+            and format is not None
+            and not has_extra_specs
+            and not has_channel_override
+        ):
+            try:
+                output_is_lockfile = is_lockfile_format(format)
+            except UnknownFormatError as exc:
+                return Response(
+                    {"error": str(exc), "available_formats": exc.available},
+                    status_code=HTTP_400_BAD_REQUEST,
+                )
+            if output_is_lockfile and parsed_file.environments:
+                return render_formatted_response(parsed_file.environments, format)
+
+        if solve is False:
+            return transcode_rejection(
+                parsed_file,
+                format,
+                target_platforms,
+                has_extra_specs,
+                has_channel_override,
             )
-        specs = list(specs) + file_specs
+
+        specs = list(specs) + parsed_file.specs
         if not channels:
-            channels = file_channels
+            channels = parsed_file.channels
 
     if not specs:
+        if parsed_file and parsed_file.is_lockfile:
+            return Response(
+                {
+                    "error": (
+                        "Lockfile input cannot be solved for the "
+                        "requested platforms; request a lockfile output "
+                        "for a platform present in the lockfile or "
+                        "provide specs to solve."
+                    )
+                },
+                status_code=HTTP_400_BAD_REQUEST,
+            )
         return Response(
             {"error": "Provide specs or file content"},
             status_code=HTTP_400_BAD_REQUEST,
@@ -529,9 +580,7 @@ async def on_shutdown(app: Litestar) -> None:
 
 middleware = [LoggingMiddlewareConfig().middleware]
 if RATE_LIMIT:
-    middleware.append(
-        RateLimitConfig(rate_limit=("minute", RATE_LIMIT)).middleware
-    )
+    middleware.append(RateLimitConfig(rate_limit=("minute", RATE_LIMIT)).middleware)
 
 app = Litestar(
     route_handlers=[
@@ -552,9 +601,7 @@ app = Litestar(
     on_startup=[on_startup],
     on_shutdown=[on_shutdown],
     request_max_body_size=MAX_BODY_BYTES,
-    compression_config=CompressionConfig(
-        backend="brotli", brotli_gzip_fallback=True
-    ),
+    compression_config=CompressionConfig(backend="brotli", brotli_gzip_fallback=True),
     cors_config=CORSConfig(allow_origins=CORS_ORIGINS),
     logging_config=LoggingConfig(
         log_exceptions="always",

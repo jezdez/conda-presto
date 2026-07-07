@@ -118,6 +118,23 @@ curl -sS \
   -o pytorch.explicit.txt
 ```
 
+### Converting an existing lockfile
+
+When the input and output are both lockfiles, the server can reuse the
+package records already present in the uploaded lockfile. Add
+`solve=false` to make that a strict requirement:
+
+```bash
+curl -sS --data-binary @pixi.lock \
+  -H 'Content-Type: application/yaml' \
+  "$CONDA_PRESTO_URL/resolve?filename=pixi.lock&platform=linux-64&format=conda-lock-v1&solve=false" \
+  -o conda-lock.yml
+```
+
+The request fails with HTTP 400 if `pixi.lock` does not contain the
+requested platform, if the output format is not a lockfile, or if extra
+specs or channel overrides would require a solve.
+
 ```{tip}
 The full lockfile pipeline works in a single shell session: resolve
 remotely, then create the environment locally.

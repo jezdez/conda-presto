@@ -146,6 +146,13 @@ conda presto -f pyproject.toml -p linux-64 --format conda-lock-v1 > conda-lock.y
 conda presto -f requirements.txt -c conda-forge -p linux-64 --format explicit > lockfile.txt
 ```
 
+If both sides are lockfile formats, conda-presto reuses the package
+records for the requested platforms and skips the solver:
+
+```bash
+conda presto -f pixi.lock -p linux-64 --format conda-lock-v1 > conda-lock.yml
+```
+
 ```{tip}
 When using `--format`, a solver failure on any platform raises the
 whole command because exporters only operate on successful solves.

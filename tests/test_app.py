@@ -1,10 +1,12 @@
 """Tests for conda_presto.app (Litestar endpoints)."""
+
 from __future__ import annotations
 
 import time
 
 import pytest
 import yaml
+from conda.models.environment import Environment
 from httpx import ASGITransport, AsyncClient
 from litestar import Litestar
 from litestar.openapi import OpenAPIConfig
@@ -49,9 +51,7 @@ def test_app():
 @pytest.fixture()
 async def client(test_app):
     transport = ASGITransport(app=test_app)
-    async with AsyncClient(
-        transport=transport, base_url="http://test"
-    ) as c:
+    async with AsyncClient(transport=transport, base_url="http://test") as c:
         yield c
 
 
@@ -171,13 +171,7 @@ async def test_resolve_post_file(client):
 
 @pytest.mark.anyio
 async def test_resolve_post_file_with_filename(client):
-    yml = (
-        "name: test\n"
-        "channels:\n"
-        "  - conda-forge\n"
-        "dependencies:\n"
-        "  - zlib\n"
-    )
+    yml = "name: test\nchannels:\n  - conda-forge\ndependencies:\n  - zlib\n"
     resp = await client.post(
         "/resolve",
         json={
@@ -193,13 +187,7 @@ async def test_resolve_post_file_with_filename(client):
 
 @pytest.mark.anyio
 async def test_resolve_post_merged_specs_and_file(client):
-    yml = (
-        "name: test\n"
-        "channels:\n"
-        "  - conda-forge\n"
-        "dependencies:\n"
-        "  - python=3.12\n"
-    )
+    yml = "name: test\nchannels:\n  - conda-forge\ndependencies:\n  - python=3.12\n"
     resp = await client.post(
         "/resolve",
         json={
@@ -286,13 +274,7 @@ async def test_resolve_post_bad_extension(client):
 
 @pytest.mark.anyio
 async def test_resolve_post_path_traversal(client):
-    yml = (
-        "name: test\n"
-        "channels:\n"
-        "  - conda-forge\n"
-        "dependencies:\n"
-        "  - zlib\n"
-    )
+    yml = "name: test\nchannels:\n  - conda-forge\ndependencies:\n  - zlib\n"
     resp = await client.post(
         "/resolve",
         json={
@@ -423,9 +405,7 @@ async def test_resolve_get_rejects_too_many_platforms(client, monkeypatch):
 
 
 @pytest.mark.anyio
-async def test_resolve_post_omitted_fields_fall_through_to_query(
-    client, monkeypatch
-):
+async def test_resolve_post_omitted_fields_fall_through_to_query(client, monkeypatch):
     captured = {}
 
     def capture(channels, specs, platforms):
@@ -446,9 +426,7 @@ async def test_resolve_post_omitted_fields_fall_through_to_query(
 
 
 @pytest.mark.anyio
-async def test_resolve_post_empty_body_array_overrides_query(
-    client, monkeypatch
-):
+async def test_resolve_post_empty_body_array_overrides_query(client, monkeypatch):
     captured = {}
 
     def capture(channels, specs, platforms):
@@ -593,6 +571,197 @@ async def test_resolve_post_raw_body_pixi_lock_pipeline(client):
 
 
 @pytest.mark.anyio
+async def test_resolve_post_lockfile_to_lockfile_transcodes_without_solver(
+    client, monkeypatch, pixi_lock_v6_text
+):
+    def fail_solve(*args, **kwargs):
+        raise AssertionError("solver should not run")
+
+    monkeypatch.setattr(app_module, "solve_environments", fail_solve)
+    resp = await client.post(
+        "/resolve?format=conda-lock-v1",
+        json={
+            "file": pixi_lock_v6_text,
+            "filename": "pixi.lock",
+            "platforms": ["linux-64"],
+        },
+    )
+
+    assert resp.status_code == 200
+    assert resp.headers["content-type"].startswith("application/yaml")
+    data = yaml.safe_load(resp.text)
+    assert data["version"] == 1
+    assert data["metadata"]["platforms"] == ["linux-64"]
+    assert {pkg["name"] for pkg in data["package"]} == {"libzlib", "zlib"}
+
+
+@pytest.mark.anyio
+async def test_resolve_post_lockfile_solve_false_transcodes_without_solver(
+    client, monkeypatch, pixi_lock_v6_text
+):
+    def fail_solve(*args, **kwargs):
+        raise AssertionError("solver should not run")
+
+    monkeypatch.setattr(app_module, "solve_environments", fail_solve)
+    resp = await client.post(
+        "/resolve?format=pixi-lock-v6&solve=false",
+        json={
+            "file": pixi_lock_v6_text,
+            "filename": "pixi.lock",
+            "platforms": ["linux-64"],
+        },
+    )
+
+    assert resp.status_code == 200
+    assert yaml.safe_load(resp.text)["version"] == 6
+
+
+@pytest.mark.anyio
+async def test_resolve_post_solve_false_rejects_environment_input(client):
+    resp = await client.post(
+        "/resolve?format=pixi-lock-v6&solve=false",
+        json={
+            "file": ("channels:\n  - conda-forge\ndependencies:\n  - zlib\n"),
+            "filename": "environment.yml",
+            "platforms": ["linux-64"],
+        },
+    )
+
+    assert resp.status_code == 400
+    body = resp.json()
+    assert body["error"] == "Request cannot be satisfied with solve=false"
+    assert "input file is not a lockfile" in body["reasons"]
+
+
+@pytest.mark.anyio
+async def test_resolve_post_solve_false_rejects_without_file(client):
+    resp = await client.post("/resolve?solve=false")
+
+    assert resp.status_code == 400
+    body = resp.json()
+    assert body["error"] == "Request cannot be satisfied with solve=false"
+    assert "no file input was provided" in body["reasons"]
+    assert "no output format was requested" in body["reasons"]
+
+
+@pytest.mark.anyio
+async def test_resolve_post_solve_false_rejects_non_lockfile_output(
+    client, pixi_lock_v6_text
+):
+    resp = await client.post(
+        "/resolve?format=environment-yaml&solve=false",
+        json={
+            "file": pixi_lock_v6_text,
+            "filename": "pixi.lock",
+            "platforms": ["linux-64"],
+        },
+    )
+
+    assert resp.status_code == 400
+    body = resp.json()
+    assert body["error"] == "Request cannot be satisfied with solve=false"
+    assert "output format is not a lockfile" in body["reasons"]
+
+
+@pytest.mark.anyio
+async def test_resolve_post_solve_false_rejects_missing_lockfile_platform(
+    client, pixi_lock_v6_text
+):
+    resp = await client.post(
+        "/resolve?format=conda-lock-v1&solve=false",
+        json={
+            "file": pixi_lock_v6_text,
+            "filename": "pixi.lock",
+            "platforms": ["osx-arm64"],
+        },
+    )
+
+    assert resp.status_code == 400
+    body = resp.json()
+    assert body["error"] == "Request cannot be satisfied with solve=false"
+    assert "requested platforms not present in lockfile: osx-arm64" in body["reasons"]
+
+
+@pytest.mark.anyio
+async def test_resolve_post_lockfile_unknown_format_returns_400(
+    client, pixi_lock_v6_text
+):
+    resp = await client.post(
+        "/resolve?format=does-not-exist",
+        json={
+            "file": pixi_lock_v6_text,
+            "filename": "pixi.lock",
+            "platforms": ["linux-64"],
+        },
+    )
+
+    assert resp.status_code == 400
+    assert "Unknown format 'does-not-exist'" in resp.json()["error"]
+
+
+@pytest.mark.anyio
+async def test_resolve_post_lockfile_missing_platform_without_solve_false(
+    client, pixi_lock_v6_text
+):
+    resp = await client.post(
+        "/resolve?format=conda-lock-v1",
+        json={
+            "file": pixi_lock_v6_text,
+            "filename": "pixi.lock",
+            "platforms": ["osx-arm64"],
+        },
+    )
+
+    assert resp.status_code == 400
+    assert "Lockfile input cannot be solved" in resp.json()["error"]
+
+
+@pytest.mark.anyio
+async def test_resolve_post_lockfile_extra_specs_fall_back_to_solver(
+    client, monkeypatch, pixi_lock_v6_text
+):
+    calls = []
+
+    def fake_solve_environments(channels, deps, platforms):
+        calls.append((channels, deps, platforms))
+        return [Environment(platform="linux-64")]
+
+    monkeypatch.setattr(app_module, "solve_environments", fake_solve_environments)
+    resp = await client.post(
+        "/resolve?format=pixi-lock-v6",
+        json={
+            "specs": ["zlib"],
+            "file": pixi_lock_v6_text,
+            "filename": "pixi.lock",
+            "platforms": ["linux-64"],
+        },
+    )
+
+    assert resp.status_code == 200
+    assert calls == [(["conda-forge"], ["zlib"], ["linux-64"])]
+
+
+def test_render_formatted_response_maps_unknown_format(monkeypatch):
+    def raise_unknown_format(envs, format_name):
+        raise app_module.UnknownFormatError(format_name, ["explicit"])
+
+    monkeypatch.setattr(app_module, "render_envs", raise_unknown_format)
+    resp = app_module.render_formatted_response([], "does-not-exist")
+
+    assert resp.status_code == 400
+
+
+def test_render_formatted_response_maps_generic_error(monkeypatch):
+    def raise_error(*args, **kwargs):
+        raise RuntimeError("export failed")
+
+    monkeypatch.setattr(app_module, "render_envs", raise_error)
+    resp = app_module.render_formatted_response([], "conda-lock-v1")
+
+    assert resp.status_code == 500
+
+
+@pytest.mark.anyio
 async def test_resolve_post_raw_body_invalid_utf8(client):
     resp = await client.post(
         "/resolve?platform=linux-64",
@@ -618,9 +787,7 @@ async def test_resolve_post_unsupported_content_type(client):
 
 
 @pytest.mark.anyio
-async def test_convert_environment_yml_to_pixi_lock_via_http(
-    client, tmp_path
-):
+async def test_convert_environment_yml_to_pixi_lock_via_http(client, tmp_path):
     """End-to-end HTTP: POST ``environment.yml`` body -> pixi.lock
     response. Mirrors the CLI pipeline test."""
     platform = "linux-64"
@@ -628,9 +795,7 @@ async def test_convert_environment_yml_to_pixi_lock_via_http(
         "/resolve?format=pixi-lock-v6",
         json={
             "file": (
-                "name: demo\n"
-                "channels:\n  - conda-forge\n"
-                "dependencies:\n  - zlib\n"
+                "name: demo\nchannels:\n  - conda-forge\ndependencies:\n  - zlib\n"
             ),
             "platforms": [platform],
         },
@@ -682,10 +847,9 @@ async def test_resolve_format_includes_conda_lockfiles_formats(client):
 
 
 @pytest.mark.anyio
-async def test_resolve_format_propagates_solver_errors_as_500(
-    client, monkeypatch
-):
+async def test_resolve_format_propagates_solver_errors_as_500(client, monkeypatch):
     """Exporter path can't represent per-platform errors -> 500 on failure."""
+
     def boom(*a, **kw):
         raise RuntimeError("kaboom")
 

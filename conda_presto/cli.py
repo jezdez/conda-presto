@@ -19,6 +19,7 @@ server instead.  The ``--host`` and ``--port`` defaults can be set via
 When no channels are provided via ``-c`` or environment files, the CLI
 falls back to ``CONDA_PRESTO_CHANNELS`` (default: ``conda-forge``).
 """
+
 from __future__ import annotations
 
 import argparse
@@ -34,8 +35,9 @@ from conda.cli.helpers import (
 
 from .config import DEFAULT_CHANNELS, DEFAULT_HOST, DEFAULT_PORT
 from .exceptions import SAFE_ERROR_TYPES, UnknownFormatError
-from .exporter import render_envs
-from .resolve import solve, solve_environments
+from .exporter import is_lockfile_format, render_envs
+from .inputs import ParsedInputFile, parse_environment_path
+from .resolve import NATIVE_SUBDIR, solve, solve_environments
 
 
 def configure_parser(parser: argparse.ArgumentParser):
@@ -94,9 +96,7 @@ def configure_parser(parser: argparse.ArgumentParser):
         "--port", type=int, default=DEFAULT_PORT, help="Server port."
     )
 
-    parser.add_argument(
-        "specs", nargs="*", help="Inline package specs"
-    )
+    parser.add_argument("specs", nargs="*", help="Inline package specs")
 
 
 def execute(args: argparse.Namespace):
@@ -107,12 +107,13 @@ def execute(args: argparse.Namespace):
         cmd_solve(args)
 
 
-def load_files(
+def load_parsed_files(
     files: list[str],
-) -> tuple[list[str], list[str]]:
+    target_platforms: list[str] | None = None,
+) -> tuple[list[str], list[str], list[ParsedInputFile]]:
     """Parse input files via conda's env-spec plugin registry.
 
-    Returns accumulated *(dependencies, channels)* from all files.
+    Returns accumulated *(dependencies, channels, parsed_files)*.
     Each file is routed through ``detect_environment_specifier`` and
     parsed into a conda ``Environment`` model, so any installed
     env-spec plugin (environment.yml, requirements.txt,
@@ -120,51 +121,88 @@ def load_files(
     """
     deps: list[str] = []
     channels: list[str] = []
+    parsed_files: list[ParsedInputFile] = []
+    target_platforms = target_platforms or [NATIVE_SUBDIR]
     for fpath in files:
-        spec_plugin = context.plugin_manager.detect_environment_specifier(fpath)
-        spec = spec_plugin.environment_spec(filename=fpath)
-        if not spec.can_handle():
+        try:
+            parsed = parse_environment_path(fpath, target_platforms)
+        except ValueError:
             print(
                 f"No environment spec plugin can handle: {fpath}",
                 file=sys.stderr,
             )
             raise SystemExit(1)
-        env = spec.env
-        deps.extend(str(s) for s in env.requested_packages)
-        if env.config and env.config.channels:
-            channels.extend(env.config.channels)
+        parsed_files.append(parsed)
+        deps.extend(parsed.specs)
+        channels.extend(parsed.channels)
+    return deps, channels, parsed_files
+
+
+def load_files(files: list[str]) -> tuple[list[str], list[str]]:
+    """Parse input files and return accumulated dependencies/channels."""
+    deps, channels, _ = load_parsed_files(files)
     return deps, channels
+
+
+def transcode_envs(
+    parsed_files: list[ParsedInputFile],
+    output_format: str,
+    specs: list[str],
+    has_channel_override: bool,
+) -> tuple | None:
+    """Return parsed lockfile environments when a no-solve path is safe."""
+    if len(parsed_files) != 1 or specs or has_channel_override:
+        return None
+    parsed = parsed_files[0]
+    if parsed.is_lockfile and parsed.environments and is_lockfile_format(output_format):
+        return parsed.environments
+    return None
 
 
 def cmd_solve(args: argparse.Namespace):
     """Resolve packages and write output to stdout."""
     context.__init__(argparse_args=args)
 
-    file_deps, file_channels = load_files(args.files)
+    platforms = args.platforms or None
+    file_deps, file_channels, parsed_files = load_parsed_files(
+        args.files, platforms or [NATIVE_SUBDIR]
+    )
 
     specs = [s.strip("\"'") for s in args.specs]
     deps = file_deps + specs
 
-    if not deps:
-        print(
-            "Provide an environment file (--file) or package specs.",
-            file=sys.stderr,
-        )
-        raise SystemExit(1)
-
-    channels = list(context.channels)
+    context_channels = list(context.channels)
+    has_channel_override = bool(context_channels and context_channels != ["defaults"])
+    channels = context_channels
     if not channels or channels == ["defaults"]:
         channels = file_channels or list(DEFAULT_CHANNELS)
 
-    platforms = args.platforms or None
-
     if args.output_format is None:
+        if not deps:
+            print(
+                "Provide an environment file (--file) or package specs.",
+                file=sys.stderr,
+            )
+            raise SystemExit(1)
         results = solve(channels, deps, platforms)
         body = msgspec.json.format(msgspec.json.encode(results), indent=2)
         sys.stdout.buffer.write(body + b"\n")
     else:
         try:
-            envs = solve_environments(channels, deps, platforms)
+            envs = transcode_envs(
+                parsed_files,
+                args.output_format,
+                specs,
+                has_channel_override,
+            )
+            if envs is None:
+                if not deps:
+                    print(
+                        "Provide an environment file (--file) or package specs.",
+                        file=sys.stderr,
+                    )
+                    raise SystemExit(1)
+                envs = solve_environments(channels, deps, platforms)
             body, _ = render_envs(envs, args.output_format)
         except UnknownFormatError as exc:
             print(str(exc), file=sys.stderr)
@@ -185,9 +223,7 @@ def cmd_serve(args: argparse.Namespace):
     """
     import uvicorn
 
-    uvicorn.run(
-        "conda_presto.app:app", host=args.host, port=args.port
-    )
+    uvicorn.run("conda_presto.app:app", host=args.host, port=args.port)
 
 
 def main():

@@ -50,14 +50,19 @@ Send a `ResolveRequest` object:
   "specs": ["python=3.12", "numpy"],
   "channels": ["conda-forge"],
   "platforms": ["linux-64", "osx-arm64"],
-  "format": null,
   "filename": null
 }
 ```
 
-All fields except `specs` are optional. Query parameters (`spec`,
-`channel`, `platform`, `format`, `filename`) are accepted alongside
-the body; body fields take precedence when both are present.
+All fields are optional, but normal requests must provide either
+`specs` or `file`. Query parameters (`spec`, `channel`, `platform`,
+`format`, `filename`, `solve`) are accepted alongside the body; body
+fields take precedence when both are present. `format` and `solve` are
+query-only options.
+
+`solve=false` rejects any request that would need the solver. This is
+useful for lockfile-to-lockfile transcodes where callers want a strict
+fast path. Omit it for normal solving.
 
 ```bash
 curl -sS http://localhost:8000/resolve \
@@ -86,6 +91,25 @@ curl -sS --data-binary @environment.yml \
 Use the `filename` query parameter to pick a specific parser when the
 Content-Type is ambiguous. For example, `?filename=pixi.lock` forces
 the lockfile parser on a generic YAML upload.
+
+#### Lockfile transcode
+
+When the input file is already a lockfile and `format` also names a
+lockfile exporter, `POST /resolve` reuses the parsed package records for
+the requested platforms instead of running the solver. Requested platforms
+must already be present in the input lockfile. Extra specs or channel
+overrides keep the normal solve behavior.
+
+Add `solve=false` to require this no-solve path:
+
+```bash
+curl -sS --data-binary @pixi.lock \
+  -H 'Content-Type: application/yaml' \
+  'http://localhost:8000/resolve?filename=pixi.lock&platform=linux-64&format=conda-lock-v1&solve=false'
+```
+
+If the request cannot be satisfied without solving, the response is
+HTTP 400 with a `reasons` array explaining why.
 
 ---
 

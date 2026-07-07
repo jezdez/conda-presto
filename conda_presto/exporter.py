@@ -12,6 +12,7 @@ output (no ``?format=``) are NOT produced here — they serialize
 authoritative JSON shape for conda-presto's own output, with no
 parallel implementation or conda plugin registration needed.
 """
+
 from __future__ import annotations
 
 import os
@@ -19,7 +20,7 @@ import os
 from conda.base.context import context
 from conda.exceptions import CondaValueError
 from conda.models.environment import Environment
-from conda.plugins.types import CondaEnvironmentExporter
+from conda.plugins.types import CondaEnvironmentExporter, EnvironmentFormat
 
 from .exceptions import UnknownFormatError
 
@@ -42,9 +43,20 @@ def available_formats() -> list[str]:
     ``rattler-lock-v6`` and ``pixi-lock-v6`` are listed when
     ``conda-lockfiles`` is installed.
     """
-    return sorted(
-        context.plugin_manager.get_exporter_format_mapping().keys()
-    )
+    return sorted(context.plugin_manager.get_exporter_format_mapping().keys())
+
+
+def exporter_for(format_name: str) -> CondaEnvironmentExporter:
+    """Return the named exporter or raise ``UnknownFormatError``."""
+    try:
+        return context.plugin_manager.get_environment_exporter_by_format(format_name)
+    except CondaValueError as exc:
+        raise UnknownFormatError(format_name, available_formats()) from exc
+
+
+def is_lockfile_format(format_name: str) -> bool:
+    """Return whether *format_name* names a lockfile exporter."""
+    return exporter_for(format_name).environment_format == EnvironmentFormat.lockfile
 
 
 def media_type_for(exporter: CondaEnvironmentExporter) -> str:
@@ -65,9 +77,7 @@ def media_type_for(exporter: CondaEnvironmentExporter) -> str:
     return DEFAULT_MEDIA_TYPE
 
 
-def render_envs(
-    envs: list[Environment], format_name: str
-) -> tuple[str, str]:
+def render_envs(envs: list[Environment], format_name: str) -> tuple[str, str]:
     """Render *envs* via the named exporter plugin.
 
     Returns ``(body, media_type)``.  Raises :class:`UnknownFormatError`
@@ -76,14 +86,7 @@ def render_envs(
     defensive check; conda itself rejects such plugins at registration
     time).
     """
-    try:
-        exporter = (
-            context.plugin_manager.get_environment_exporter_by_format(
-                format_name
-            )
-        )
-    except CondaValueError as exc:
-        raise UnknownFormatError(format_name, available_formats()) from exc
+    exporter = exporter_for(format_name)
 
     if exporter.multiplatform_export:
         body = exporter.multiplatform_export(envs)
