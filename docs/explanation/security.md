@@ -1,48 +1,76 @@
 # Security and trust model
 
-conda-presto resolves packages but does not install them. The trust boundary
-sits between "what was solved" and "what gets installed later." The features
-described here are proposals for closing that gap. Unless noted otherwise, they
-are not yet shipped.
+conda-presto is intentionally solve-only. It reads environment inputs, resolves
+package metadata, and emits results. It does not create prefixes, link package
+files, run activation scripts, or install packages.
 
-## Solve receipts
+That keeps the shipped trust boundary narrow: conda-presto can answer "what
+would this solve to?" but a downstream installer is still responsible for
+deciding whether that result is trusted enough to install.
 
-A solve receipt is an HMAC-signed blob attached to each solve result. It
-captures the inputs (specs, channels, platform) and outputs (resolved packages
-with hashes) so that a downstream installer can detect drift between what was
-solved and what it is about to install.
+## Current controls
 
-## Sigstore attestations
+Input handling
+: raw HTTP file uploads are written to a temporary directory with an allowed
+  extension, and client-provided filenames are reduced to their basename before
+  use. Parsing is delegated to conda's env-spec plugin registry, matching the
+  CLI path.
 
-Sigstore attestations provide cryptographic proof of what was solved, by whom,
-and when. An attestation binds a solve result to an identity (for example, a CI
-service account or a developer's OIDC token) without requiring long-lived
-signing keys. This gives teams an auditable chain from "resolve" to "install."
+Error handling
+: solver failures expose detailed messages only for known conda error types
+  such as unsatisfiable specs or missing packages. Unexpected exceptions are
+  logged server-side and returned to clients as a generic internal solver
+  error.
 
-## Sidecar distribution
+Request limits
+: the server caps request body size, specs per request, platforms per request,
+  and solve duration. These limits protect the service from accidental or
+  abusive large solves.
 
-Attestations and signatures are distributed as `.sigs` files alongside
-lockfiles. Keeping them in sidecar files avoids changing the lockfile format
-itself, so existing tools can consume the lockfile while security-aware tools
-can verify the sidecar.
+Rate limiting and CORS
+: rate limiting is enabled by default per client IP. CORS defaults to `*` for
+  easy local use, but production deployments should restrict
+  `CONDA_PRESTO_CORS_ORIGINS` to the expected frontend origins.
 
-## Policy engine
+Dry-run package access
+: conda-presto reads channel metadata and package records but does not download
+  or extract package payloads as part of a solve.
 
-The `/admit` endpoint (proposed) provides declarative admission control. A
-policy document can constrain:
+## Result cache boundary
 
-- Allowed channels
-- Allowed or denied packages (by name or pattern)
-- License requirements
-- Required attestation types
+HTTP `/resolve` responses can be stored under content-addressed `/r/<hash>`
+permalinks. The cache key includes the normalized request, output format,
+dependency versions, and local repodata cache file markers so repodata refreshes
+produce new keys.
 
-The policy engine evaluates a solve result against the policy and returns an
-allow/deny decision before anything is installed.
+The shared cache is currently appropriate for public-channel solves. Avoid
+using a shared public deployment for private channels or credential-bearing
+channel URLs. If private channel support is needed before a dedicated policy is
+implemented, run an isolated server and avoid sharing its persistent cache
+outside that trust domain.
 
-## CEP alignment
+## Production deployment
 
-These proposals follow conda enhancement proposals (CEPs) where applicable,
-so that signatures, attestations, and policy formats are interoperable across
-the conda ecosystem rather than specific to conda-presto.
+Run the HTTP server behind a reverse proxy that terminates TLS and sets
+forwarded client IP headers. Start uvicorn with `--forwarded-allow-ips` so rate
+limits are keyed by the real client address.
 
-See the [trust proposals](../proposals.md) for detailed designs.
+For public internet deployments, review these variables before exposing the
+service:
+
+- `CONDA_PRESTO_RATE_LIMIT`
+- `CONDA_PRESTO_CORS_ORIGINS`
+- `CONDA_PRESTO_MAX_BODY_BYTES`
+- `CONDA_PRESTO_MAX_SPECS`
+- `CONDA_PRESTO_MAX_PLATFORMS`
+- `CONDA_PRESTO_SOLVE_TIMEOUT_S`
+- `CONDA_PRESTO_RESULT_CACHE_BACKEND`
+
+## Future trust work
+
+Signed solve provenance, attestation serving, policy evaluation, and CEP-aligned
+predicate design are tracked as roadmap issues. Those features should extend
+the current dry-run boundary by making solved results verifiable by downstream
+tools instead of inventing a separate installation path.
+
+See the [roadmap](../proposals.md) for the current issue links.

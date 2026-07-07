@@ -1,6 +1,6 @@
 # Configuration
 
-This page covers deployment and development configuration for
+This page covers deployment, cache, Docker, and development configuration for
 conda-presto.
 
 ## Docker images
@@ -16,9 +16,9 @@ The server image starts the HTTP API by default:
 docker run -p 8000:8000 ghcr.io/jezdez/conda-presto:latest
 ```
 
-The first startup takes around 20-30 seconds while the repodata cache
-warms up. Subsequent solves use the in-memory cache and return in
-milliseconds.
+The first startup can take longer while the repodata cache warms up.
+Subsequent solves can reuse the warm repodata and in-memory solver
+indexes.
 
 ### CLI image
 
@@ -35,11 +35,11 @@ docker run ghcr.io/jezdez/conda-presto:cli -f environment.yml -p linux-64
 | Tag | Image | Description |
 |---|---|---|
 | `latest` | Server | Most recent server release |
-| `<version>` | Server | Specific release (e.g. `0.4.0`) |
-| `<major>.<minor>` | Server | Latest patch for a minor (e.g. `0.4`) |
+| `<version>` | Server | Specific release (e.g. `0.5.0`) |
+| `<major>.<minor>` | Server | Latest patch for a minor (e.g. `0.5`) |
 | `<major>` | Server | Latest minor for a major (e.g. `0`) |
 | `cli` | CLI | Most recent CLI release |
-| `<version>-cli` | CLI | Specific CLI release (e.g. `0.4.0-cli`) |
+| `<version>-cli` | CLI | Specific CLI release (e.g. `0.5.0-cli`) |
 | `<major>.<minor>-cli` | CLI | Latest CLI patch for a minor |
 
 ### Building locally

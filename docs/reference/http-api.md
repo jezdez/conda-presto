@@ -7,9 +7,10 @@ and served by uvicorn. Start it with `conda presto --serve` or
 All endpoints return JSON unless a `format` parameter redirects the
 response through a conda exporter plugin.
 
-Successful `/resolve` responses include a content-addressed `Location`
+Cacheable `/resolve` responses include a content-addressed `Location`
 header such as `/r/<sha256>`. Repeating the same request against the
-same channel metadata returns the same location.
+same channel metadata returns the same location while the cache entry
+is retained.
 
 ## Endpoints
 
@@ -31,9 +32,6 @@ Query parameters
   : Output format name. When set, the response is routed through the
     matching conda exporter plugin instead of returning the default JSON.
 
-  `filename`
-  : Hint for the parser when uploading a raw file via POST. Ignored on GET.
-
 ```bash
 curl 'http://localhost:8000/resolve?spec=python=3.12&spec=numpy&channel=conda-forge&platform=linux-64'
 ```
@@ -54,6 +52,7 @@ Send a `ResolveRequest` object:
   "specs": ["python=3.12", "numpy"],
   "channels": ["conda-forge"],
   "platforms": ["linux-64", "osx-arm64"],
+  "file": null,
   "filename": null
 }
 ```
@@ -85,7 +84,9 @@ Accepted Content-Types:
 - `application/yaml`
 - `application/x-yaml`
 - `text/yaml`
+- `text/x-yaml`
 - `application/toml`
+- `application/x-toml`
 - `text/plain`
 
 ```bash
@@ -172,15 +173,17 @@ Missing entries return HTTP 404:
 The current implementation checks a bounded in-process LRU store first.
 `CONDA_PRESTO_RESULT_CACHE_SIZE` caps entry count, and
 `CONDA_PRESTO_RESULT_CACHE_MAX_MEMORY_MB` caps retained payload bytes.
+If a memory-only cache rejects an oversized response, the response is
+still returned but no `Location` header is attached.
 When `CONDA_PRESTO_RESULT_CACHE_DIR` or
 `CONDA_PRESTO_RESULT_CACHE_REDIS_URL` is set, conda-presto also checks
 a file-backed or Redis-backed persistent store using the same
 `resolve-v1:<sha256>` CAS key. The hash key includes the normalized
 specs, ordered channels, platforms, output format, conda-presto and
-solver versions, and metadata from conda's local repodata cache files.
-That keeps cached results sensitive to repodata refreshes. A future
-sharded repodata index can replace the file metadata marker with exact
-shard or sparse-index digests.
+solver/exporter dependency versions, and metadata from conda's local
+repodata cache files. That keeps cached results sensitive to repodata
+refreshes. A future sharded repodata index can replace the file
+metadata marker with exact shard or sparse-index digests.
 
 ---
 
@@ -199,6 +202,7 @@ curl http://localhost:8000/formats
     "environment-json",
     "environment-yaml",
     "explicit",
+    "pixi-lock-v6",
     "rattler-lock-v6",
     "requirements"
   ]
@@ -233,10 +237,10 @@ curl http://localhost:8000/version
 
 ```json
 {
-  "conda-presto": "0.4.0",
-  "conda": "26.3.2",
+  "conda-presto": "0.x.y",
+  "conda": "26.x.y",
   "conda-rattler-solver": "0.0.6",
-  "python": "3.13.3"
+  "conda-lockfiles": "0.x.y"
 }
 ```
 
@@ -334,10 +338,10 @@ successful solves.
 | 413 | Request body too large (exceeds `CONDA_PRESTO_MAX_BODY_BYTES`) |
 | 504 | Solve timed out (exceeds `CONDA_PRESTO_SOLVE_TIMEOUT_S`) |
 
-Error bodies are JSON objects with a `detail` field:
+Error bodies are JSON objects with an `error` field:
 
 ```json
-{"detail": "Unknown format 'bogus'. Available: conda-lock-v1, environment-json, ..."}
+{"error": "Unknown format 'bogus'. Available: conda-lock-v1, environment-json, ..."}
 ```
 
 ## See also

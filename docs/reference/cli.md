@@ -139,9 +139,9 @@ conda presto --offline -c conda-forge -p linux-64 zlib
 
 | Code | Meaning |
 |---:|---|
-| 0 | Solve succeeded for all requested platforms |
-| 1 | One or more platforms failed to solve (partial failure) |
-| 2 | Argument error or invalid input |
+| 0 | Command completed. Default JSON output may still contain per-platform `error` fields. |
+| 1 | Invalid input, unknown format, or solver failure on an exporter-format path. |
+| 2 | Argument parsing error from `argparse`. |
 
 ## See also
 

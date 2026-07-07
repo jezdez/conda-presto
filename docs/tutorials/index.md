@@ -25,8 +25,8 @@ File uploads, JSON requests, output format conversion, and more.
 :link: ci-pipeline
 :link-type: doc
 
-Run conda-presto in GitHub Actions. Local mode installs on the
-runner automatically; remote mode calls a hosted deployment.
+Run conda-presto in GitHub Actions. Local mode runs the checked-out
+action on the runner; remote mode calls a hosted deployment.
 :::
 
 ::::

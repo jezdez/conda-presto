@@ -37,11 +37,11 @@ CLI flags, endpoint specs, output formats, and environment variables.
 Architecture, performance characteristics, and security model.
 :::
 
-:::{grid-item-card} {octicon}`light-bulb` Proposals
+:::{grid-item-card} {octicon}`light-bulb` Roadmap
 :link: proposals
 :link-type: doc
 
-Design proposals organized by stream: capability, integration, trust.
+Shipped foundations and future work linked to GitHub issues.
 :::
 
 :::{grid-item-card} {octicon}`log` Changelog

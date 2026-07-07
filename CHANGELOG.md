@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- Documentation site with reference, explanation, tutorial, and proposal
+- Documentation site with reference, explanation, tutorial, and roadmap
   pages, published through GitHub Pages.
 - `POST /transcode` for lockfile-to-lockfile conversion without solving
   when the requested platforms are already present in the input lockfile.
@@ -23,6 +23,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   workflows.
 - Proposal documentation is now a concise roadmap page that links to
   GitHub issues for the detailed design records.
+
+### Fixed
+
+- Result cache keys now include the `conda-lockfiles` package version
+  so cached lockfile-format responses are invalidated when the exporter
+  implementation changes.
+- Docker release builds now publish the server `latest` tag on release
+  events, matching the documented image tag contract.
 
 ### Removed
 

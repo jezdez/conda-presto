@@ -1,119 +1,91 @@
 # Performance
 
-conda-presto is designed to be fast enough for interactive use and CI pipelines.
-This page explains the caching strategy, why first solves are slower than
-subsequent ones, and includes benchmark numbers from real workloads.
+conda-presto is optimized for repeated dry-run solves: CI jobs, server-backed
+tools, and workflows that need lockfiles without creating environments. The
+main performance question is whether the request can reuse warmed metadata,
+indexes, or a full cached response.
 
-## Index caching
+## Where time goes
 
-Solving a conda environment requires a searchable index built from channel
-repodata. Building that index is the most expensive part of a solve.
+A solve has four broad costs:
 
-conda-presto uses two cache layers:
+1. Parse input into conda specs and channels.
+2. Load or refresh channel repodata.
+3. Build or reuse the solver index for each channel/platform pair.
+4. Run SAT solving and serialize the response.
+
+For small environments, Python startup and conda imports can dominate CLI
+latency. In server mode those costs are paid once at process startup, so warm
+requests spend most of their time in the solver and exporter.
+
+## Cache layers
 
 On-disk repodata cache
-: conda's standard repodata cache with TTL-based expiration. Repodata is
-  fetched from channels and stored locally. This cache is shared across all
-  conda tools, so a recent `conda install` or `conda update` warms it for
-  conda-presto too.
+: conda downloads channel metadata into its normal local cache. This cache is
+  shared with other conda commands and is controlled by conda's repodata TTL
+  settings.
 
-In-memory index cache
-: A `RattlerIndexHelper` instance is built from the on-disk repodata and cached
-  in memory, keyed by `(channels, platform)`. Once built, the index stays in
-  memory for the lifetime of the process (or server).
+In-memory solver index cache
+: each process keeps a `RattlerIndexHelper` per `(channels, platform)` key.
+  Once built, the index stays warm for the lifetime of that process.
 
-## First solve vs. subsequent solves
+Content-addressed result cache
+: successful HTTP `/resolve` responses are stored by a SHA-256 key. A cache hit
+  skips solving and exporting entirely and returns the stored body. The in-memory
+  LRU can be backed by a persistent file or Redis store, which lets cached
+  results survive server restarts.
 
-The first solve for a given channel/platform pair pays roughly 700 ms to parse
-repodata and build the in-memory index, plus the SAT solving time itself.
-Subsequent solves with the same channels and platform skip the index build
-entirely and pay only SAT time.
+## Cache key safety
 
-In server mode, this means the first request after startup (or after a new
-channel/platform combination is seen) is noticeably slower. All following
-requests for the same combination are fast.
+The result cache key is tied to the inputs that can change the response:
+normalized specs, ordered channels, target platforms, output format, relevant
+dependency versions, and markers for conda's local `repodata.json` and state
+files. When conda refreshes repodata, those file markers change and the next
+request gets a different key.
 
-## Multi-platform parallel solving
+That design keeps shared caching practical for public channels while avoiding
+reuse across channel metadata snapshots. Private channels and credentialed
+channel URLs should use an isolated deployment until the cache model grows an
+explicit private-channel policy.
 
-When resolving for multiple platforms at once (for example, `linux-64`,
-`osx-arm64`, and `win-64`), conda-presto runs each platform solve in a
-separate process via `ProcessPoolExecutor`. Wall-clock time scales with the
-slowest single-platform solve rather than the sum of all platforms.
+## First solve vs. warm solve
 
-## Server pre-warming
+The first request for a new channel/platform combination pays the repodata and
+index-build costs. Later requests in the same process reuse the in-memory
+index. Server startup can pre-warm expected channel/platform combinations using
+`CONDA_PRESTO_CHANNELS` and `CONDA_PRESTO_PLATFORMS`, shifting that cost from
+the first user request to startup.
 
-The HTTP server can pre-warm the index cache on startup by solving a minimal
-spec for each configured channel/platform pair. This moves the index build
-cost to startup time so the first real request does not pay the penalty.
+The result cache adds one lightweight store lookup on each HTTP solve request.
+On a miss, conda-presto computes the key before solving and recomputes it after
+the solve so a cold repodata cache stores the result under the post-refresh
+metadata markers. That overhead scales with the number of channel/platform
+repodata files and is normally much smaller than solving.
 
-## Benchmarks
+## Multi-platform solving
 
-### CLI (hyperfine, macOS ARM64, warm cache, conda-forge)
+Multi-platform requests run one solve per platform through a persistent process
+pool. Wall-clock time follows the slowest platform solve more closely than the
+sum of all platform solves, assuming enough workers are available. Tune the
+pool with `CONDA_PRESTO_WORKERS`; tune concurrent HTTP requests with
+`CONDA_PRESTO_CONCURRENCY`.
 
-```{list-table}
-:header-rows: 1
-:widths: 50 15 15 15
+## Lockfile transcoding
 
-* - Scenario
-  - Mean
-  - Min
-  - Max
-* - zlib, 1 platform
-  - 0.79 s
-  - 0.77 s
-  - 0.86 s
-* - zlib, 3 platforms
-  - 1.34 s
-  - 1.33 s
-  - 1.37 s
-* - py+scipy+pandas+matplotlib, 1 platform
-  - 0.94 s
-  - 0.92 s
-  - 1.00 s
-* - py+scipy+pandas+matplotlib, 3 platforms
-  - 1.87 s
-  - 1.80 s
-  - 1.94 s
-* - py+pytorch+transformers+sklearn (11 pkgs), 1 platform
-  - 1.90 s
-  - 1.88 s
-  - 1.93 s
-* - py+pytorch+transformers+sklearn (11 pkgs), 3 platforms
-  - 4.44 s
-  - 4.37 s
-  - 4.52 s
+Lockfile-to-lockfile conversion is the fastest path because it does not invoke
+the solver. When the requested platforms already exist in the input lockfile,
+conda-presto reuses those package records and renders them through the target
+lockfile exporter.
+
+## Benchmarking
+
+The repository keeps benchmark inputs and historical result snapshots under
+`benchmarks/`. Rerun them with:
+
+```bash
+pixi run bench
 ```
 
-```{note}
-CLI times include Python startup (~50 ms), pixi overhead (~50 ms), and
-conda import (~200 ms). The solver itself is faster than these numbers
-suggest.
-```
-
-### In-process server (pytest-benchmark, warm index)
-
-```{list-table}
-:header-rows: 1
-:widths: 60 30
-
-* - Operation
-  - Time
-* - Single-platform solve (zlib)
-  - ~15 ms
-* - Single-platform solve (python=3.12, numpy)
-  - ~95 ms
-* - ResolvedPackage.from_record (single)
-  - ~2.1 us
-* - ResolvedPackage.from_record (100 records)
-  - ~222 us
-* - msgspec.json.encode(ResolvedPackage)
-  - ~242 ns
-* - msgspec.json.encode(SolveResult) (100 packages)
-  - ~13 us
-* - Server path: records -> SolveResult -> JSON (100 pkgs)
-  - ~234 us
-```
-
-These in-process numbers show the cost of the solve and serialization steps
-without any CLI or HTTP overhead. The gap between "15 ms for zlib" and
-"0.79 s CLI" is almost entirely Python and conda startup cost.
+Treat benchmark snapshots as local measurements, not service-level guarantees.
+They depend on machine size, network state, conda's repodata cache, selected
+channels, and whether the process has already built solver indexes.
