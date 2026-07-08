@@ -12,7 +12,7 @@ pixi global install --git https://github.com/jezdez/conda-presto.git
 
 ````{tab-item} conda
 ```bash
-conda install -c conda-canary/label/dev conda-presto
+conda install -c conda-forge conda-presto
 ```
 ````
 
@@ -26,9 +26,9 @@ pixi install
 
 `````
 
-Requires conda >= 25.3 and Python >= 3.13. The conda install example
-uses `conda-canary/label/dev` because conda-presto may depend on conda
-and solver packages that have not reached the default channels yet.
+Requires conda >= 26.5 and Python >= 3.13. The conda install example
+uses `conda-forge`, which carries the required stable conda solver
+packages.
 
 ## First resolve
 

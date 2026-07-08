@@ -47,15 +47,14 @@ show_missing = true
 fail_under = 95
 
 [tool.pixi.workspace]
-channels = ["conda-canary/label/dev", "conda-forge"]
+channels = ["conda-forge"]
 platforms = ["linux-64", "linux-aarch64", "osx-64", "osx-arm64"]
 
 [tool.pixi.dependencies]
 python = ">=3.13,<3.14"
-conda = ">=25.3"
-conda-rattler-solver = ">=0.0.6,<0.0.7"
-conda-lockfiles = ">=0.1.1"
-pyyaml = ">=6.0"
+conda = ">=26.5,<27"
+conda-rattler-solver = ">=0.1.1,<0.2"
+conda-lockfiles = ">=0.2.1"
 msgspec = ">=0.19"
 
 [tool.pixi.pypi-dependencies]
@@ -70,6 +69,7 @@ pytest-benchmark = ">=5.0"
 pytest-cov = ">=6.0"
 httpx = ">=0.28"
 anyio = ">=4.0"
+pyyaml = ">=6.0"
 
 [tool.pixi.feature.docs.dependencies]
 sphinx = ">=7.0"

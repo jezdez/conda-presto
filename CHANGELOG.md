@@ -19,6 +19,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Pixi environments and install docs now use stable conda-forge conda
+  packages instead of the `conda-canary/label/dev` channel.
 - GitHub Action documentation and examples now focus on CI lockfile
   workflows.
 - Proposal documentation is now a concise roadmap page that links to
