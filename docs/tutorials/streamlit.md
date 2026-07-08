@@ -12,6 +12,7 @@ Use a root-level `environment.yml`:
 name: conda-presto-streamlit
 channels:
   - conda-forge
+  - nodefaults
 dependencies:
   - python >=3.13,<3.14
   - streamlit
@@ -29,6 +30,8 @@ dependencies:
   - pip:
       - -e .
 ```
+
+The `nodefaults` channel entry keeps this environment on conda-forge instead of mixing in `defaults` / `main`, which can lag conda-forge for beta solver packages such as `conda-rattler-solver`.
 
 The `pip: -e .` line is intentional. The Streamlit app starts `uvicorn conda_presto.app:app`, and `conda_presto.app` reads `importlib.metadata.version("conda-presto")` during import for the version endpoint and OpenAPI metadata. An editable install gives the app package metadata while still running from the repository checkout.
 

@@ -1,6 +1,7 @@
 name: conda-presto-streamlit
 channels:
   - conda-forge
+  - nodefaults
 dependencies:
   - python >=3.13,<3.14
   - streamlit
