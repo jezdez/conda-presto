@@ -239,7 +239,7 @@ curl http://localhost:8000/version
 {
   "conda-presto": "0.x.y",
   "conda": "26.x.y",
-  "conda-rattler-solver": "0.0.6",
+  "conda-rattler-solver": "0.1.x",
   "conda-lockfiles": "0.x.y"
 }
 ```
