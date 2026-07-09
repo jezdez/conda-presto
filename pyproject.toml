@@ -1,14 +1,14 @@
 [build-system]
-requires = ["hatchling>=1.12.2"]
+requires = ["hatchling>=1.12.2", "hatch-vcs>=0.2.0"]
 build-backend = "hatchling.build"
 
 [project]
 name = "conda-presto"
-version = "0.5.0"
 description = "Resolve conda environment.yml files to fully pinned package lists with SHA256 hashes"
 license = "BSD-3-Clause"
 requires-python = ">=3.13"
 dependencies = []
+dynamic = ["version"]
 
 [project.optional-dependencies]
 redis = ["redis>=5.0"]
@@ -18,6 +18,12 @@ conda-presto = "conda_presto.cli:main"
 
 [project.entry-points.conda]
 "conda-presto" = "conda_presto.plugin"
+
+[tool.hatch.version]
+source = "vcs"
+
+[tool.hatch.build.hooks.vcs]
+version-file = "conda_presto/_version.py"
 
 [tool.ruff]
 target-version = "py313"
@@ -41,6 +47,7 @@ markers = ["crossplatform: tests that solve for non-native platforms (deselect w
 
 [tool.coverage.run]
 source = ["conda_presto"]
+omit = ["conda_presto/_version.py"]
 
 [tool.coverage.report]
 show_missing = true

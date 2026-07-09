@@ -1,5 +1,6 @@
 __pycache__/
 *.pyc
+conda_presto/_version.py
 *.egg-info/
 dist/
 build/
