@@ -29,6 +29,14 @@ Run conda-presto in GitHub Actions. Local mode runs the checked-out
 action on the runner; remote mode calls a hosted deployment.
 :::
 
+:::{grid-item-card} {octicon}`browser` Streamlit
+:link: streamlit
+:link-type: doc
+
+Run a lightweight Streamlit UI backed by the conda-presto HTTP API.
+Use Community Cloud's conda dependency support without Pixi.
+:::
+
 ::::
 
 ```{toctree}
@@ -37,4 +45,5 @@ action on the runner; remote mode calls a hosted deployment.
 cli-resolve
 http-api
 ci-pipeline
+streamlit
 ```

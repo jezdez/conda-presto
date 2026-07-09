@@ -1,0 +1,19 @@
+name: conda-presto-streamlit
+channels:
+  - conda-forge
+  - nodefaults
+dependencies:
+  - python >=3.13,<3.14
+  - streamlit
+  - conda >=26.5,<27
+  - conda-rattler-solver >=0.1.1,<0.2
+  - conda-lockfiles >=0.2.0
+  - msgspec >=0.19
+  - litestar >=2.18
+  - pyjwt >=2.0
+  - uvicorn >=0.34
+  - brotli-python >=1.1
+  - httpx >=0.28
+  - pip
+  - pip:
+      - -e .
