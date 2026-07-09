@@ -3,7 +3,7 @@ channels:
   - conda-forge
   - nodefaults
 dependencies:
-  - python=3.13.14
+  - python=3.14
   - conda=26.5.3
   - conda-rattler-solver=0.1.1
   - conda-lockfiles=0.2.1
