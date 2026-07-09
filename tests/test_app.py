@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import time
+from types import SimpleNamespace
 
 import pytest
 import yaml
@@ -63,6 +64,43 @@ async def client(test_app):
     transport = ASGITransport(app=test_app)
     async with AsyncClient(transport=transport, base_url="http://test") as c:
         yield c
+
+
+@pytest.fixture()
+def fake_solve_process(monkeypatch):
+    def create(*, result=("ok", []), timed_out=False, alive=()):
+        calls = []
+        alive_states = iter(alive)
+
+        def receive():
+            if isinstance(result, Exception):
+                raise result
+            return result
+
+        receiver = SimpleNamespace(
+            poll=lambda _: not timed_out,
+            recv=receive,
+            close=lambda: calls.append("receiver.close"),
+        )
+        sender = SimpleNamespace(close=lambda: calls.append("sender.close"))
+        process = SimpleNamespace(
+            exitcode=1,
+            start=lambda: calls.append("start"),
+            is_alive=lambda: next(alive_states, False),
+            terminate=lambda: calls.append("terminate"),
+            kill=lambda: calls.append("kill"),
+            join=lambda timeout=None: calls.append(f"join:{timeout}"),
+        )
+        context = SimpleNamespace(
+            Pipe=lambda **_: (receiver, sender),
+            Process=lambda **_: process,
+        )
+        monkeypatch.setattr(
+            app_module.multiprocessing, "get_context", lambda _: context
+        )
+        return calls
+
+    return create
 
 
 @pytest.mark.anyio
@@ -459,6 +497,14 @@ def test_different_dependency_versions_produce_different_cache_keys(
     assert second != first
 
 
+def test_virtual_package_overrides_produce_different_cache_keys(monkeypatch):
+    first = ResultCache.key_for(["zlib"], ["conda-forge"], ["linux-64"], None)
+    monkeypatch.setitem(app_module.VIRTUAL_PACKAGES["linux"], "glibc", "9.9")
+    second = ResultCache.key_for(["zlib"], ["conda-forge"], ["linux-64"], None)
+
+    assert second != first
+
+
 @pytest.mark.anyio
 async def test_resolve_get_uses_default_channels(client, monkeypatch):
     captured = {}
@@ -750,6 +796,132 @@ async def test_resolve_solve_timeout(client, monkeypatch):
     )
     assert resp.status_code == 504
     assert "timeout" in resp.json()["error"].lower()
+
+
+@pytest.mark.anyio
+async def test_resolve_uses_terminable_worker_when_limiter_present(
+    test_app, monkeypatch
+):
+    captured = {}
+
+    def fake_run_solve_in_process(channels, specs, platforms, format_name, timeout_s):
+        captured["args"] = channels, specs, platforms, format_name, timeout_s
+        return []
+
+    async def fake_run_sync(func, *args, limiter):
+        captured["limiter"] = limiter
+        return func(*args)
+
+    monkeypatch.setattr(app_module, "run_solve_in_process", fake_run_solve_in_process)
+    monkeypatch.setattr(app_module.anyio.to_thread, "run_sync", fake_run_sync)
+    test_app.state.solver_limiter = app_module.anyio.CapacityLimiter(1)
+    transport = ASGITransport(app=test_app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.post(
+            "/resolve",
+            json={"specs": ["zlib"], "platforms": ["linux-64"]},
+        )
+
+    assert response.status_code == 200
+    assert captured["limiter"] is test_app.state.solver_limiter
+    assert captured["args"] == (
+        ["conda-forge"],
+        ["zlib"],
+        ["linux-64"],
+        None,
+        60,
+    )
+
+
+def test_run_solve_in_process_returns_worker_result(fake_solve_process):
+    calls = fake_solve_process()
+
+    result = app_module.run_solve_in_process(
+        ["conda-forge"], ["zlib"], ["linux-64"], None, 60
+    )
+
+    assert result == []
+    assert calls == ["start", "sender.close", "receiver.close", "join:None"]
+
+
+def test_run_solve_in_process_executes_worker():
+    result = app_module.run_solve_in_process(
+        ["conda-forge"], ["zlib"], ["linux-64"], None, 60
+    )
+
+    assert result[0].platform == "linux-64"
+    assert any(package.name == "zlib" for package in result[0].packages)
+
+
+def test_run_solve_in_process_kills_timed_out_worker(fake_solve_process):
+    calls = fake_solve_process(timed_out=True, alive=(True, True))
+
+    with pytest.raises(TimeoutError):
+        app_module.run_solve_in_process(
+            ["conda-forge"], ["zlib"], ["linux-64"], None, 60
+        )
+
+    assert calls == [
+        "start",
+        "sender.close",
+        "receiver.close",
+        "terminate",
+        "join:5",
+        "kill",
+        "join:None",
+    ]
+
+
+@pytest.mark.parametrize(
+    ("result", "error_type"),
+    [
+        pytest.param(
+            ("unknown-format", {"format_name": "toml", "available": ["yaml"]}),
+            app_module.UnknownFormatError,
+            id="unknown-format",
+        ),
+        pytest.param(("error", None), RuntimeError, id="worker-error"),
+    ],
+)
+def test_run_solve_in_process_raises_worker_error(
+    fake_solve_process, result, error_type
+):
+    fake_solve_process(result=result)
+
+    with pytest.raises(error_type):
+        app_module.run_solve_in_process(
+            ["conda-forge"], ["zlib"], ["linux-64"], None, 60
+        )
+
+
+@pytest.mark.parametrize(
+    ("result", "expected"),
+    [
+        pytest.param([], ("ok", []), id="success"),
+        pytest.param(
+            app_module.UnknownFormatError("toml", ["yaml"]),
+            ("unknown-format", {"format_name": "toml", "available": ["yaml"]}),
+            id="unknown-format",
+        ),
+        pytest.param(RuntimeError("failed"), ("error", None), id="error"),
+    ],
+)
+def test_solve_process_entrypoint_sends_result(monkeypatch, result, expected):
+    sent = []
+    sender = SimpleNamespace(send=sent.append, close=lambda: sent.append("closed"))
+
+    def fake_work(*_):
+        if isinstance(result, Exception):
+            raise result
+        return result
+
+    monkeypatch.setattr(app_module, "run_solve_work", fake_work)
+
+    app_module.solve_process_entrypoint(
+        sender, ["conda-forge"], ["zlib"], ["linux-64"], None
+    )
+
+    assert sent == [expected, "closed"]
 
 
 @pytest.mark.anyio

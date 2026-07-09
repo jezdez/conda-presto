@@ -4,11 +4,18 @@ on:
   pull_request:
     paths:
       - action.yml
-      - .github/workflows/action.yml
+      - .github/workflows/action-smoke.yml
       - pyproject.toml
       - pixi.lock
       - tests/test_action.py
   workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: action-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 jobs:
   smoke:
@@ -17,6 +24,8 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
 
       - name: Write environment file
         run: |
@@ -36,8 +45,10 @@ jobs:
           output: local-result.json
 
       - name: Check local result
+        env:
+          SOLVED: ${{ steps.local.outputs.solved }}
         run: |
-          test "${{ steps.local.outputs.solved }}" = "true"
+          test "$SOLVED" = "true"
           test -s local-result.json
           jq -e '.[0].platform == "linux-64"' local-result.json
 
@@ -105,8 +116,10 @@ jobs:
           output: remote-result.json
 
       - name: Check remote result
+        env:
+          SOLVED: ${{ steps.remote.outputs.solved }}
         run: |
-          test "${{ steps.remote.outputs.solved }}" = "true"
+          test "$SOLVED" = "true"
           test -s remote-result.json
           jq -e '.[0].platform == "linux-64"' remote-result.json
 

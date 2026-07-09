@@ -72,6 +72,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import multiprocessing
 from collections import OrderedDict
 from dataclasses import dataclass, field
 from importlib.metadata import version as pkg_version
@@ -122,6 +123,7 @@ from .exporter import OutputFormat
 from .inputs import ParsedInputFile
 from .resolve import (
     NATIVE_SUBDIR,
+    VIRTUAL_PACKAGES,
     shutdown_process_pool,
     solve,
     solve_environments,
@@ -143,7 +145,7 @@ RAW_CONTENT_TYPE_EXTENSIONS: dict[str, str] = {
 
 RESULT_CACHE_CONTROL = "public, max-age=86400, immutable"
 DEFAULT_RESOLVE_FORMAT = "conda-presto-json-v1"
-CACHE_ENVELOPE_VERSION = 1
+CACHE_ENVELOPE_VERSION = 2
 RESULT_CACHE_STORE_NAME = "result_cache"
 RESULT_CACHE_STORE_PREFIX = "resolve-v1:"
 CACHE_DEPENDENCY_PACKAGES = (
@@ -243,6 +245,7 @@ class ResultCache:
             "platforms": resolved_platforms,
             "format": format_name or DEFAULT_RESOLVE_FORMAT,
             "dependency_versions": versions,
+            "virtual_packages": VIRTUAL_PACKAGES,
             "repodata": repodata,
         }
         body = json.dumps(
@@ -432,18 +435,27 @@ async def run_solve(
     string body with a format-appropriate ``Content-Type``).
     """
 
-    def work():
-        if format_name is None:
-            return solve(channels, specs, platforms)
-        envs = solve_environments(channels, specs, platforms)
-        return OutputFormat.named(format_name).render(envs)
-
     try:
-        with anyio.fail_after(SOLVE_TIMEOUT_S):
+        limiter = request.app.state.solver_limiter
+        if limiter is None:
+            with anyio.fail_after(SOLVE_TIMEOUT_S):
+                result = await anyio.to_thread.run_sync(
+                    run_solve_work,
+                    channels,
+                    specs,
+                    platforms,
+                    format_name,
+                    abandon_on_cancel=True,
+                )
+        else:
             result = await anyio.to_thread.run_sync(
-                work,
-                limiter=request.app.state.solver_limiter,
-                abandon_on_cancel=True,
+                run_solve_in_process,
+                channels,
+                specs,
+                platforms,
+                format_name,
+                SOLVE_TIMEOUT_S,
+                limiter=limiter,
             )
     except TimeoutError:
         log.warning(
@@ -475,6 +487,82 @@ async def run_solve(
     if isinstance(body, str):
         body = body.encode()
     return body, media_type
+
+
+def run_solve_work(
+    channels: list[str],
+    specs: list[str],
+    platforms: list[str] | None,
+    format_name: str | None,
+) -> list | tuple[str, str]:
+    """Run the blocking solve/export path in a worker."""
+    if format_name is None:
+        return solve(channels, specs, platforms)
+    envs = solve_environments(channels, specs, platforms)
+    return OutputFormat.named(format_name).render(envs)
+
+
+def run_solve_in_process(
+    channels: list[str],
+    specs: list[str],
+    platforms: list[str] | None,
+    format_name: str | None,
+    timeout_s: int,
+) -> list | tuple[str, str]:
+    """Run solve work in a child process that can be terminated on timeout."""
+    ctx = multiprocessing.get_context("spawn")
+    receiver, sender = ctx.Pipe(duplex=False)
+    process = ctx.Process(
+        target=solve_process_entrypoint,
+        args=(sender, channels, specs, platforms, format_name),
+    )
+    process.start()
+    sender.close()
+
+    try:
+        if not receiver.poll(timeout_s):
+            raise TimeoutError
+        status, payload = receiver.recv()
+    except EOFError as exc:
+        raise RuntimeError(f"Solve worker exited with code {process.exitcode}") from exc
+    finally:
+        receiver.close()
+        if process.is_alive():
+            process.terminate()
+            process.join(5)
+        if process.is_alive():
+            process.kill()
+        process.join()
+
+    if status == "ok":
+        return payload
+    if status == "unknown-format":
+        raise UnknownFormatError(payload["format_name"], payload["available"])
+    raise RuntimeError("Solve worker failed")
+
+
+def solve_process_entrypoint(
+    sender,
+    channels: list[str],
+    specs: list[str],
+    platforms: list[str] | None,
+    format_name: str | None,
+) -> None:
+    """Send a solve result from an isolated process."""
+    try:
+        sender.send(("ok", run_solve_work(channels, specs, platforms, format_name)))
+    except UnknownFormatError as exc:
+        sender.send(
+            (
+                "unknown-format",
+                {"format_name": exc.format_name, "available": exc.available},
+            )
+        )
+    except Exception:
+        log.exception("Isolated solve failed")
+        sender.send(("error", None))
+    finally:
+        sender.close()
 
 
 async def run_cached_solve(
