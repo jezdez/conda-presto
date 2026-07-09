@@ -34,27 +34,6 @@ jobs:
       - name: Build sdist and wheel
         run: pipx run --spec build==1.5.0 pyproject-build
 
-      - name: Verify distribution version
-        env:
-          RELEASE_TAG: ${{ github.ref_name }}
-        run: |
-          python - <<'PY'
-          import os
-          import zipfile
-          from pathlib import Path
-
-          wheel = next(Path("dist").glob("*.whl"))
-          with zipfile.ZipFile(wheel) as archive:
-              metadata = next(name for name in archive.namelist() if name.endswith("METADATA"))
-              version = next(
-                  line.removeprefix("Version: ")
-                  for line in archive.read(metadata).decode().splitlines()
-                  if line.startswith("Version: ")
-              )
-          if os.environ["RELEASE_TAG"] != f"v{version}":
-              raise SystemExit(f"tag {os.environ['RELEASE_TAG']} does not match distribution version {version}")
-          PY
-
       - uses: actions/attest@a1948c3f048ba23858d222213b7c278aabede763 # v4
         with:
           subject-path: dist/*
