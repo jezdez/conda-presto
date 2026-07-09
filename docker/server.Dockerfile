@@ -3,6 +3,10 @@ FROM ghcr.io/prefix-dev/pixi:0.70.1 AS build
 WORKDIR /app
 COPY pyproject.toml pixi.lock ./
 COPY conda_presto/ conda_presto/
+
+ARG CONDA_PRESTO_VERSION=0.0.0
+ENV SETUPTOOLS_SCM_PRETEND_VERSION=${CONDA_PRESTO_VERSION}
+
 RUN pixi install --locked -e prod
 RUN pixi shell-hook -e prod -s bash > /shell-hook
 RUN echo '#!/bin/bash' > /app/entrypoint.sh \
