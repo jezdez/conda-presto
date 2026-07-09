@@ -21,6 +21,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Streamlit Community Cloud dependencies now keep the Streamlit/web UI
+  stack in pip to avoid slow conda solves during app startup.
 - Pixi environments and install docs now use stable conda-forge conda
   packages instead of the `conda-canary/label/dev` channel.
 - GitHub Action documentation and examples now focus on CI lockfile
