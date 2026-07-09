@@ -37,6 +37,7 @@ Full documentation is available at the [conda-presto docs site](docs/index.md):
 - [CLI tutorial](docs/tutorials/cli-resolve.md) — in-depth CLI usage
 - [HTTP API tutorial](docs/tutorials/http-api.md) — HTTP workflows
 - [CI pipeline](docs/tutorials/ci-pipeline.md) — GitHub Action setup
+- [Streamlit tutorial](docs/tutorials/streamlit.md) — deploy the test UI
 - [Reference](docs/reference/index.md) — CLI flags, endpoints, formats, env vars
 - [Architecture](docs/explanation/architecture.md) — how it works
 - [Roadmap](docs/proposals.md) — shipped foundations and linked future work
@@ -53,6 +54,7 @@ pixi run test        # pytest
 pixi run bench       # pytest-benchmark
 pixi run serve       # uvicorn with --reload
 pixi run -e docs docs  # build documentation
+pixi run -e streamlit streamlit  # run the Streamlit test app
 ```
 
 ## License

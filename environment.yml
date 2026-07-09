@@ -4,10 +4,10 @@ channels:
   - nodefaults
 dependencies:
   - python >=3.13,<3.14
-  - streamlit
+  - streamlit >=1.59
   - conda >=26.5,<27
   - conda-rattler-solver >=0.1.1,<0.2
-  - conda-lockfiles >=0.2.0
+  - conda-lockfiles >=0.2.1
   - msgspec >=0.19
   - litestar >=2.18
   - pyjwt >=2.0
