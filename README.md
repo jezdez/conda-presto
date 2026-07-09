@@ -1,9 +1,3 @@
----
-title: conda-presto
-sdk: docker
-app_port: 7860
----
-
 # conda-presto
 
 A fast, dry-run conda solver exposed as both a CLI and an HTTP API.
@@ -43,7 +37,6 @@ Full documentation is available at the [conda-presto docs site](docs/index.md):
 - [CLI tutorial](docs/tutorials/cli-resolve.md) — in-depth CLI usage
 - [HTTP API tutorial](docs/tutorials/http-api.md) — HTTP workflows
 - [CI pipeline](docs/tutorials/ci-pipeline.md) — GitHub Action setup
-- [Hugging Face Spaces tutorial](docs/tutorials/hugging-face.md) — deploy the HTTP API
 - [Reference](docs/reference/index.md) — CLI flags, endpoints, formats, env vars
 - [Architecture](docs/explanation/architecture.md) — how it works
 - [Roadmap](docs/proposals.md) — shipped foundations and linked future work

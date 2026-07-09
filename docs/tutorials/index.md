@@ -29,14 +29,6 @@ Run conda-presto in GitHub Actions. Local mode runs the checked-out
 action on the runner; remote mode calls a hosted deployment.
 :::
 
-:::{grid-item-card} {octicon}`server` Hugging Face Spaces
-:link: hugging-face
-:link-type: doc
-
-Deploy the HTTP API as a Docker Space with a public curlable endpoint.
-Use the hosted API for examples, CI, or lightweight demos.
-:::
-
 ::::
 
 ```{toctree}
@@ -45,5 +37,4 @@ Use the hosted API for examples, CI, or lightweight demos.
 cli-resolve
 http-api
 ci-pipeline
-hugging-face
 ```
