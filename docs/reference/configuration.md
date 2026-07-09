@@ -95,9 +95,6 @@ The following pixi tasks are available:
 * - `docs`
   - `pixi run -e docs docs`
   - Build Sphinx documentation
-* - `streamlit`
-  - `pixi run -e streamlit streamlit`
-  - Run the Streamlit test app
 ```
 
 ### Pixi environments
@@ -119,10 +116,17 @@ The project defines several pixi environments for different use cases:
 `docs`
 : Documentation build environment with Sphinx and extensions.
 
-`streamlit`
-: Streamlit test app environment with server dependencies and `httpx`.
-
 ## Production deployment
+
+### Hugging Face Spaces
+
+The repository root contains a Dockerfile and Space metadata in
+`README.md` for deploying conda-presto as a Hugging Face Docker Space.
+The Space listens on port `7860`, runs as user ID `1000`, and starts
+the HTTP API with conservative single-worker defaults.
+
+See [Deploy on Hugging Face Spaces](../tutorials/hugging-face.md) for
+the full workflow.
 
 ### Running behind a reverse proxy
 

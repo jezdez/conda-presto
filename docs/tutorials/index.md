@@ -29,12 +29,12 @@ Run conda-presto in GitHub Actions. Local mode runs the checked-out
 action on the runner; remote mode calls a hosted deployment.
 :::
 
-:::{grid-item-card} {octicon}`browser` Streamlit
-:link: streamlit
+:::{grid-item-card} {octicon}`server` Hugging Face Spaces
+:link: hugging-face
 :link-type: doc
 
-Run a lightweight Streamlit UI backed by the conda-presto HTTP API.
-Use Community Cloud's conda dependency support without Pixi.
+Deploy the HTTP API as a Docker Space with a public curlable endpoint.
+Use the hosted API for examples, CI, or lightweight demos.
 :::
 
 ::::
@@ -45,5 +45,5 @@ Use Community Cloud's conda dependency support without Pixi.
 cli-resolve
 http-api
 ci-pipeline
-streamlit
+hugging-face
 ```
