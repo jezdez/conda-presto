@@ -11,6 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Documentation site with reference, explanation, tutorial, and roadmap
   pages, published through GitHub Pages.
+- Streamlit test app entrypoint and Pixi environment for running the
+  conda-presto HTTP API behind a deployable Streamlit UI.
 - `POST /transcode` for lockfile-to-lockfile conversion without solving
   when the requested platforms are already present in the input lockfile.
 - Content-addressed resolve result cache with stable `Location: /r/{hash}`

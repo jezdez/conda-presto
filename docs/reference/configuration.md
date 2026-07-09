@@ -95,6 +95,9 @@ The following pixi tasks are available:
 * - `docs`
   - `pixi run -e docs docs`
   - Build Sphinx documentation
+* - `streamlit`
+  - `pixi run -e streamlit streamlit`
+  - Run the Streamlit test app
 ```
 
 ### Pixi environments
@@ -115,6 +118,9 @@ The project defines several pixi environments for different use cases:
 
 `docs`
 : Documentation build environment with Sphinx and extensions.
+
+`streamlit`
+: Streamlit test app environment with server dependencies and `httpx`.
 
 ## Production deployment
 
