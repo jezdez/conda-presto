@@ -2,7 +2,7 @@
 
 The repository includes a deployable Streamlit test app at `streamlit_app.py`. The app starts the real conda-presto HTTP server on localhost and calls the same `/resolve` API that other clients use, so the UI stays on the documented HTTP contract instead of duplicating solver behavior.
 
-Streamlit Community Cloud does not use Pixi environments. The root `environment.yml` gives Community Cloud the conda packages it needs, including `streamlit`, `uvicorn`, conda's solver packages, and an editable install of this checkout.
+Streamlit Community Cloud does not use Pixi environments. The root `environment.yml` gives Community Cloud exact conda solver package pins and installs the Streamlit/web UI stack with pip. Keeping Streamlit's data-stack dependencies out of the conda solve makes Community Cloud startup much faster, especially when Community Cloud's bootstrap conda is older than the conda installed into the app environment.
 
 ## Run locally with Pixi
 
@@ -24,7 +24,7 @@ conda activate conda-presto-streamlit
 streamlit run streamlit_app.py
 ```
 
-The `pip: -e .` line in `environment.yml` is intentional. The Streamlit app starts `uvicorn conda_presto.app:app`, and `conda_presto.app` reads `importlib.metadata.version("conda-presto")` during import for the version endpoint and OpenAPI metadata. An editable install gives the app package metadata while still running from the repository checkout.
+The pip section in `environment.yml` is intentional. The app still installs conda-presto from the checked-out repository with `-e .`, because `conda_presto.app` reads `importlib.metadata.version("conda-presto")` during import for the version endpoint and OpenAPI metadata. Streamlit, `httpx`, `uvicorn`, Litestar, PyJWT, and Brotli are also installed with pip so Community Cloud does not spend most of startup solving Streamlit's larger conda dependency graph.
 
 ## Deploy on Community Cloud
 
