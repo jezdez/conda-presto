@@ -11,8 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Documentation site with reference, explanation, tutorial, and roadmap
   pages, published through GitHub Pages.
-- Streamlit test app entrypoint and Pixi environment for running the
-  conda-presto HTTP API behind a deployable Streamlit UI.
+- Hugging Face Docker Space setup for running the conda-presto HTTP API
+  behind a public curlable endpoint.
 - `POST /transcode` for lockfile-to-lockfile conversion without solving
   when the requested platforms are already present in the input lockfile.
 - Content-addressed resolve result cache with stable `Location: /r/{hash}`
@@ -21,10 +21,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- Streamlit Community Cloud dependencies now keep the Streamlit/web UI
-  stack in pip to avoid slow conda solves during app startup.
-- Streamlit Community Cloud now uses Python 3.14 in `environment.yml`
-  to match the Cloud dependency processor.
 - Pixi environments and install docs now use stable conda-forge conda
   packages instead of the `conda-canary/label/dev` channel.
 - GitHub Action documentation and examples now focus on CI lockfile
