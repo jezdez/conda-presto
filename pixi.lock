@@ -9592,5 +9592,6 @@ packages:
 - pypi: ./
   name: conda-presto
   requires_dist:
+  - msgspec>=0.19
   - redis>=5.0 ; extra == 'redis'
   requires_python: '>=3.13'

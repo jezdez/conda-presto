@@ -4,6 +4,9 @@ WORKDIR /app
 COPY pyproject.toml pixi.lock ./
 COPY conda_presto/ conda_presto/
 
+ARG CONDA_PRESTO_VERSION=0.0.0
+ENV SETUPTOOLS_SCM_PRETEND_VERSION=${CONDA_PRESTO_VERSION}
+
 RUN pixi install --locked -e prod \
     && mkdir -p /app/.pixi/envs/prod/pkgs/cache /home/ubuntu/.conda/pkgs \
     && chown -R 1000:1000 /app /home/ubuntu/.conda
