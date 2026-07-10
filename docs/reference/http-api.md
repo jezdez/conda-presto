@@ -103,6 +103,36 @@ Use `POST /transcode` to convert an existing lockfile without solving.
 
 ---
 
+### `POST /preflight`
+
+Validate specs or an input file without solving or contacting channels.
+It accepts the same JSON body and raw-file Content-Type dispatch as
+`POST /resolve`, including `spec`, `channel`, `platform`, and `filename`
+query parameters.
+
+The response has deterministic local findings. It reports malformed input,
+invalid MatchSpecs, duplicate specs or channels, fuzzy or missing pins,
+build pins, a non-portable `prefix`, and basic whitespace issues. It does not
+try to determine whether the request is satisfiable.
+
+```bash
+curl -sS http://localhost:8000/preflight \
+  --json '{"specs":["python=3.13","python=3.13"],"channels":["conda-forge"]}'
+```
+
+```json
+{
+  "ok": true,
+  "findings": [
+    {"code":"PIN001","severity":"warning","message":"fuzzy equality may be unintended; use == for an exact pin","spec":"python=3.13"},
+    {"code":"DUP001","severity":"warning","message":"duplicate conda package spec","spec":"python=3.13"}
+  ],
+  "summary": {"errors":0,"warnings":2,"info":0}
+}
+```
+
+---
+
 ### `POST /transcode`
 
 Convert one lockfile format to another without running the solver. The

@@ -25,6 +25,7 @@ from conda_presto.app import (
     on_startup,
     parse,
     platforms,
+    preflight_post,
     resolve_get,
     resolve_post,
     result_get,
@@ -40,6 +41,7 @@ def test_app():
         route_handlers=[
             resolve_get,
             resolve_post,
+            preflight_post,
             transcode_post,
             result_get,
             formats,
@@ -1201,6 +1203,58 @@ async def test_resolve_post_raw_body_pixi_lock_pipeline(client):
 
 
 @pytest.mark.anyio
+async def test_preflight_post_reports_findings_without_solving(client, monkeypatch):
+    async def fail_run_solve(*args, **kwargs):
+        raise AssertionError("preflight must not solve")
+
+    monkeypatch.setattr(app_module, "run_solve", fail_run_solve)
+    resp = await client.post(
+        "/preflight",
+        json={
+            "specs": ["numpy=1.26.4", "numpy=1.26.4"],
+            "channels": [
+                "conda-forge",
+                "https://conda.anaconda.org/conda-forge",
+            ],
+        },
+    )
+
+    assert resp.status_code == 200
+    assert {finding["code"] for finding in resp.json()["findings"]} == {
+        "PIN001",
+        "DUP001",
+        "CHN002",
+    }
+
+
+@pytest.mark.anyio
+async def test_preflight_post_returns_parse_errors_as_findings(client):
+    resp = await client.post(
+        "/preflight",
+        content="dependencies: [",
+        headers={"content-type": "application/yaml"},
+    )
+
+    assert resp.status_code == 200
+    assert resp.json()["ok"] is False
+    assert resp.json()["findings"][0]["code"] == "ENV001"
+
+
+@pytest.mark.anyio
+async def test_preflight_post_uses_channels_from_a_parsed_file(client):
+    resp = await client.post(
+        "/preflight",
+        json={
+            "file": "channels:\n  - conda-forge\ndependencies:\n  - zlib\n",
+            "filename": "environment.yml",
+        },
+    )
+
+    assert resp.status_code == 200
+    assert resp.json()["ok"] is True
+
+
+@pytest.mark.anyio
 @pytest.mark.parametrize(
     "url, request_kind, expected_version",
     [
@@ -1509,9 +1563,16 @@ async def test_openapi_schema(client):
     data = resp.json()
     assert "openapi" in data
     assert "/resolve" in data["paths"]
+    assert "/preflight" in data["paths"]
     assert "/transcode" in data["paths"]
     assert "/r/{key}" in data["paths"]
     assert "/health" in data["paths"]
+
+    preflight = data["paths"]["/preflight"]["post"]
+    assert preflight["responses"]["200"]["content"]["application/json"][
+        "schema"
+    ]["$ref"].endswith("/PreflightResult")
+    assert {"400", "504"} <= preflight["responses"].keys()
 
 
 @pytest.mark.anyio

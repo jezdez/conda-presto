@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `POST /preflight` for deterministic local input validation without solver or channel access.
+
+### Fixed
+
+- Return parser plugin errors as normal HTTP input errors instead of internal server errors.
+
 ## [0.5.1] - 2026-07-10
 
 ### Fixed
