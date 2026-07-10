@@ -40,6 +40,21 @@ env-spec plugins decide how to read files such as:
 Inline command-line specs and HTTP query/body specs skip file parsing and go
 straight into the solve request.
 
+## Inspecting environments
+
+The inspection endpoints separate questions that can be answered from input
+alone from questions that need selected package records. `/preflight` parses
+and applies deterministic local checks without contacting a channel or running
+the solver. A successful preflight therefore says that the input is well
+formed; it does not establish that the environment is satisfiable.
+
+`/diff` and `/explain` operate on resolved packages. Diff compares two
+environments per platform and can reuse records from a lockfile that already
+covers the requested platform; other inputs require a solve. Explain is
+single-platform because it traces dependency edges from the requested specs to
+one selected package. Its traversal is bounded, and `complete: false` signals
+that the local package metadata could not account for every edge.
+
 ## Solving
 
 Solving is handled by `conda-rattler-solver`. For multi-platform requests,

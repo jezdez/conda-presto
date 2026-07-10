@@ -16,6 +16,7 @@ the result as native JSON or any conda exporter format
 - Multi-platform parallel solves via `ProcessPoolExecutor`
 - Output as JSON or any conda exporter format (`--format` / `?format=`)
 - Lockfile-to-lockfile transcode path that skips solving when possible
+- Review proposed environments with `/preflight`, `/diff`, and `/explain`
 - Content-addressed HTTP result cache with `/r/<sha256>` lookups and optional file or Redis backing
 - HTTP API with interactive docs (Scalar UI), compression, rate limiting
 - GitHub Action for CI pipelines (local CLI and hosted API modes)

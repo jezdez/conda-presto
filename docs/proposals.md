@@ -18,6 +18,14 @@ index.
 | [GitHub Action for CI workflows](https://github.com/jezdez/conda-presto/issues/17) | {bdg-success}`shipped` | Composite action for local CLI or hosted API solve workflows |
 | [Content-addressed solve cache](https://github.com/jezdez/conda-presto/issues/19) | {bdg-success}`shipped` | HTTP result cache with durable `/r/<hash>` lookup while entries are retained |
 
+## v0.6 review tools
+
+| Issue | Status | Summary |
+|---|:---:|---|
+| [Preflight validation](https://github.com/jezdez/conda-presto/issues/16) | {bdg-success}`shipped` | Fast local validation and lint-style findings |
+| [Environment / lockfile diff](https://github.com/jezdez/conda-presto/issues/14) | {bdg-success}`shipped` | Platform-aware comparisons between resolved environments and covered lockfiles |
+| [Explain package inclusion](https://github.com/jezdez/conda-presto/issues/15) | {bdg-success}`shipped` | Bounded dependency-chain explanations for successful single-platform solves |
+
 ## Upcoming streams
 
 `````{tab-set}
@@ -28,10 +36,7 @@ New solver-facing verbs and review surfaces.
 
 | Issue | Status | Summary |
 |---|:---:|---|
-| [Preflight validation](https://github.com/jezdez/conda-presto/issues/16) | {bdg-secondary}`proposed` | Fast validation surface, including lint-style findings |
 | [Repair suggestions](https://github.com/jezdez/conda-presto/issues/13) | {bdg-secondary}`proposed` | Verified, ranked repair suggestions for infeasible solves |
-| [Environment / lockfile diff](https://github.com/jezdez/conda-presto/issues/14) | {bdg-secondary}`proposed` | Diff between two environments or lockfiles |
-| [Explain package inclusion](https://github.com/jezdez/conda-presto/issues/15) | {bdg-secondary}`proposed` | Dependency-chain explanations for successful solves |
 ````
 
 ````{tab-item} Integration
@@ -63,10 +68,10 @@ Provenance, attestation serving, admission control, and CEP alignment.
 
 ```{mermaid}
 graph TD
-    T["transcode\n(shipped)"] --> PF["preflight + lint"]
+    T["transcode\n(shipped)"] --> PF["preflight + lint\n(shipped)"]
     T --> RPR["repair suggestions"]
-    T --> D["diff"]
-    T --> E["explain"]
+    T --> D["diff\n(shipped)"]
+    T --> E["explain\n(shipped)"]
     P["result cache + permalink\n(shipped)"] --> PV["provenance fields"]
     P --> B["broker-managed local service"]
     B --> FS["full conda solver backend"]
@@ -82,14 +87,13 @@ graph TD
     GH --> D
 
     classDef shipped fill:#e6f4ea,stroke:#1e7e34,color:#0b3d1f;
-    class T,P,GH shipped;
+    class T,P,GH,PF,D,E shipped;
 ```
 
-Diff and explain can interleave after the transcode foundation because they can
-operate on existing lockfile records. Repair stays separate from explain
-because it may run repeated solver attempts under an explicit budget. The
-broker-managed local service and full solver backend build on warm process
-state plus public-channel cache keys.
+Diff and explain can use existing lockfile records when the requested platform
+is covered. Repair stays separate from explain because it may run repeated
+solver attempts under an explicit budget. The broker-managed local service and
+full solver backend build on warm process state plus public-channel cache keys.
 
 ## Conventions
 
