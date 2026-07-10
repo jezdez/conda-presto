@@ -16,7 +16,7 @@ the result as native JSON or any conda exporter format
 - Multi-platform parallel solves via `ProcessPoolExecutor`
 - Output as JSON or any conda exporter format (`--format` / `?format=`)
 - Lockfile-to-lockfile transcode path that skips solving when possible
-- Content-addressed HTTP result cache with `/r/<sha256>` lookups
+- Content-addressed HTTP result cache with `/r/<sha256>` lookups and optional file or Redis backing
 - HTTP API with interactive docs (Scalar UI), compression, rate limiting
 - GitHub Action for CI pipelines (local CLI and hosted API modes)
 - Docker images for server and CLI deployment
@@ -29,17 +29,26 @@ pixi global install --git https://github.com/jezdez/conda-presto.git
 conda presto -c conda-forge -p linux-64 python=3.12 numpy
 ```
 
+## Run a server
+
+```bash
+docker run --rm -p 8000:8000 ghcr.io/jezdez/conda-presto:latest
+curl http://localhost:8000/health
+```
+
+Pin a versioned image tag for deployments. See the [container configuration reference](https://jezdez.github.io/conda-presto/reference/configuration/) for server tuning and Redis result-cache setup.
+
 ## Documentation
 
-Full documentation is available at the [conda-presto docs site](docs/index.md):
+Full documentation is available at the [conda-presto docs site](https://jezdez.github.io/conda-presto/):
 
-- [Quick start](docs/quickstart.md) — install and first resolve
-- [CLI tutorial](docs/tutorials/cli-resolve.md) — in-depth CLI usage
-- [HTTP API tutorial](docs/tutorials/http-api.md) — HTTP workflows
-- [CI pipeline](docs/tutorials/ci-pipeline.md) — GitHub Action setup
-- [Reference](docs/reference/index.md) — CLI flags, endpoints, formats, env vars
-- [Architecture](docs/explanation/architecture.md) — how it works
-- [Roadmap](docs/proposals.md) — shipped foundations and linked future work
+- [Quick start](https://jezdez.github.io/conda-presto/quickstart/) — install and first resolve
+- [CLI tutorial](https://jezdez.github.io/conda-presto/tutorials/cli-resolve/) — in-depth CLI usage
+- [HTTP API tutorial](https://jezdez.github.io/conda-presto/tutorials/http-api/) — HTTP workflows
+- [CI pipeline](https://jezdez.github.io/conda-presto/tutorials/ci-pipeline/) — GitHub Action setup
+- [Reference](https://jezdez.github.io/conda-presto/reference/) — CLI flags, endpoints, formats, env vars
+- [Architecture](https://jezdez.github.io/conda-presto/explanation/architecture/) — how it works
+- [Roadmap](https://jezdez.github.io/conda-presto/proposals/) — shipped foundations and linked future work
 
 ## Development
 
