@@ -134,6 +134,7 @@ from .preflight import PreflightResult
 from .resolve import (
     NATIVE_SUBDIR,
     VIRTUAL_PACKAGES,
+    ExplainResult,
     PlatformDiff,
     SolveResult,
     shutdown_process_pool,
@@ -1254,19 +1255,41 @@ async def diff_post(request: Request, data: DiffRequest) -> Response:
     )
 
 
-@post("/explain", status_code=200)
-async def explain_post(request: Request) -> Response:
+@post(
+    "/explain",
+    status_code=200,
+    responses={
+        200: ResponseSpec(
+            data_container=ExplainResult,
+            description="Dependency chains for the selected package",
+        ),
+        HTTP_400_BAD_REQUEST: ResponseSpec(
+            data_container=ErrorResponse | ValidationErrorResponse,
+            description="Input or request validation error",
+        ),
+        HTTP_404_NOT_FOUND: ResponseSpec(
+            data_container=ErrorResponse,
+            description="Selected package is absent",
+        ),
+        HTTP_422_UNPROCESSABLE_ENTITY: ResponseSpec(
+            data_container=ErrorResponse,
+            description="Unsatisfiable environment",
+        ),
+        HTTP_500_INTERNAL_SERVER_ERROR: ResponseSpec(
+            data_container=ErrorResponse,
+            description="Internal solver error",
+        ),
+        HTTP_504_GATEWAY_TIMEOUT: ResponseSpec(
+            data_container=ErrorResponse,
+            description="Solve or parsing timeout",
+        ),
+    },
+)
+async def explain_post(request: Request, data: ExplainRequest) -> Response:
     """Explain why a package appears in a single-platform resolution."""
-    try:
-        data = msgspec.json.decode(await request.body(), type=ExplainRequest)
-    except (msgspec.DecodeError, msgspec.ValidationError) as exc:
-        return Response(
-            {"error": f"Invalid JSON body: {exc}"},
-            status_code=HTTP_400_BAD_REQUEST,
-        )
     if not data.package:
         return Response(
-            {"error": "Provide a package name"},
+            ErrorResponse(error="Provide a package name"),
             status_code=HTTP_400_BAD_REQUEST,
         )
 
@@ -1279,7 +1302,7 @@ async def explain_post(request: Request) -> Response:
         return source
     if len(source.platforms) != 1:
         return Response(
-            {"error": "/explain requires exactly one platform"},
+            ErrorResponse(error="/explain requires exactly one platform"),
             status_code=HTTP_400_BAD_REQUEST,
         )
     results = await source.results(request)
@@ -1288,13 +1311,13 @@ async def explain_post(request: Request) -> Response:
     result = results[0]
     if result.error is not None:
         return Response(
-            {"error": result.error},
+            ErrorResponse(error=result.error),
             status_code=HTTP_422_UNPROCESSABLE_ENTITY,
         )
     explanation = result.explain(source.specs, data.package)
     if explanation is None:
         return Response(
-            {"error": f"Package not found: {data.package}"},
+            ErrorResponse(error=f"Package not found: {data.package}"),
             status_code=HTTP_404_NOT_FOUND,
         )
     return Response(explanation)

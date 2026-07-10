@@ -1515,6 +1515,10 @@ async def test_explain_post_returns_not_found_for_absent_package(client, monkeyp
 async def test_explain_post_rejects_invalid_request_shapes(client):
     invalid = await client.post("/explain", content=b"[")
     missing_package = await client.post("/explain", json={"specs": ["zlib"]})
+    unknown_field = await client.post(
+        "/explain",
+        json={"package": "zlib", "specs": ["zlib"], "unknown": True},
+    )
     empty_package = await client.post(
         "/explain", json={"package": "", "specs": ["zlib"]}
     )
@@ -1530,6 +1534,7 @@ async def test_explain_post_rejects_invalid_request_shapes(client):
 
     assert invalid.status_code == 400
     assert missing_package.status_code == 400
+    assert unknown_field.status_code == 400
     assert empty_package.status_code == 400
     assert missing_input.status_code == 400
     assert platforms.status_code == 400
@@ -1891,6 +1896,15 @@ async def test_openapi_schema(client):
         "$ref"
     ].endswith("/DiffResponse")
     assert {"400", "422", "500", "504"} <= diff["responses"].keys()
+
+    explain = data["paths"]["/explain"]["post"]
+    assert explain["requestBody"]["content"]["application/json"]["schema"][
+        "$ref"
+    ].endswith("/ExplainRequest")
+    assert explain["responses"]["200"]["content"]["application/json"]["schema"][
+        "$ref"
+    ].endswith("/ExplainResult")
+    assert {"400", "404", "422", "500", "504"} <= explain["responses"].keys()
 
 
 @pytest.mark.anyio
