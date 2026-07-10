@@ -4,6 +4,8 @@ Endpoints:
 
 - ``GET /resolve`` — resolve specs via query params
 - ``POST /resolve`` — resolve specs and/or file content via JSON body
+- ``POST /preflight`` — validate input locally without solving
+- ``POST /diff`` — compare two resolved inputs
 - ``POST /transcode`` — convert one lockfile format to another
 - ``GET /r/{hash}`` — fetch a stored content-addressed resolve result
 - ``GET /formats`` — list registered output format names
@@ -74,7 +76,7 @@ import json
 import logging
 import multiprocessing
 from collections import OrderedDict
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from importlib.metadata import version as pkg_version
 from pathlib import Path
 
@@ -96,6 +98,7 @@ from litestar.response import Response
 from litestar.status_codes import (
     HTTP_400_BAD_REQUEST,
     HTTP_404_NOT_FOUND,
+    HTTP_422_UNPROCESSABLE_ENTITY,
     HTTP_500_INTERNAL_SERVER_ERROR,
     HTTP_504_GATEWAY_TIMEOUT,
 )
@@ -130,6 +133,8 @@ from .preflight import PreflightResult
 from .resolve import (
     NATIVE_SUBDIR,
     VIRTUAL_PACKAGES,
+    PlatformDiff,
+    SolveResult,
     shutdown_process_pool,
     solve,
     solve_environments,
@@ -263,6 +268,135 @@ class TranscodeRequest:
     platforms: list[str] | None = None
     specs: list[str] | None = None
     channels: list[str] | None = None
+
+
+@dataclass
+class ResolveInput:
+    """One parsed request ready for direct lockfile use or a solve."""
+
+    specs: list[str]
+    channels: list[str]
+    platforms: list[str]
+    parsed_file: ParsedInputFile | None
+    direct_lockfile: bool
+
+    @classmethod
+    async def from_request(
+        cls,
+        request: Request,
+        data: ResolveRequest,
+        default_platforms: list[str] | None = None,
+    ) -> ResolveInput | Response:
+        """Parse one request and select its direct-lockfile or solve path."""
+        input_specs = list(data.specs or [])
+        channels = list(data.channels or [])
+        platforms = list(data.platforms or [])
+        parsed_file: ParsedInputFile | None = None
+
+        if data.file is not None:
+            parsed = await parse_input_for_request(
+                request,
+                data.file,
+                data.filename,
+                platforms or default_platforms,
+            )
+            if isinstance(parsed, Response):
+                return parsed
+            parsed_file = parsed
+            if parsed_file.is_lockfile and not platforms and default_platforms is None:
+                platforms = list(parsed_file.available_platforms)
+                parsed = await parse_input_for_request(
+                    request,
+                    data.file,
+                    data.filename,
+                    platforms,
+                )
+                if isinstance(parsed, Response):
+                    return parsed
+                parsed_file = parsed
+            input_specs.extend(parsed_file.specs)
+            if not channels:
+                channels = parsed_file.channels
+
+        if not platforms:
+            platforms = list(default_platforms or [NATIVE_SUBDIR])
+        if not channels:
+            channels = list(DEFAULT_CHANNELS)
+        if cap_error := validate_caps(input_specs, channels, platforms):
+            return cap_error
+
+        direct_lockfile = bool(
+            parsed_file
+            and parsed_file.is_lockfile
+            and parsed_file.environments
+            and not data.specs
+            and not data.channels
+        )
+        if not input_specs and not direct_lockfile:
+            if parsed_file and parsed_file.is_lockfile:
+                return Response(
+                    {
+                        "error": (
+                            "Lockfile input cannot be solved for the requested "
+                            "platforms; provide specs to solve."
+                        )
+                    },
+                    status_code=HTTP_400_BAD_REQUEST,
+                )
+            return Response(
+                {"error": "Provide specs or file content"},
+                status_code=HTTP_400_BAD_REQUEST,
+            )
+        return cls(
+            specs=input_specs,
+            channels=channels,
+            platforms=platforms,
+            parsed_file=parsed_file,
+            direct_lockfile=direct_lockfile,
+        )
+
+    async def results(self, request: Request) -> list[SolveResult] | Response:
+        """Return parsed lockfile records or native solve results."""
+        if self.direct_lockfile:
+            return [
+                SolveResult.from_environment(environment)
+                for environment in self.parsed_file.environments
+            ]
+        payload = await run_solve(request, self.specs, self.channels, self.platforms)
+        if isinstance(payload, Response):
+            return payload
+        body, _ = payload
+        return msgspec.json.decode(body, type=list[SolveResult])
+
+    @property
+    def lockfile_category(self) -> str | None:
+        """Return the category retained by the conda-lock v1 registry view."""
+        if (
+            self.direct_lockfile
+            and self.parsed_file is not None
+            and self.parsed_file.source_format == "conda-lock-v1"
+        ):
+            return "main"
+        return None
+
+
+class DiffRequest(
+    msgspec.Struct,
+    rename={"from_": "from"},
+    forbid_unknown_fields=True,
+):
+    """JSON body for ``POST /diff``."""
+
+    from_: ResolveRequest
+    to: ResolveRequest
+    platforms: list[str] | None = None
+
+
+class DiffResponse(msgspec.Struct):
+    """Resolved package diffs keyed by platform."""
+
+    platforms: list[str]
+    diff: dict[str, PlatformDiff]
 
 
 class StoredResult(msgspec.Struct):
@@ -989,6 +1123,90 @@ async def preflight_post(
     return Response(PreflightResult.from_values(specs, channels, data.file))
 
 
+@post("/diff", status_code=200)
+async def diff_post(request: Request) -> Response:
+    """Compare the packages selected by two resolve inputs."""
+    try:
+        data = msgspec.json.decode(await request.body(), type=DiffRequest)
+    except (msgspec.DecodeError, msgspec.ValidationError) as exc:
+        return Response(
+            {"error": f"Invalid JSON body: {exc}"},
+            status_code=HTTP_400_BAD_REQUEST,
+        )
+
+    if data.platforms is not None:
+        before_request = replace(data.from_, platforms=data.platforms)
+        after_request = replace(data.to, platforms=data.platforms)
+    elif data.from_.platforms is not None and data.to.platforms is not None:
+        platforms = [
+            platform
+            for platform in data.from_.platforms
+            if platform in data.to.platforms
+        ]
+        if not platforms:
+            return Response(
+                {"error": "The two inputs have no platforms in common"},
+                status_code=HTTP_400_BAD_REQUEST,
+            )
+        before_request = replace(data.from_, platforms=platforms)
+        after_request = replace(data.to, platforms=platforms)
+    elif data.from_.platforms is not None:
+        before_request = data.from_
+        after_request = replace(data.to, platforms=data.from_.platforms)
+    elif data.to.platforms is not None:
+        before_request = replace(data.from_, platforms=data.to.platforms)
+        after_request = data.to
+    else:
+        before_request = data.from_
+        after_request = data.to
+
+    before = await ResolveInput.from_request(request, before_request)
+    if isinstance(before, Response):
+        return before
+    after = await ResolveInput.from_request(request, after_request)
+    if isinstance(after, Response):
+        return after
+
+    before_results = await before.results(request)
+    if isinstance(before_results, Response):
+        return before_results
+    after_results = await after.results(request)
+    if isinstance(after_results, Response):
+        return after_results
+    for result in [*before_results, *after_results]:
+        if result.error is not None:
+            return Response(
+                {"error": result.error, "platform": result.platform},
+                status_code=HTTP_422_UNPROCESSABLE_ENTITY,
+            )
+
+    after_by_platform = {result.platform: result for result in after_results}
+    platforms = [
+        result.platform
+        for result in before_results
+        if result.platform in after_by_platform
+    ]
+    if not platforms:
+        return Response(
+            {"error": "The two inputs have no platforms in common"},
+            status_code=HTTP_400_BAD_REQUEST,
+        )
+    before_by_platform = {result.platform: result for result in before_results}
+    return Response(
+        DiffResponse(
+            platforms=platforms,
+            diff={
+                platform: before_by_platform[platform].diff(
+                    after_by_platform[platform],
+                    before.lockfile_category,
+                    after.lockfile_category,
+                )
+                for platform in platforms
+            },
+        )
+    )
+
+
 @post(
     "/transcode",
     status_code=200,
@@ -1244,6 +1462,7 @@ app = Litestar(
         resolve_get,
         resolve_post,
         preflight_post,
+        diff_post,
         transcode_post,
         result_get,
         formats,

@@ -5,9 +5,11 @@ from __future__ import annotations
 import time
 from types import SimpleNamespace
 
+import msgspec
 import pytest
 import yaml
 from conda.models.environment import Environment
+from conda.plugins.types import EnvironmentFormat
 from httpx import ASGITransport, AsyncClient
 from litestar import Litestar
 from litestar.openapi import OpenAPIConfig
@@ -19,6 +21,7 @@ import conda_presto.app as app_module
 from conda_presto.app import (
     ResultCache,
     build_cors_config,
+    diff_post,
     formats,
     health,
     on_shutdown,
@@ -32,7 +35,8 @@ from conda_presto.app import (
     transcode_post,
     version,
 )
-from conda_presto.resolve import SolveResult
+from conda_presto.inputs import ParsedInputFile
+from conda_presto.resolve import ResolvedPackage, SolveResult
 
 
 @pytest.fixture()
@@ -42,6 +46,7 @@ def test_app():
             resolve_get,
             resolve_post,
             preflight_post,
+            diff_post,
             transcode_post,
             result_get,
             formats,
@@ -121,6 +126,23 @@ def test_build_cors_config_enabled_for_explicit_origins():
     cors = build_cors_config(["https://app.example.com"])
     assert cors is not None
     assert cors.allow_origins == ["https://app.example.com"]
+
+
+def test_resolve_input_retains_conda_lock_main_category():
+    source = app_module.ResolveInput(
+        specs=[],
+        channels=[],
+        platforms=["linux-64"],
+        parsed_file=ParsedInputFile(
+            specs=[],
+            channels=[],
+            environment_format=EnvironmentFormat.lockfile,
+            source_format="conda-lock-v1",
+        ),
+        direct_lockfile=True,
+    )
+
+    assert source.lockfile_category == "main"
 
 
 @pytest.mark.anyio
@@ -1255,6 +1277,169 @@ async def test_preflight_post_uses_channels_from_a_parsed_file(client):
 
 
 @pytest.mark.anyio
+async def test_diff_post_compares_two_solve_results(client, monkeypatch):
+    async def fake_run_solve(request, specs, channels, platforms, format_name=None):
+        version = "1.0" if specs == ["before"] else "2.0"
+        return (
+            msgspec.json.encode(
+                [
+                    SolveResult(
+                        platform=platforms[0],
+                        packages=[
+                            ResolvedPackage(
+                                name="demo",
+                                version=version,
+                                build="0",
+                                build_number=0,
+                                channel="conda-forge",
+                                subdir=platforms[0],
+                                url=f"https://example.invalid/demo-{version}.conda",
+                                sha256="",
+                                md5="",
+                                size=None,
+                                depends=(),
+                                constrains=(),
+                            )
+                        ],
+                    )
+                ]
+            ),
+            "application/json",
+        )
+
+    monkeypatch.setattr(app_module, "run_solve", fake_run_solve)
+    resp = await client.post(
+        "/diff",
+        json={
+            "from": {"specs": ["before"]},
+            "to": {"specs": ["after"]},
+            "platforms": ["linux-64"],
+        },
+    )
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["platforms"] == ["linux-64"]
+    assert data["diff"]["linux-64"]["changed"][0]["kind"] == "upgrade"
+    assert data["diff"]["linux-64"]["changed"][0]["from"]["version"] == "1.0"
+    assert data["diff"]["linux-64"]["changed"][0]["to"]["version"] == "2.0"
+
+
+@pytest.mark.anyio
+async def test_diff_post_reads_lockfiles_without_solving(
+    client, monkeypatch, pixi_lock_v6_text
+):
+    async def fail_run_solve(*args, **kwargs):
+        raise AssertionError("lockfile diff must not solve")
+
+    monkeypatch.setattr(app_module, "run_solve", fail_run_solve)
+    request = {
+        "file": pixi_lock_v6_text,
+        "filename": "pixi.lock",
+    }
+    resp = await client.post("/diff", json={"from": request, "to": request})
+
+    assert resp.status_code == 200
+    assert resp.json()["diff"]["linux-64"]["unchanged_count"] == 2
+
+
+@pytest.mark.anyio
+async def test_diff_post_uses_a_declared_platform_for_both_inputs(client, monkeypatch):
+    platforms = []
+
+    async def fake_run_solve(request, specs, channels, requested, format_name=None):
+        platforms.append(requested)
+        return (
+            msgspec.json.encode([SolveResult(platform=requested[0], packages=[])]),
+            "application/json",
+        )
+
+    monkeypatch.setattr(app_module, "run_solve", fake_run_solve)
+    resp = await client.post(
+        "/diff",
+        json={
+            "from": {"specs": ["before"], "platforms": ["linux-64"]},
+            "to": {"specs": ["after"]},
+        },
+    )
+
+    assert resp.status_code == 200
+    assert platforms == [["linux-64"], ["linux-64"]]
+
+    inverted = await client.post(
+        "/diff",
+        json={
+            "from": {"specs": ["before"]},
+            "to": {"specs": ["after"], "platforms": ["linux-64"]},
+        },
+    )
+
+    assert inverted.status_code == 200
+    assert platforms == [["linux-64"], ["linux-64"], ["linux-64"], ["linux-64"]]
+
+
+@pytest.mark.anyio
+async def test_diff_post_rejects_invalid_and_disjoint_requests(client):
+    invalid = await client.post("/diff", content=b"[")
+    disjoint = await client.post(
+        "/diff",
+        json={
+            "from": {"specs": ["before"], "platforms": ["linux-64"]},
+            "to": {"specs": ["after"], "platforms": ["osx-arm64"]},
+        },
+    )
+
+    assert invalid.status_code == 400
+    assert disjoint.status_code == 400
+    assert disjoint.json()["error"] == "The two inputs have no platforms in common"
+
+
+@pytest.mark.anyio
+async def test_diff_post_returns_solver_failures_as_unprocessable(client, monkeypatch):
+    async def fake_run_solve(request, specs, channels, platforms, format_name=None):
+        return (
+            msgspec.json.encode(
+                [
+                    SolveResult(
+                        platform=platforms[0],
+                        packages=[],
+                        error="Unsatisfiable environment",
+                    )
+                ]
+            ),
+            "application/json",
+        )
+
+    monkeypatch.setattr(app_module, "run_solve", fake_run_solve)
+    resp = await client.post(
+        "/diff",
+        json={
+            "from": {"specs": ["before"]},
+            "to": {"specs": ["after"]},
+            "platforms": ["linux-64"],
+        },
+    )
+
+    assert resp.status_code == 422
+    assert resp.json()["error"] == "Unsatisfiable environment"
+
+
+@pytest.mark.anyio
+async def test_diff_post_rejects_uncovered_lockfile_platform(client, pixi_lock_v6_text):
+    resp = await client.post(
+        "/diff",
+        json={
+            "from": {"file": pixi_lock_v6_text, "filename": "pixi.lock"},
+            "to": {"specs": ["zlib"]},
+            "platforms": ["osx-arm64"],
+        },
+    )
+
+    assert resp.status_code == 400
+    assert "Lockfile input cannot be solved" in resp.json()["error"]
+
+
+@pytest.mark.anyio
 @pytest.mark.parametrize(
     "url, request_kind, expected_version",
     [
@@ -1564,6 +1749,7 @@ async def test_openapi_schema(client):
     assert "openapi" in data
     assert "/resolve" in data["paths"]
     assert "/preflight" in data["paths"]
+    assert "/diff" in data["paths"]
     assert "/transcode" in data["paths"]
     assert "/r/{key}" in data["paths"]
     assert "/health" in data["paths"]

@@ -21,6 +21,7 @@ class ParsedInputFile:
     specs: list[str]
     channels: list[str]
     environment_format: EnvironmentFormat
+    source_format: str
     available_platforms: tuple[str, ...] = ()
     environments: tuple[Environment, ...] = ()
 
@@ -72,6 +73,7 @@ class ParsedInputFile:
                     )
                 ),
                 environment_format=environment_format,
+                source_format=specifier.name,
                 available_platforms=available,
                 environments=envs,
             )
@@ -84,6 +86,7 @@ class ParsedInputFile:
             specs=[str(spec) for spec in env.requested_packages],
             channels=channels,
             environment_format=environment_format,
+            source_format=specifier.name,
             environments=(env,),
         )
 

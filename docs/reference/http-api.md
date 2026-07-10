@@ -133,6 +133,28 @@ curl -sS http://localhost:8000/preflight \
 
 ---
 
+### `POST /diff`
+
+Compare two resolve inputs. Both `from` and `to` use the `ResolveRequest`
+shape from `POST /resolve`; an outer `platforms` list applies to both sides.
+When a supplied lockfile already covers a requested platform, the endpoint
+compares its package records directly instead of solving it again.
+
+```bash
+curl -sS http://localhost:8000/diff \
+  --json '{"from":{"specs":["python=3.12"]},"to":{"specs":["python=3.13"]},"platforms":["linux-64"]}'
+```
+
+The response is keyed by platform and separates added, removed, and changed
+packages. A changed package includes `from`, `to`, and a `kind` of `upgrade`,
+`downgrade`, `version-change`, or `build-change`. It also retains a lockfile
+category when the parsed source provides one.
+
+Solver failures return HTTP 422. Inputs that resolve to no common platform
+return HTTP 400.
+
+---
+
 ### `POST /transcode`
 
 Convert one lockfile format to another without running the solver. The

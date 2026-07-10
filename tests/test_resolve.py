@@ -98,7 +98,108 @@ def test_solve_result_msgspec_json_roundtrip(sample_resolved_package):
         "size",
         "depends",
         "constrains",
+        "manager",
     }
+
+
+def test_solve_result_diff_classifies_package_changes(make_package_record):
+    before = SolveResult(
+        platform="linux-64",
+        packages=[
+            ResolvedPackage.from_record(make_package_record(name="added")),
+            ResolvedPackage.from_record(
+                make_package_record(name="build", version="1.0", build="0")
+            ),
+            ResolvedPackage.from_record(
+                make_package_record(name="downgrade", version="2.0")
+            ),
+            ResolvedPackage.from_record(make_package_record(name="removed")),
+            ResolvedPackage.from_record(
+                make_package_record(name="upgrade", version="1.0")
+            ),
+        ],
+    )
+    after = SolveResult(
+        platform="linux-64",
+        packages=[
+            ResolvedPackage.from_record(
+                make_package_record(name="build", version="1.0", build="1")
+            ),
+            ResolvedPackage.from_record(
+                make_package_record(name="downgrade", version="1.0")
+            ),
+            ResolvedPackage.from_record(make_package_record(name="new")),
+            ResolvedPackage.from_record(
+                make_package_record(name="upgrade", version="2.0")
+            ),
+        ],
+    )
+
+    diff = before.diff(after, before_category="main", after_category="main")
+
+    assert [package.name for package in diff.added] == ["new"]
+    assert [package.name for package in diff.removed] == ["added", "removed"]
+    assert [(change.name, change.kind) for change in diff.changed] == [
+        ("build", "build-change"),
+        ("downgrade", "downgrade"),
+        ("upgrade", "upgrade"),
+    ]
+    assert diff.unchanged_count == 0
+    changed = msgspec.json.decode(msgspec.json.encode(diff))["changed"][0]["from"]
+    assert changed["platform"] == "linux-64"
+    assert changed["category"] == "main"
+    assert "sha256" not in changed
+    assert "size" not in changed
+
+
+def test_solve_result_diff_keeps_conda_and_pypi_names_distinct(
+    make_package_record,
+):
+    conda_package = ResolvedPackage.from_record(make_package_record(name="demo"))
+    pypi_package = msgspec.structs.replace(conda_package, manager="pypi")
+    before = SolveResult(
+        platform="linux-64",
+        packages=[conda_package, pypi_package],
+    )
+    after = SolveResult(
+        platform="linux-64",
+        packages=[conda_package, pypi_package],
+    )
+
+    diff = before.diff(after)
+
+    assert diff.unchanged_count == 2
+    assert not diff.added
+    assert not diff.removed
+
+
+def test_solve_result_from_environment_keeps_external_manager():
+    result = SolveResult.from_environment(
+        Environment(
+            platform="linux-64",
+            external_packages={"pypi": ["pypi/pypi::packaging==25.0=pypi_0"]},
+        )
+    )
+
+    package = result.packages[0]
+    assert package.manager == "pypi"
+    assert package.name == "packaging"
+    assert package.version == "25.0"
+
+
+def test_solve_result_diff_rejects_mismatched_platforms(sample_resolved_package):
+    with pytest.raises(ValueError, match="different platforms"):
+        SolveResult(platform="linux-64", packages=[sample_resolved_package]).diff(
+            SolveResult(platform="osx-arm64", packages=[sample_resolved_package])
+        )
+
+
+def test_resolved_package_uses_version_change_for_invalid_version_order(
+    sample_resolved_package,
+):
+    changed = msgspec.structs.replace(sample_resolved_package, version="1=invalid")
+
+    assert sample_resolved_package.change_kind(changed) == "version-change"
 
 
 def test_solve_result_error_serializes(sample_resolved_package):
@@ -225,9 +326,7 @@ def test_defaults_to_current_platform(fn_name):
     results = fn(["conda-forge"], ["zlib"])
     assert len(results) == 1
     platform = (
-        results[0].platform
-        if hasattr(results[0], "platform")
-        else results[0].platform
+        results[0].platform if hasattr(results[0], "platform") else results[0].platform
     )
     assert platform == context.subdir
 
@@ -332,13 +431,12 @@ def test_solve_generic_exception_is_sanitized(monkeypatch):
 
 def test_solve_known_exception_surfaces_detail(monkeypatch):
     """Known solver errors (UnsatisfiableError/PackagesNotFoundError) surface detail."""
+
     def raise_pnf(*a, **kw):
         raise PackagesNotFoundError(["nonexistent-package-zzzzzz"])
 
     monkeypatch.setattr("conda_presto.resolve.run_solver", raise_pnf)
-    result = solve(
-        ["conda-forge"], ["nonexistent-package-zzzzzz"], ["linux-64"]
-    )[0]
+    result = solve(["conda-forge"], ["nonexistent-package-zzzzzz"], ["linux-64"])[0]
     assert result.error is not None
     assert "nonexistent-package-zzzzzz" in result.error
 
@@ -492,8 +590,6 @@ def test_warmup_including_pool(monkeypatch):
                 f.set_exception(exc)
             return f
 
-    monkeypatch.setattr(
-        "conda_presto.resolve.get_process_pool", lambda: FakePool()
-    )
+    monkeypatch.setattr("conda_presto.resolve.get_process_pool", lambda: FakePool())
     warmup(["conda-forge"], ["linux-64", "osx-arm64"])
     assert calls[0] == ("parent", ["conda-forge"], ["linux-64", "osx-arm64"])
