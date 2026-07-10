@@ -21,6 +21,13 @@ Use the HTTP API to resolve environments programmatically.
 File uploads, JSON requests, output format conversion, and more.
 :::
 
+:::{grid-item-card} {octicon}`server` Warmed local service
+:link: broker-service
+:link-type: doc
+
+Run the optional loopback service with conda-broker for repeated HTTP requests.
+:::
+
 :::{grid-item-card} {octicon}`play` CI pipeline
 :link: ci-pipeline
 :link-type: doc
@@ -36,5 +43,6 @@ action on the runner; remote mode calls a hosted deployment.
 
 cli-resolve
 http-api
+broker-service
 ci-pipeline
 ```

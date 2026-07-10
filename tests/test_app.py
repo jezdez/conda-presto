@@ -115,11 +115,85 @@ def fake_solve_process(monkeypatch):
     return create
 
 
+@pytest.fixture()
+def persistent_solve_worker(monkeypatch):
+    def create(
+        messages,
+        *,
+        poll=True,
+        start=True,
+        send_error_on: str | None = None,
+        terminate_stops=True,
+    ):
+        calls = []
+        alive = {"value": True}
+        received = iter(messages)
+
+        def send(value):
+            if value is None and send_error_on == "stop":
+                raise BrokenPipeError
+            if value is not None and send_error_on == "request":
+                raise BrokenPipeError
+            calls.append(("send", value))
+
+        def receive():
+            value = next(received)
+            if isinstance(value, Exception):
+                raise value
+            return value
+
+        def terminate():
+            if terminate_stops:
+                alive["value"] = False
+
+        def kill():
+            calls.append(("process", "kill"))
+            alive["value"] = False
+
+        parent = SimpleNamespace(
+            send=send,
+            poll=lambda _: poll,
+            recv=receive,
+            close=lambda: calls.append(("parent", "close")),
+        )
+        child = SimpleNamespace(close=lambda: calls.append(("child", "close")))
+        process = SimpleNamespace(
+            start=lambda: calls.append(("process", "start")),
+            is_alive=lambda: alive["value"],
+            terminate=terminate,
+            kill=kill,
+            join=lambda timeout=None: calls.append(("process", f"join:{timeout}")),
+        )
+        context = SimpleNamespace(
+            Pipe=lambda: (parent, child),
+            Process=lambda **_: process,
+        )
+        monkeypatch.setattr(
+            app_module.multiprocessing, "get_context", lambda _: context
+        )
+        worker = app_module.PersistentSolveWorker(["conda-forge"], ["linux-64"])
+        if start:
+            worker.start()
+        return worker, calls
+
+    return create
+
+
 @pytest.mark.anyio
 async def test_health(client):
     resp = await client.get("/health")
     assert resp.status_code == 200
     assert resp.json() == {"status": "ok"}
+
+
+@pytest.mark.anyio
+async def test_health_is_unavailable_when_persistent_worker_stops(client, test_app):
+    test_app.state.solve_worker = SimpleNamespace(running=False)
+
+    response = await client.get("/health")
+
+    assert response.status_code == 503
+    assert response.json() == {"status": "unavailable"}
 
 
 def test_build_cors_config_disabled_without_origins():
@@ -921,6 +995,271 @@ async def test_resolve_worker_deadline_includes_capacity_wait(
     assert response.status_code == 200
     assert len(remaining) == 1
     assert 0 < remaining[0] < 0.45
+
+
+@pytest.mark.anyio
+async def test_resolve_uses_persistent_worker_when_configured(test_app):
+    calls = []
+
+    def solve(*args):
+        calls.append(args)
+        return []
+
+    test_app.state.solve_worker = SimpleNamespace(running=True, solve=solve)
+    test_app.state.solver_limiter = app_module.anyio.CapacityLimiter(1)
+    transport = ASGITransport(app=test_app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.post(
+            "/resolve",
+            json={"specs": ["zlib"], "platforms": ["linux-64"]},
+        )
+
+    assert response.status_code == 200
+    assert calls == [
+        (["conda-forge"], ["zlib"], ["linux-64"], None, 60),
+    ]
+
+
+def test_persistent_solve_worker_returns_result(persistent_solve_worker):
+    worker, calls = persistent_solve_worker([("ready", None), ("ok", [])])
+
+    assert worker.solve(["conda-forge"], ["zlib"], ["linux-64"], None, 60) == []
+
+    worker.stop()
+    assert calls == [
+        ("process", "start"),
+        ("child", "close"),
+        ("send", (["conda-forge"], ["zlib"], ["linux-64"], None)),
+        ("send", None),
+        ("parent", "close"),
+        ("process", "join:5"),
+        ("process", "join:None"),
+    ]
+
+
+def test_persistent_solve_worker_rejects_startup_failure(persistent_solve_worker):
+    worker, _ = persistent_solve_worker([("startup-failed", None)], start=False)
+
+    with pytest.raises(RuntimeError, match="failed during startup"):
+        worker.start()
+
+    assert worker.connection is None
+    assert worker.process is None
+
+
+def test_persistent_solve_worker_rejects_unavailable_worker(persistent_solve_worker):
+    worker, _ = persistent_solve_worker([], start=False)
+
+    with pytest.raises(RuntimeError, match="unavailable"):
+        worker.solve(["conda-forge"], ["zlib"], ["linux-64"], None, 60)
+
+
+def test_persistent_solve_worker_handles_broken_request_pipe(persistent_solve_worker):
+    worker, _ = persistent_solve_worker([("ready", None)], send_error_on="request")
+
+    with pytest.raises(RuntimeError, match="exited"):
+        worker.solve(["conda-forge"], ["zlib"], ["linux-64"], None, 60)
+
+    assert worker.connection is None
+    assert worker.process is None
+
+
+def test_persistent_solve_worker_handles_closed_response_pipe(persistent_solve_worker):
+    worker, _ = persistent_solve_worker([("ready", None), EOFError()])
+
+    with pytest.raises(RuntimeError, match="exited"):
+        worker.solve(["conda-forge"], ["zlib"], ["linux-64"], None, 60)
+
+    assert worker.connection is None
+    assert worker.process is None
+
+
+def test_persistent_solve_worker_kills_unstoppable_process(persistent_solve_worker):
+    worker, calls = persistent_solve_worker([("ready", None)], terminate_stops=False)
+
+    worker.stop()
+
+    assert ("process", "kill") in calls
+
+
+def test_persistent_solve_worker_ignores_closed_pipe_on_stop(persistent_solve_worker):
+    worker, _ = persistent_solve_worker([("ready", None)], send_error_on="stop")
+
+    worker.stop()
+
+    assert worker.connection is None
+    assert worker.process is None
+
+
+@pytest.mark.parametrize(
+    ("message", "error"),
+    [
+        pytest.param(
+            ("unknown-format", {"format_name": "toml", "available": ["yaml"]}),
+            app_module.UnknownFormatError,
+            id="unknown-format",
+        ),
+        pytest.param(("error", None), RuntimeError, id="worker-error"),
+    ],
+)
+def test_persistent_solve_worker_raises_worker_error(
+    persistent_solve_worker, message, error
+):
+    worker, _ = persistent_solve_worker([("ready", None), message])
+
+    with pytest.raises(error):
+        worker.solve(["conda-forge"], ["zlib"], ["linux-64"], None, 60)
+
+
+def test_persistent_solve_worker_kills_timed_out_process(persistent_solve_worker):
+    worker, calls = persistent_solve_worker([("ready", None)], poll=False)
+
+    with pytest.raises(TimeoutError):
+        worker.solve(["conda-forge"], ["zlib"], ["linux-64"], None, 60)
+
+    assert worker.connection is None
+    assert worker.process is None
+    assert calls[-4:] == [
+        ("send", None),
+        ("parent", "close"),
+        ("process", "join:5"),
+        ("process", "join:None"),
+    ]
+
+
+def test_persistent_solve_worker_entrypoint_handles_native_requests(monkeypatch):
+    sent = []
+    requests = iter([(["conda-forge"], ["zlib"], ["linux-64"], None), None])
+    connection = SimpleNamespace(
+        recv=lambda: next(requests),
+        send=sent.append,
+        close=lambda: sent.append("closed"),
+    )
+    result = SolveResult(platform="linux-64", packages=[])
+    monkeypatch.setattr(app_module, "warmup_indexes", lambda channels, platforms: None)
+    monkeypatch.setattr(app_module, "solve_one_platform", lambda *_: result)
+
+    app_module.persistent_solve_worker_entrypoint(
+        connection, ["conda-forge"], ["linux-64"]
+    )
+
+    assert sent == [("ready", None), ("ok", [result]), "closed"]
+
+
+def test_persistent_solve_worker_entrypoint_captures_platform_errors(monkeypatch):
+    sent = []
+    requests = iter([(["conda-forge"], ["zlib"], ["linux-64"], None), None])
+    connection = SimpleNamespace(
+        recv=lambda: next(requests),
+        send=sent.append,
+        close=lambda: sent.append("closed"),
+    )
+    result = SolveResult(platform="linux-64", packages=[], error="failed")
+    monkeypatch.setattr(app_module, "warmup_indexes", lambda channels, platforms: None)
+    monkeypatch.setattr(
+        app_module,
+        "solve_one_platform",
+        lambda *_: (_ for _ in ()).throw(RuntimeError),
+    )
+    monkeypatch.setattr(app_module, "solve_result_error", lambda *_: result)
+
+    app_module.persistent_solve_worker_entrypoint(
+        connection, ["conda-forge"], ["linux-64"]
+    )
+
+    assert sent == [("ready", None), ("ok", [result]), "closed"]
+
+
+def test_persistent_solve_worker_entrypoint_handles_exporters(monkeypatch):
+    sent = []
+    requests = iter([(["conda-forge"], ["zlib"], ["linux-64"], "explicit"), None])
+    connection = SimpleNamespace(
+        recv=lambda: next(requests),
+        send=sent.append,
+        close=lambda: sent.append("closed"),
+    )
+    output_format = SimpleNamespace(render=lambda envs: ("output", "text/plain"))
+    monkeypatch.setattr(app_module, "warmup_indexes", lambda channels, platforms: None)
+    monkeypatch.setattr(
+        app_module, "solve_one_environment", lambda *_: Environment(platform="linux-64")
+    )
+    monkeypatch.setattr(app_module.OutputFormat, "named", lambda _: output_format)
+
+    app_module.persistent_solve_worker_entrypoint(
+        connection, ["conda-forge"], ["linux-64"]
+    )
+
+    assert sent == [("ready", None), ("ok", ("output", "text/plain")), "closed"]
+
+
+@pytest.mark.parametrize(
+    ("error", "expected"),
+    [
+        pytest.param(
+            app_module.UnknownFormatError("missing", []),
+            (
+                "unknown-format",
+                {"format_name": "missing", "available": []},
+            ),
+            id="unknown-format",
+        ),
+        pytest.param(RuntimeError(), ("error", None), id="solver-error"),
+    ],
+)
+def test_persistent_solve_worker_entrypoint_reports_export_errors(
+    monkeypatch, error, expected
+):
+    sent = []
+    requests = iter([(["conda-forge"], ["zlib"], ["linux-64"], "explicit"), None])
+    connection = SimpleNamespace(
+        recv=lambda: next(requests),
+        send=sent.append,
+        close=lambda: sent.append("closed"),
+    )
+    monkeypatch.setattr(app_module, "warmup_indexes", lambda channels, platforms: None)
+    monkeypatch.setattr(
+        app_module,
+        "solve_one_environment",
+        lambda *_: (_ for _ in ()).throw(error),
+    )
+
+    app_module.persistent_solve_worker_entrypoint(
+        connection, ["conda-forge"], ["linux-64"]
+    )
+
+    assert sent == [("ready", None), expected, "closed"]
+
+
+def test_persistent_solve_worker_entrypoint_handles_closed_request_pipe(monkeypatch):
+    sent = []
+    connection = SimpleNamespace(
+        recv=lambda: (_ for _ in ()).throw(EOFError),
+        send=sent.append,
+        close=lambda: sent.append("closed"),
+    )
+    monkeypatch.setattr(app_module, "warmup_indexes", lambda channels, platforms: None)
+
+    app_module.persistent_solve_worker_entrypoint(
+        connection, ["conda-forge"], ["linux-64"]
+    )
+
+    assert sent == [("ready", None), "closed"]
+
+
+def test_persistent_solve_worker_entrypoint_reports_startup_failure(monkeypatch):
+    sent = []
+    connection = SimpleNamespace(send=sent.append, close=lambda: sent.append("closed"))
+
+    def fail_warmup(*_):
+        raise RuntimeError
+
+    monkeypatch.setattr(app_module, "warmup_indexes", fail_warmup)
+
+    app_module.persistent_solve_worker_entrypoint(
+        connection, ["conda-forge"], ["linux-64"]
+    )
+
+    assert sent == [("startup-failed", None), "closed"]
 
 
 def test_run_solve_in_process_returns_worker_result(fake_solve_process):
@@ -2402,6 +2741,42 @@ async def test_on_startup_initializes(monkeypatch):
     assert dummy_app.state.solver_limiter is not None
     assert dummy_app.state.result_cache is not None
     assert len(warmup_calls) == 1
+
+
+@pytest.mark.anyio
+async def test_on_startup_starts_persistent_worker(monkeypatch):
+    started = []
+
+    def create_worker(channels, platforms):
+        return SimpleNamespace(
+            running=True,
+            start=lambda: started.append((channels, platforms)),
+        )
+
+    monkeypatch.setattr(app_module, "PERSISTENT_WORKER", True)
+    monkeypatch.setattr(app_module, "PersistentSolveWorker", create_worker)
+    dummy_app = Litestar(route_handlers=[health])
+
+    await on_startup(dummy_app)
+
+    assert started == [
+        (app_module.DEFAULT_CHANNELS, app_module.DEFAULT_PLATFORMS),
+    ]
+    assert dummy_app.state.solve_worker.running
+
+
+@pytest.mark.anyio
+async def test_on_shutdown_stops_persistent_worker(monkeypatch):
+    calls = []
+    dummy_app = Litestar(route_handlers=[health])
+    dummy_app.state.solve_worker = SimpleNamespace(stop=lambda: calls.append("stop"))
+    monkeypatch.setattr(
+        app_module, "shutdown_process_pool", lambda: calls.append("pool")
+    )
+
+    await on_shutdown(dummy_app)
+
+    assert calls == ["stop", "pool"]
 
 
 @pytest.mark.anyio

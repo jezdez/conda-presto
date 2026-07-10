@@ -45,7 +45,7 @@ Long-lived local service and conda solver integration.
 
 | Issue | Status | Summary |
 |---|:---:|---|
-| [Broker-managed local service](https://github.com/jezdez/conda-presto/issues/39) | {bdg-secondary}`proposed` | User-scoped local HTTP service that preserves warm process state |
+| [Broker-managed local service](https://github.com/jezdez/conda-presto/issues/39) | {bdg-warning}`in progress` | User-scoped local HTTP service that preserves warm process state |
 | [Full conda solver backend](https://github.com/jezdez/conda-presto/issues/40) | {bdg-secondary}`proposed` | `conda --solver=presto` backed by a public-channel local or explicit remote service |
 ````
 

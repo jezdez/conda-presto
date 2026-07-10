@@ -198,6 +198,26 @@ export CONDA_PRESTO_CHANNELS="conda-forge,bioconda"
 export CONDA_PRESTO_PLATFORMS="linux-64,osx-arm64"
 ```
 
+### Broker-managed local service
+
+conda-presto registers `conda-presto.server` with
+[conda-broker](https://jezdez.github.io/conda-broker/). The service is
+loopback-only, uses a broker-assigned port, and has a manual lifecycle:
+
+```bash
+conda broker start conda-presto.server
+conda broker wait conda-presto.server
+conda broker endpoint conda-presto.server
+```
+
+The endpoint command reports the API root; readiness probes `/health`
+separately. The broker child runs a single persistent solver worker so warmed
+repodata and indexes are actually retained between requests. A timed-out solve
+terminates that worker; the broker health check then restarts the service.
+
+See the [warmed local service tutorial](../tutorials/broker-service.md) for
+installation and use.
+
 ### Result cache
 
 Successful `/resolve` responses are stored in a content-addressed
