@@ -97,6 +97,15 @@ curl -sS "$CONDA_PRESTO_URL/preflight" \
   --json '{"specs":["python=3.13","numpy"],"channels":["conda-forge"]}' | jq
 ```
 
+Compare two revisions with `/diff`. Its top-level `platforms` list applies to
+both inputs, and lockfile inputs are read directly when they already contain
+that platform:
+
+```bash
+curl -sS "$CONDA_PRESTO_URL/diff" \
+  --json '{"from":{"specs":["python=3.12"]},"to":{"specs":["python=3.13"]},"platforms":["linux-64"]}' | jq '.diff["linux-64"]'
+```
+
 ## Output formats
 
 Add `?format=` to route the response through conda's exporter

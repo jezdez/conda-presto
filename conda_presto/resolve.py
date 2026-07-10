@@ -13,6 +13,7 @@ from conda.base.context import context
 from conda.models.environment import Environment
 from conda.models.match_spec import MatchSpec
 from conda.models.records import PackageRecord
+from conda.models.version import VersionOrder
 from conda_rattler_solver.index import RattlerIndexHelper
 from conda_rattler_solver.state import SolverInputState, SolverOutputState
 
@@ -103,6 +104,7 @@ class ResolvedPackage(msgspec.Struct):
     size: int | None
     depends: tuple[str, ...]
     constrains: tuple[str, ...]
+    manager: str = "conda"
 
     @classmethod
     def from_record(cls, record: PackageRecord) -> ResolvedPackage:
@@ -127,6 +129,103 @@ class ResolvedPackage(msgspec.Struct):
             constrains=tuple(record.constrains) if record.constrains else (),
         )
 
+    @classmethod
+    def from_external(
+        cls,
+        manager: str,
+        value: str,
+        platform: str,
+    ) -> ResolvedPackage:
+        """Convert a parsed lockfile external package into API metadata."""
+        spec = MatchSpec(value)
+        channel = spec.get("channel")
+        return cls(
+            name=spec.name,
+            version=spec.get("version") or "",
+            build=spec.get("build") or "",
+            build_number=0,
+            channel=channel.canonical_name if channel else "",
+            subdir=platform,
+            url=value,
+            sha256="",
+            md5="",
+            size=None,
+            depends=(),
+            constrains=(),
+            manager=manager,
+        )
+
+    @property
+    def identity(self) -> tuple[str, str]:
+        """Return the package identity used by review surfaces."""
+        return self.manager, self.name
+
+    def change_kind(self, other: ResolvedPackage) -> str:
+        """Classify this package's transition to *other*."""
+        if self.version == other.version:
+            return "build-change"
+        try:
+            if VersionOrder(self.version) < VersionOrder(other.version):
+                return "upgrade"
+            if VersionOrder(self.version) > VersionOrder(other.version):
+                return "downgrade"
+        except Exception:
+            pass
+        return "version-change"
+
+
+class DiffPackage(msgspec.Struct, omit_defaults=True):
+    """Stable resolved-package fields relevant to a review diff."""
+
+    manager: str
+    name: str
+    platform: str
+    version: str
+    build: str
+    channel: str
+    subdir: str
+    url: str
+    category: str | None = None
+
+    @classmethod
+    def from_resolved(
+        cls,
+        package: ResolvedPackage,
+        platform: str,
+        category: str | None = None,
+    ) -> DiffPackage:
+        """Project a solve record without hash or size churn."""
+        return cls(
+            manager=package.manager,
+            name=package.name,
+            platform=platform,
+            version=package.version,
+            build=package.build,
+            channel=package.channel,
+            subdir=package.subdir,
+            url=package.url,
+            category=category,
+        )
+
+
+class ChangedPackage(msgspec.Struct, rename={"from_": "from"}):
+    """One resolved package that differs between two environments."""
+
+    name: str
+    manager: str
+    from_: DiffPackage
+    to: DiffPackage
+    kind: str
+
+
+class PlatformDiff(msgspec.Struct):
+    """Resolved package changes for one conda platform."""
+
+    added: list[DiffPackage]
+    removed: list[DiffPackage]
+    changed: list[ChangedPackage]
+    unchanged_count: int
+
 
 class SolveResult(msgspec.Struct):
     """The result of a solve operation for a single platform.
@@ -138,6 +237,72 @@ class SolveResult(msgspec.Struct):
     platform: str
     packages: list[ResolvedPackage]
     error: str | None = None
+
+    @classmethod
+    def from_environment(cls, environment: Environment) -> SolveResult:
+        """Convert a parsed lockfile environment into a solve result."""
+        packages = [
+            ResolvedPackage.from_record(record)
+            for record in environment.explicit_packages
+        ]
+        packages.extend(
+            ResolvedPackage.from_external(manager, value, environment.platform)
+            for manager, values in environment.external_packages.items()
+            for value in values
+        )
+        return cls(
+            platform=environment.platform,
+            packages=sorted(packages, key=lambda package: package.identity),
+        )
+
+    def diff(
+        self,
+        other: SolveResult,
+        before_category: str | None = None,
+        after_category: str | None = None,
+    ) -> PlatformDiff:
+        """Return the resolved package difference from this result to *other*."""
+        if self.platform != other.platform:
+            raise ValueError("Cannot diff results for different platforms")
+
+        before = {package.identity: package for package in self.packages}
+        after = {package.identity: package for package in other.packages}
+        added = [
+            DiffPackage.from_resolved(after[key], self.platform, after_category)
+            for key in sorted(after.keys() - before.keys())
+        ]
+        removed = [
+            DiffPackage.from_resolved(before[key], self.platform, before_category)
+            for key in sorted(before.keys() - after.keys())
+        ]
+        changed = [
+            ChangedPackage(
+                name=after[key].name,
+                manager=after[key].manager,
+                from_=DiffPackage.from_resolved(
+                    before[key], self.platform, before_category
+                ),
+                to=DiffPackage.from_resolved(after[key], self.platform, after_category),
+                kind=before[key].change_kind(after[key]),
+            )
+            for key in sorted(before.keys() & after.keys())
+            if (
+                before[key].version,
+                before[key].build,
+                before[key].url,
+            )
+            != (
+                after[key].version,
+                after[key].build,
+                after[key].url,
+            )
+        ]
+        return PlatformDiff(
+            added=added,
+            removed=removed,
+            changed=changed,
+            unchanged_count=len(before.keys() & after.keys()) - len(changed),
+        )
 
 
 def configure_context():
@@ -276,10 +441,7 @@ def dispatch[T](
 
     results: dict[str, T] = {}
     pool = get_process_pool()
-    futures = {
-        pool.submit(solver_fn, channels, dependencies, p): p
-        for p in platforms
-    }
+    futures = {pool.submit(solver_fn, channels, dependencies, p): p for p in platforms}
     for future in as_completed(futures):
         platform = futures[future]
         try:
@@ -311,9 +473,7 @@ def solve_one_platform(
 def solve_result_error(platform: str, exc: Exception) -> SolveResult:
     """Wrap an exception as a ``SolveResult`` with a sanitized message."""
     log.warning("Solver dispatch error for %s: %s", platform, exc)
-    return SolveResult(
-        platform=platform, packages=[], error=safe_error_message(exc)
-    )
+    return SolveResult(platform=platform, packages=[], error=safe_error_message(exc))
 
 
 def solve(
@@ -435,8 +595,6 @@ def warmup(channels: list[str], platforms: list[str]):
     warmup_indexes(channels, platforms)
 
     pool = get_process_pool()
-    futures = [
-        pool.submit(warmup_indexes, channels, [p]) for p in platforms
-    ]
+    futures = [pool.submit(warmup_indexes, channels, [p]) for p in platforms]
     for f in futures:
         f.result()
