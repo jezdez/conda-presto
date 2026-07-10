@@ -86,6 +86,17 @@ curl -sS --json '{
 `curl --json` sets `Content-Type: application/json` automatically.
 Body fields override query parameters when both are present.
 
+## Reviewing a proposed environment
+
+Run local checks before asking the solver for metadata. Preflight accepts the
+same request body as `/resolve`, but it never contacts channels or attempts a
+solve:
+
+```bash
+curl -sS "$CONDA_PRESTO_URL/preflight" \
+  --json '{"specs":["python=3.13","numpy"],"channels":["conda-forge"]}' | jq
+```
+
 ## Output formats
 
 Add `?format=` to route the response through conda's exporter

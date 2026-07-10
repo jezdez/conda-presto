@@ -82,6 +82,7 @@ import anyio
 import msgspec
 from conda.base.constants import KNOWN_SUBDIRS
 from conda.core.subdir_data import SubdirData
+from conda.exceptions import CondaError
 from conda.models.channel import Channel
 from litestar import Litestar, Request, get, post
 from litestar.config.compression import CompressionConfig
@@ -125,6 +126,7 @@ from .config import (
 from .exceptions import UnknownFormatError
 from .exporter import OutputFormat
 from .inputs import ParsedInputFile
+from .preflight import PreflightResult
 from .resolve import (
     NATIVE_SUBDIR,
     VIRTUAL_PACKAGES,
@@ -175,6 +177,75 @@ class ResolveRequest:
     filename: str | None = None
     channels: list[str] | None = None
     platforms: list[str] | None = None
+
+    @classmethod
+    async def from_http(
+        cls,
+        request: Request,
+        spec: list[str] | None = None,
+        channel: list[str] | None = None,
+        platform: list[str] | None = None,
+        filename: str | None = None,
+    ) -> ResolveRequest | Response:
+        """Decode the JSON or raw-file request shape shared by resolve surfaces."""
+        content_type = (
+            request.headers.get("content-type", "").split(";")[0].strip().lower()
+        )
+
+        if content_type in ("", "application/json"):
+            body = await request.body()
+            if body:
+                try:
+                    data = msgspec.json.decode(body, type=cls)
+                except (msgspec.DecodeError, msgspec.ValidationError) as exc:
+                    return Response(
+                        {"error": f"Invalid JSON body: {exc}"},
+                        status_code=HTTP_400_BAD_REQUEST,
+                    )
+            else:
+                data = cls()
+            return cls(
+                specs=data.specs if data.specs is not None else (spec or []),
+                channels=(
+                    data.channels if data.channels is not None else (channel or [])
+                ),
+                platforms=(
+                    data.platforms if data.platforms is not None else (platform or [])
+                ),
+                file=data.file,
+                filename=data.filename or filename,
+            )
+
+        if content_type in RAW_CONTENT_TYPE_EXTENSIONS:
+            body = await request.body()
+            try:
+                content = body.decode("utf-8")
+            except UnicodeDecodeError as exc:
+                return Response(
+                    {"error": f"Body is not valid UTF-8: {exc}"},
+                    status_code=HTTP_400_BAD_REQUEST,
+                )
+            return cls(
+                specs=spec or [],
+                channels=channel or [],
+                platforms=platform or [],
+                file=content,
+                filename=filename
+                or f"environment{RAW_CONTENT_TYPE_EXTENSIONS[content_type]}",
+            )
+
+        return Response(
+            {
+                "error": (
+                    f"Unsupported Content-Type {content_type!r}. "
+                    "Use application/json for a ResolveRequest envelope, "
+                    "or application/yaml / application/toml / text/plain "
+                    "for a raw input file body."
+                ),
+                "supported": ["application/json", *sorted(RAW_CONTENT_TYPE_EXTENSIONS)],
+            },
+            status_code=HTTP_400_BAD_REQUEST,
+        )
 
 
 @dataclass
@@ -400,7 +471,10 @@ class ResultCache:
 
 
 def validate_caps(
-    specs: list[str], channels: list[str], platforms: list[str]
+    specs: list[str],
+    channels: list[str],
+    platforms: list[str],
+    validate_channel_allowlist: bool = True,
 ) -> Response | None:
     """Return a 400 response if per-request caps are exceeded, else None."""
     if len(specs) > MAX_SPECS:
@@ -442,8 +516,9 @@ def validate_caps(
             },
             status_code=HTTP_400_BAD_REQUEST,
         )
-    if channel_error := validate_channels(channels):
-        return channel_error
+    if validate_channel_allowlist:
+        if channel_error := validate_channels(channels):
+            return channel_error
     return None
 
 
@@ -505,7 +580,7 @@ async def parse_input_for_request(
             {"error": f"Parse exceeded {PARSE_TIMEOUT_S}s timeout"},
             status_code=HTTP_504_GATEWAY_TIMEOUT,
         )
-    except ValueError as exc:
+    except (CondaError, ValueError) as exc:
         return Response({"error": str(exc)}, status_code=HTTP_400_BAD_REQUEST)
 
 
@@ -792,61 +867,16 @@ async def resolve_post(
     through conda's exporter plugin registry.  ``format`` is
     query-only; it is not read from the JSON body.
     """
-    content_type = request.headers.get("content-type", "").split(";")[0].strip().lower()
+    data = await ResolveRequest.from_http(request, spec, channel, platform, filename)
+    if isinstance(data, Response):
+        return data
 
-    file_content: str | None = None
-    file_name: str | None = None
+    file_content = data.file
+    file_name = data.filename
+    specs = data.specs or []
+    channels = data.channels or []
+    platforms = data.platforms or []
     parsed_file: ParsedInputFile | None = None
-
-    if content_type in ("", "application/json"):
-        body = await request.body()
-        if body:
-            try:
-                data = msgspec.json.decode(body, type=ResolveRequest)
-            except (msgspec.DecodeError, msgspec.ValidationError) as exc:
-                return Response(
-                    {"error": f"Invalid JSON body: {exc}"},
-                    status_code=HTTP_400_BAD_REQUEST,
-                )
-        else:
-            data = ResolveRequest()
-
-        specs = data.specs if data.specs is not None else (spec or [])
-        channels = data.channels if data.channels is not None else (channel or [])
-        platforms = data.platforms if data.platforms is not None else (platform or [])
-        file_content = data.file
-        file_name = data.filename or filename
-    elif content_type in RAW_CONTENT_TYPE_EXTENSIONS:
-        body = await request.body()
-        try:
-            file_content = body.decode("utf-8")
-        except UnicodeDecodeError as exc:
-            return Response(
-                {"error": f"Body is not valid UTF-8: {exc}"},
-                status_code=HTTP_400_BAD_REQUEST,
-            )
-        file_name = filename or (
-            f"environment{RAW_CONTENT_TYPE_EXTENSIONS[content_type]}"
-        )
-        specs = spec or []
-        channels = channel or []
-        platforms = platform or []
-    else:
-        return Response(
-            {
-                "error": (
-                    f"Unsupported Content-Type {content_type!r}. "
-                    "Use application/json for a ResolveRequest envelope, "
-                    "or application/yaml / application/toml / text/plain "
-                    "for a raw input file body."
-                ),
-                "supported": [
-                    "application/json",
-                    *sorted(RAW_CONTENT_TYPE_EXTENSIONS),
-                ],
-            },
-            status_code=HTTP_400_BAD_REQUEST,
-        )
 
     if file_content is not None:
         parsed = await parse_input_for_request(
@@ -887,6 +917,53 @@ async def resolve_post(
     return await run_cached_solve(
         request, specs, channels, platforms or None, format_name=format
     )
+
+
+@post("/preflight", status_code=200)
+async def preflight_post(
+    request: Request,
+    spec: FromQuery[list[str] | None] = None,
+    channel: FromQuery[list[str] | None] = None,
+    platform: FromQuery[list[str] | None] = None,
+    filename: FromQuery[str | None] = None,
+) -> Response:
+    """Validate a resolve request without a solve or channel access."""
+    data = await ResolveRequest.from_http(request, spec, channel, platform, filename)
+    if isinstance(data, Response):
+        return data
+
+    specs = list(data.specs or [])
+    channels = list(data.channels or [])
+    if data.file is not None:
+        parsed = await parse_input_for_request(
+            request,
+            data.file,
+            data.filename,
+            data.platforms or [NATIVE_SUBDIR],
+        )
+        if isinstance(parsed, Response):
+            if parsed.status_code != HTTP_400_BAD_REQUEST:
+                return parsed
+            return Response(
+                PreflightResult.from_values(
+                    specs,
+                    channels,
+                    data.file,
+                    str(parsed.content["error"]),
+                )
+            )
+        specs.extend(parsed.specs)
+        if not channels:
+            channels = parsed.channels
+
+    if cap_error := validate_caps(
+        specs,
+        channels,
+        data.platforms or [],
+        validate_channel_allowlist=False,
+    ):
+        return cap_error
+    return Response(PreflightResult.from_values(specs, channels, data.file))
 
 
 @post(
@@ -1143,6 +1220,7 @@ app = Litestar(
     route_handlers=[
         resolve_get,
         resolve_post,
+        preflight_post,
         transcode_post,
         result_get,
         formats,
