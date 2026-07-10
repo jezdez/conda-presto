@@ -5,7 +5,7 @@ FROM ghcr.io/prefix-dev/pixi:${PIXI_VERSION} AS build
 ARG PIXI_ENV=prod
 
 WORKDIR /app
-COPY pyproject.toml pixi.lock ./
+COPY pyproject.toml pixi.lock README.md ./
 COPY conda_presto/ conda_presto/
 ARG CONDA_PRESTO_VERSION=0.0.0
 ENV SETUPTOOLS_SCM_PRETEND_VERSION=${CONDA_PRESTO_VERSION}

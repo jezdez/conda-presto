@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.1] - 2026-07-10
+
+### Fixed
+
+- Published Docker server images now include the Redis client required
+  by the Redis result-cache backend.
+- Docker server builds now include the package README required by the
+  distribution metadata.
+
 ## [0.5.0] - 2026-07-10
 
 ### Added
