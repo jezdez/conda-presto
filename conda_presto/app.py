@@ -958,8 +958,7 @@ async def transcode_post(
         )
 
     target_platforms = platforms or [NATIVE_SUBDIR]
-    requested_channels = (channel or []) + body_channels
-    if cap_error := validate_caps([], requested_channels, target_platforms):
+    if cap_error := validate_caps([], [], target_platforms):
         return cap_error
 
     has_extra_specs = bool(spec) or bool(body_specs)
