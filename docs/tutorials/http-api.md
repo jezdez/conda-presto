@@ -106,6 +106,14 @@ curl -sS "$CONDA_PRESTO_URL/diff" \
   --json '{"from":{"specs":["python=3.12"]},"to":{"specs":["python=3.13"]},"platforms":["linux-64"]}' | jq '.diff["linux-64"]'
 ```
 
+To see why a package is present, ask for one platform and follow the returned
+chains from requested specs to the package:
+
+```bash
+curl -sS "$CONDA_PRESTO_URL/explain" \
+  --json '{"package":"zlib","specs":["python"],"platforms":["linux-64"]}' | jq '.chains'
+```
+
 ## Output formats
 
 Add `?format=` to route the response through conda's exporter

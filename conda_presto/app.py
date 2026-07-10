@@ -6,6 +6,7 @@ Endpoints:
 - ``POST /resolve`` — resolve specs and/or file content via JSON body
 - ``POST /preflight`` — validate input locally without solving
 - ``POST /diff`` — compare two resolved inputs
+- ``POST /explain`` — show dependency chains for one resolved package
 - ``POST /transcode`` — convert one lockfile format to another
 - ``GET /r/{hash}`` — fetch a stored content-addressed resolve result
 - ``GET /formats`` — list registered output format names
@@ -405,6 +406,27 @@ class ValidationErrorResponse(msgspec.Struct, omit_defaults=True):
     status_code: int
     detail: str
     extra: list[dict[str, str]] | None = None
+
+
+class ExplainRequest(msgspec.Struct, forbid_unknown_fields=True):
+    """JSON body for ``POST /explain``."""
+
+    package: str
+    specs: list[str] | None = None
+    file: str | None = None
+    filename: str | None = None
+    channels: list[str] | None = None
+    platforms: list[str] | None = None
+
+    def resolve_request(self) -> ResolveRequest:
+        """Return this explanation request as a normal resolve request."""
+        return ResolveRequest(
+            specs=self.specs,
+            file=self.file,
+            filename=self.filename,
+            channels=self.channels,
+            platforms=self.platforms,
+        )
 
 
 class StoredResult(msgspec.Struct):
@@ -1232,6 +1254,52 @@ async def diff_post(request: Request, data: DiffRequest) -> Response:
     )
 
 
+@post("/explain", status_code=200)
+async def explain_post(request: Request) -> Response:
+    """Explain why a package appears in a single-platform resolution."""
+    try:
+        data = msgspec.json.decode(await request.body(), type=ExplainRequest)
+    except (msgspec.DecodeError, msgspec.ValidationError) as exc:
+        return Response(
+            {"error": f"Invalid JSON body: {exc}"},
+            status_code=HTTP_400_BAD_REQUEST,
+        )
+    if not data.package:
+        return Response(
+            {"error": "Provide a package name"},
+            status_code=HTTP_400_BAD_REQUEST,
+        )
+
+    source = await ResolveInput.from_request(
+        request,
+        data.resolve_request(),
+        default_platforms=[NATIVE_SUBDIR],
+    )
+    if isinstance(source, Response):
+        return source
+    if len(source.platforms) != 1:
+        return Response(
+            {"error": "/explain requires exactly one platform"},
+            status_code=HTTP_400_BAD_REQUEST,
+        )
+    results = await source.results(request)
+    if isinstance(results, Response):
+        return results
+    result = results[0]
+    if result.error is not None:
+        return Response(
+            {"error": result.error},
+            status_code=HTTP_422_UNPROCESSABLE_ENTITY,
+        )
+    explanation = result.explain(source.specs, data.package)
+    if explanation is None:
+        return Response(
+            {"error": f"Package not found: {data.package}"},
+            status_code=HTTP_404_NOT_FOUND,
+        )
+    return Response(explanation)
+
+
 @post(
     "/transcode",
     status_code=200,
@@ -1488,6 +1556,7 @@ app = Litestar(
         resolve_post,
         preflight_post,
         diff_post,
+        explain_post,
         transcode_post,
         result_get,
         formats,
