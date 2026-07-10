@@ -122,6 +122,7 @@ jobs:
     needs: [publish-pypi]
 
     permissions:
+      actions: write # Dispatch the Docker image publish workflow.
       contents: write # Publish the draft release after PyPI succeeds.
 
     steps:
@@ -131,3 +132,10 @@ jobs:
           GH_REPO: ${{ github.repository }}
           RELEASE_TAG: ${{ github.ref_name }}
         run: gh release edit "$RELEASE_TAG" --repo "$GH_REPO" --draft=false
+
+      - name: Publish Docker images
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: gh workflow run docker.yml --repo "$GH_REPO" --ref "$RELEASE_TAG" -f tag="$RELEASE_TAG"
