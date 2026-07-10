@@ -133,6 +133,46 @@ curl -sS http://localhost:8000/preflight \
 
 ---
 
+### `POST /repair`
+
+Return bounded, verified single-spec relaxations for an infeasible inline
+solve. It accepts `specs`, `channels`, and `platforms`; it does not parse files
+or change channels. Every returned suggestion is solved across every requested
+platform.
+
+The initial strategies relax an exact `==` pin or drop one side of a simple
+bounded version range. Fuzzy equality such as `python=3.12` is not rewritten.
+Candidate selection stops at the smallest of the request parameters and the
+server caps: `max_suggestions`, `max_attempts`, and `time_budget_ms`.
+
+```bash
+curl -sS 'http://localhost:8000/repair?max_suggestions=3&max_attempts=10' \
+  --json '{"specs":["scipy==1.5"],"channels":["conda-forge"],"platforms":["linux-64"]}'
+```
+
+```json
+{
+  "feasible": false,
+  "diagnosis": {"kind": "solver_conflict", "summary": "..."},
+  "suggestions": [
+    {
+      "rank": 1,
+      "changes": [{"from": "scipy==1.5", "to": "scipy", "strategy": "relax_exact_pin"}],
+      "verified": true,
+      "evidence": {"solve_attempts": 1, "platforms": ["linux-64"]}
+    }
+  ],
+  "partial": false,
+  "completion_reason": "exhausted"
+}
+```
+
+`partial` is true when the suggestion, attempt, or time limit ended the search
+before every candidate was evaluated. `completion_reason` is one of `feasible`,
+`exhausted`, `suggestion_limit`, `attempt_limit`, or `time_limit`.
+
+---
+
 ### `POST /diff`
 
 Compare two resolve inputs. Both `from` and `to` use the `ResolveRequest`

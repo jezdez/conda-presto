@@ -36,7 +36,7 @@ New solver-facing verbs and review surfaces.
 
 | Issue | Status | Summary |
 |---|:---:|---|
-| [Repair suggestions](https://github.com/jezdez/conda-presto/issues/13) | {bdg-secondary}`proposed` | Verified, ranked repair suggestions for infeasible solves |
+| [Repair suggestions](https://github.com/jezdez/conda-presto/issues/13) | {bdg-warning}`in progress` | Verified, ranked repair suggestions for infeasible solves |
 ````
 
 ````{tab-item} Integration

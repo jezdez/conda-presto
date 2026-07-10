@@ -65,3 +65,19 @@ def test_result_cache_max_memory_mb_converts_to_bytes(monkeypatch, raw, expected
     finally:
         monkeypatch.delenv("CONDA_PRESTO_RESULT_CACHE_MAX_MEMORY_MB", raising=False)
         importlib.reload(config_module)
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        pytest.param("CONDA_PRESTO_MAX_REPAIR_SUGGESTIONS", id="suggestions"),
+        pytest.param("CONDA_PRESTO_MAX_REPAIR_ATTEMPTS", id="attempts"),
+        pytest.param("CONDA_PRESTO_MAX_REPAIR_TIME_BUDGET_MS", id="time-budget"),
+    ],
+)
+def test_repair_limits_must_be_positive(monkeypatch, name):
+    monkeypatch.setenv(name, "0")
+    with pytest.raises(ValueError, match="Repair limits must be positive"):
+        importlib.reload(config_module)
+    monkeypatch.delenv(name)
+    importlib.reload(config_module)

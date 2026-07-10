@@ -30,6 +30,7 @@ from conda_presto.app import (
     parse,
     platforms,
     preflight_post,
+    repair_post,
     resolve_get,
     resolve_post,
     result_get,
@@ -47,6 +48,7 @@ def test_app():
             resolve_get,
             resolve_post,
             preflight_post,
+            repair_post,
             diff_post,
             explain_post,
             transcode_post,
@@ -1276,6 +1278,302 @@ async def test_preflight_post_uses_channels_from_a_parsed_file(client):
 
     assert resp.status_code == 200
     assert resp.json()["ok"] is True
+
+
+@pytest.mark.anyio
+async def test_repair_post_returns_no_suggestions_for_a_feasible_request(
+    client, monkeypatch
+):
+    calls = []
+
+    async def fake_run_solve(
+        request, specs, channels, platforms, format_name=None, timeout_s=None
+    ):
+        calls.append((specs, channels, platforms, timeout_s))
+        return (
+            msgspec.json.encode(
+                [SolveResult(platform=platform, packages=[]) for platform in platforms]
+            ),
+            "application/json",
+        )
+
+    monkeypatch.setattr(app_module, "run_solve", fake_run_solve)
+    response = await client.post("/repair", json={"specs": ["scipy==1.5"]})
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "feasible": True,
+        "diagnosis": None,
+        "suggestions": [],
+        "partial": False,
+        "completion_reason": "feasible",
+    }
+    assert len(calls) == 1
+
+
+@pytest.mark.anyio
+async def test_repair_post_verifies_an_exact_pin_relaxation_on_every_platform(
+    client, monkeypatch
+):
+    async def fake_run_solve(
+        request, specs, channels, platforms, format_name=None, timeout_s=None
+    ):
+        error = "Unsatisfiable environment" if specs == ["scipy==1.5"] else None
+        return (
+            msgspec.json.encode(
+                [
+                    SolveResult(platform=platform, packages=[], error=error)
+                    for platform in platforms
+                ]
+            ),
+            "application/json",
+        )
+
+    monkeypatch.setattr(app_module, "run_solve", fake_run_solve)
+    response = await client.post(
+        "/repair",
+        json={
+            "specs": ["scipy==1.5"],
+            "channels": ["conda-forge"],
+            "platforms": ["linux-64", "osx-arm64"],
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "feasible": False,
+        "diagnosis": {
+            "kind": "solver_conflict",
+            "summary": "Unsatisfiable environment",
+        },
+        "suggestions": [
+            {
+                "rank": 1,
+                "changes": [
+                    {
+                        "from": "scipy==1.5",
+                        "to": "scipy",
+                        "strategy": "relax_exact_pin",
+                    }
+                ],
+                "verified": True,
+                "evidence": {
+                    "solve_attempts": 1,
+                    "platforms": ["linux-64", "osx-arm64"],
+                },
+            }
+        ],
+        "partial": False,
+        "completion_reason": "exhausted",
+    }
+
+
+@pytest.mark.anyio
+async def test_repair_post_relaxes_one_side_of_a_bounded_spec(client, monkeypatch):
+    async def fake_run_solve(
+        request, specs, channels, platforms, format_name=None, timeout_s=None
+    ):
+        error = None if specs == ["conda-forge::scipy[version='>=1.5']"] else "no"
+        return (
+            msgspec.json.encode(
+                [
+                    SolveResult(platform=platform, packages=[], error=error)
+                    for platform in platforms
+                ]
+            ),
+            "application/json",
+        )
+
+    monkeypatch.setattr(app_module, "run_solve", fake_run_solve)
+    response = await client.post(
+        "/repair",
+        json={
+            "specs": ["conda-forge::scipy>=1.5,<2"],
+            "platforms": ["linux-64"],
+        },
+    )
+
+    assert response.status_code == 200
+    suggestion = response.json()["suggestions"][0]
+    assert suggestion["changes"] == [
+        {
+            "from": "conda-forge::scipy>=1.5,<2",
+            "to": "conda-forge::scipy[version='>=1.5']",
+            "strategy": "drop_upper_bound",
+        }
+    ]
+    assert suggestion["verified"] is True
+
+
+@pytest.mark.anyio
+async def test_repair_post_keeps_verified_results_when_the_attempt_budget_ends(
+    client, monkeypatch
+):
+    async def fake_run_solve(
+        request, specs, channels, platforms, format_name=None, timeout_s=None
+    ):
+        solved = specs == ["first", "second==1"]
+        return (
+            msgspec.json.encode(
+                [
+                    SolveResult(
+                        platform=platform,
+                        packages=[],
+                        error=None if solved else "Unsatisfiable environment",
+                    )
+                    for platform in platforms
+                ]
+            ),
+            "application/json",
+        )
+
+    monkeypatch.setattr(app_module, "run_solve", fake_run_solve)
+    response = await client.post(
+        "/repair?max_attempts=1",
+        json={"specs": ["first==1", "second==1"]},
+    )
+
+    assert response.status_code == 200
+    result = response.json()
+    assert result["suggestions"][0]["changes"][0]["from"] == "first==1"
+    assert result["partial"] is True
+    assert result["completion_reason"] == "attempt_limit"
+
+
+@pytest.mark.anyio
+async def test_repair_post_applies_the_server_attempt_cap(client, monkeypatch):
+    calls = 0
+
+    async def fake_run_solve(
+        request, specs, channels, platforms, format_name=None, timeout_s=None
+    ):
+        nonlocal calls
+        calls += 1
+        return (
+            msgspec.json.encode(
+                [
+                    SolveResult(
+                        platform=platform,
+                        packages=[],
+                        error="Unsatisfiable environment",
+                    )
+                    for platform in platforms
+                ]
+            ),
+            "application/json",
+        )
+
+    monkeypatch.setattr(app_module, "MAX_REPAIR_ATTEMPTS", 1)
+    monkeypatch.setattr(app_module, "run_solve", fake_run_solve)
+    response = await client.post(
+        "/repair?max_attempts=99",
+        json={"specs": ["first==1", "second==1"]},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["completion_reason"] == "attempt_limit"
+    assert calls == 2
+
+
+@pytest.mark.anyio
+async def test_repair_post_stops_after_the_suggestion_limit(client, monkeypatch):
+    async def fake_run_solve(
+        request, specs, channels, platforms, format_name=None, timeout_s=None
+    ):
+        solved = specs != ["first==1", "second==1"]
+        return (
+            msgspec.json.encode(
+                [
+                    SolveResult(
+                        platform=platform,
+                        packages=[],
+                        error=None if solved else "Unsatisfiable environment",
+                    )
+                    for platform in platforms
+                ]
+            ),
+            "application/json",
+        )
+
+    monkeypatch.setattr(app_module, "run_solve", fake_run_solve)
+    response = await client.post(
+        "/repair?max_suggestions=1",
+        json={"specs": ["first==1", "second==1"]},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["completion_reason"] == "suggestion_limit"
+
+
+@pytest.mark.anyio
+async def test_repair_post_keeps_verified_results_when_a_candidate_times_out(
+    client, monkeypatch
+):
+    calls = 0
+
+    async def fake_run_solve(
+        request, specs, channels, platforms, format_name=None, timeout_s=None
+    ):
+        nonlocal calls
+        calls += 1
+        if calls == 3:
+            return app_module.Response(
+                app_module.ErrorResponse(error="Solve exceeded timeout"),
+                status_code=504,
+            )
+        solved = calls == 2
+        return (
+            msgspec.json.encode(
+                [
+                    SolveResult(
+                        platform=platform,
+                        packages=[],
+                        error=None if solved else "Unsatisfiable environment",
+                    )
+                    for platform in platforms
+                ]
+            ),
+            "application/json",
+        )
+
+    monkeypatch.setattr(app_module, "run_solve", fake_run_solve)
+    response = await client.post(
+        "/repair",
+        json={"specs": ["first==1", "second==1"]},
+    )
+
+    assert response.status_code == 200
+    result = response.json()
+    assert len(result["suggestions"]) == 1
+    assert result["partial"] is True
+    assert result["completion_reason"] == "time_limit"
+
+
+@pytest.mark.anyio
+async def test_repair_post_returns_unexpected_solver_errors(client, monkeypatch):
+    async def fake_run_solve(*args, **kwargs):
+        return app_module.Response(
+            app_module.ErrorResponse(error="Internal solver error"), status_code=500
+        )
+
+    monkeypatch.setattr(app_module, "run_solve", fake_run_solve)
+    response = await client.post("/repair", json={"specs": ["zlib"]})
+
+    assert response.status_code == 500
+    assert response.json() == {"error": "Internal solver error"}
+
+
+@pytest.mark.anyio
+async def test_repair_post_rejects_invalid_requests(client):
+    unknown = await client.post("/repair", json={"specs": ["zlib"], "unknown": True})
+    malformed = await client.post("/repair", json={"specs": ["not[build=]"]})
+    invalid_limit = await client.post(
+        "/repair?max_attempts=0", json={"specs": ["zlib"]}
+    )
+
+    assert unknown.status_code == 400
+    assert malformed.status_code == 400
+    assert invalid_limit.status_code == 400
 
 
 @pytest.mark.anyio

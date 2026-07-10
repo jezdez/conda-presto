@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `POST /repair` for bounded, solver-verified single-spec relaxations of infeasible requests.
+
 ## [0.6.0] - 2026-07-10
 
 ### Added

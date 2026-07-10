@@ -5,6 +5,7 @@ Endpoints:
 - ``GET /resolve`` — resolve specs via query params
 - ``POST /resolve`` — resolve specs and/or file content via JSON body
 - ``POST /preflight`` — validate input locally without solving
+- ``POST /repair`` — suggest verified relaxations for infeasible specs
 - ``POST /diff`` — compare two resolved inputs
 - ``POST /explain`` — show dependency chains for one resolved package
 - ``POST /transcode`` — convert one lockfile format to another
@@ -76,10 +77,12 @@ import hashlib
 import json
 import logging
 import multiprocessing
+import time
 from collections import OrderedDict
 from dataclasses import dataclass, field, replace
 from importlib.metadata import version as pkg_version
 from pathlib import Path
+from typing import Annotated
 
 import anyio
 import msgspec
@@ -87,6 +90,7 @@ from conda.base.constants import KNOWN_SUBDIRS
 from conda.core.subdir_data import SubdirData
 from conda.exceptions import CondaError
 from conda.models.channel import Channel
+from conda.models.match_spec import MatchSpec
 from litestar import Litestar, Request, get, post
 from litestar.config.compression import CompressionConfig
 from litestar.config.cors import CORSConfig
@@ -94,7 +98,7 @@ from litestar.logging import LoggingConfig
 from litestar.middleware.logging import LoggingMiddlewareConfig
 from litestar.middleware.rate_limit import RateLimitConfig
 from litestar.openapi import OpenAPIConfig, ResponseSpec
-from litestar.params import FromPath, FromQuery
+from litestar.params import FromPath, FromQuery, QueryParameter
 from litestar.response import Response
 from litestar.status_codes import (
     HTTP_400_BAD_REQUEST,
@@ -116,6 +120,9 @@ from .config import (
     MAX_CHANNELS,
     MAX_CONCURRENCY,
     MAX_PLATFORMS,
+    MAX_REPAIR_ATTEMPTS,
+    MAX_REPAIR_SUGGESTIONS,
+    MAX_REPAIR_TIME_BUDGET_MS,
     MAX_SPECS,
     PARSE_TIMEOUT_S,
     RATE_LIMIT,
@@ -442,6 +449,202 @@ class ExplainRequest(msgspec.Struct, forbid_unknown_fields=True):
             channels=self.channels,
             platforms=self.platforms,
         )
+
+
+class RepairRequest(msgspec.Struct, forbid_unknown_fields=True):
+    """JSON body for ``POST /repair``."""
+
+    specs: list[str]
+    channels: list[str] | None = None
+    platforms: list[str] | None = None
+
+
+class RepairChange(msgspec.Struct, rename={"from_": "from"}):
+    """One user-supplied spec changed by a repair suggestion."""
+
+    from_: str
+    to: str
+    strategy: str
+
+
+class RepairEvidence(msgspec.Struct):
+    """Verification details for a repair suggestion."""
+
+    solve_attempts: int
+    platforms: list[str]
+
+
+class RepairSuggestion(msgspec.Struct):
+    """A verified repair candidate."""
+
+    rank: int
+    changes: list[RepairChange]
+    verified: bool
+    evidence: RepairEvidence
+
+
+class RepairDiagnosis(msgspec.Struct):
+    """A bounded summary of why the original request did not solve."""
+
+    kind: str
+    summary: str
+
+
+class RepairResult(msgspec.Struct):
+    """Response body for ``POST /repair``."""
+
+    feasible: bool
+    diagnosis: RepairDiagnosis | None
+    suggestions: list[RepairSuggestion]
+    partial: bool
+    completion_reason: str
+
+
+@dataclass
+class RepairCandidate:
+    """One bounded change to an input spec list."""
+
+    specs: list[str]
+    change: RepairChange
+
+
+@dataclass
+class RepairSearch:
+    """Evaluate bounded, solver-verified repairs for one request."""
+
+    specs: list[str]
+    match_specs: list[MatchSpec]
+    channels: list[str]
+    platforms: list[str]
+    max_suggestions: int
+    max_attempts: int
+    deadline: float
+    attempts: int = 0
+    suggestions: list[RepairSuggestion] = field(default_factory=list)
+
+    def candidates(self) -> list[RepairCandidate]:
+        """Return deterministic single-spec relaxation candidates."""
+        candidates = []
+        seen = set()
+        for position, spec in enumerate(self.match_specs):
+            replacements = []
+            if spec.get_exact_value("version") is not None:
+                replacements.append(("*", "relax_exact_pin"))
+            else:
+                version = spec.get_raw_value("version")
+                bounds = version.split(",") if version else []
+                lower = [bound for bound in bounds if bound.startswith((">=", ">"))]
+                upper = [bound for bound in bounds if bound.startswith(("<=", "<"))]
+                if len(bounds) == 2 and len(lower) == len(upper) == 1:
+                    replacements.extend(
+                        [
+                            (lower[0], "drop_upper_bound"),
+                            (upper[0], "drop_lower_bound"),
+                        ]
+                    )
+            for version, strategy in replacements:
+                candidate_specs = list(self.specs)
+                candidate_specs[position] = str(MatchSpec(spec, version=version))
+                if tuple(candidate_specs) in seen:
+                    continue
+                seen.add(tuple(candidate_specs))
+                candidates.append(
+                    RepairCandidate(
+                        specs=candidate_specs,
+                        change=RepairChange(
+                            from_=self.specs[position],
+                            to=candidate_specs[position],
+                            strategy=strategy,
+                        ),
+                    )
+                )
+        return candidates
+
+    async def evaluate(
+        self, request: Request, specs: list[str]
+    ) -> Response | list[SolveResult] | None:
+        """Solve a candidate within the remaining repair budget."""
+        timeout_s = min(SOLVE_TIMEOUT_S, self.deadline - time.monotonic())
+        if timeout_s <= 0:
+            return None
+        payload = await run_solve(
+            request,
+            specs,
+            self.channels,
+            self.platforms,
+            timeout_s=timeout_s,
+        )
+        if isinstance(payload, Response):
+            if payload.status_code == HTTP_504_GATEWAY_TIMEOUT:
+                return None
+            return payload
+        body, _ = payload
+        return msgspec.json.decode(body, type=list[SolveResult])
+
+    def result(
+        self,
+        diagnosis: RepairDiagnosis,
+        partial: bool,
+        completion_reason: str,
+    ) -> RepairResult:
+        """Build the repair result from the completed search state."""
+        return RepairResult(
+            feasible=False,
+            diagnosis=diagnosis,
+            suggestions=self.suggestions,
+            partial=partial,
+            completion_reason=completion_reason,
+        )
+
+    async def run(self, request: Request) -> RepairResult | Response:
+        """Evaluate the original request and then its candidates."""
+        original = await self.evaluate(request, self.specs)
+        if isinstance(original, Response):
+            return original
+        if original is None:
+            return Response(
+                ErrorResponse(error="Repair exceeded its time budget"),
+                status_code=HTTP_504_GATEWAY_TIMEOUT,
+            )
+        if all(result.error is None for result in original):
+            return RepairResult(
+                feasible=True,
+                diagnosis=None,
+                suggestions=[],
+                partial=False,
+                completion_reason="feasible",
+            )
+
+        diagnosis = RepairDiagnosis(
+            kind="solver_conflict",
+            summary=next(
+                result.error for result in original if result.error is not None
+            ),
+        )
+        for candidate in self.candidates():
+            if len(self.suggestions) == self.max_suggestions:
+                return self.result(diagnosis, True, "suggestion_limit")
+            if self.attempts == self.max_attempts:
+                return self.result(diagnosis, True, "attempt_limit")
+            self.attempts += 1
+            results = await self.evaluate(request, candidate.specs)
+            if isinstance(results, Response):
+                return results
+            if results is None:
+                return self.result(diagnosis, True, "time_limit")
+            if all(result.error is None for result in results):
+                self.suggestions.append(
+                    RepairSuggestion(
+                        rank=len(self.suggestions) + 1,
+                        changes=[candidate.change],
+                        verified=True,
+                        evidence=RepairEvidence(
+                            solve_attempts=self.attempts,
+                            platforms=self.platforms,
+                        ),
+                    )
+                )
+        return self.result(diagnosis, False, "exhausted")
 
 
 class StoredResult(msgspec.Struct):
@@ -775,6 +978,7 @@ async def run_solve(
     channels: list[str],
     platforms: list[str] | None,
     format_name: str | None = None,
+    timeout_s: float | None = None,
 ) -> Response | tuple[bytes, str]:
     """Shared solve runner: threadpool + timeout + error sanitization.
 
@@ -784,10 +988,11 @@ async def run_solve(
     string body with a format-appropriate ``Content-Type``).
     """
 
+    timeout_s = SOLVE_TIMEOUT_S if timeout_s is None else timeout_s
     try:
         limiter = request.app.state.solver_limiter
         if limiter is None:
-            with anyio.fail_after(SOLVE_TIMEOUT_S):
+            with anyio.fail_after(timeout_s):
                 result = await anyio.to_thread.run_sync(
                     run_solve_work,
                     channels,
@@ -803,19 +1008,19 @@ async def run_solve(
                 specs,
                 platforms,
                 format_name,
-                SOLVE_TIMEOUT_S,
+                timeout_s,
                 limiter=limiter,
             )
     except TimeoutError:
         log.warning(
             "Solve timeout after %ss (specs=%d platforms=%s format=%s)",
-            SOLVE_TIMEOUT_S,
+            timeout_s,
             len(specs),
             platforms,
             format_name,
         )
         return Response(
-            {"error": f"Solve exceeded {SOLVE_TIMEOUT_S}s timeout"},
+            {"error": f"Solve exceeded {timeout_s}s timeout"},
             status_code=HTTP_504_GATEWAY_TIMEOUT,
         )
     except UnknownFormatError as exc:
@@ -856,7 +1061,7 @@ def run_solve_in_process(
     specs: list[str],
     platforms: list[str] | None,
     format_name: str | None,
-    timeout_s: int,
+    timeout_s: float,
 ) -> list | tuple[str, str]:
     """Run solve work in a child process that can be terminated on timeout."""
     ctx = multiprocessing.get_context("spawn")
@@ -1166,6 +1371,69 @@ async def preflight_post(
     ):
         return cap_error
     return Response(PreflightResult.from_values(specs, channels, data.file))
+
+
+@post(
+    "/repair",
+    status_code=200,
+    responses={
+        200: ResponseSpec(
+            data_container=RepairResult,
+            description="Bounded, verified repair suggestions",
+        ),
+        HTTP_400_BAD_REQUEST: ResponseSpec(
+            data_container=ErrorResponse | ValidationErrorResponse,
+            description="Input or request validation error",
+        ),
+        HTTP_500_INTERNAL_SERVER_ERROR: ResponseSpec(
+            data_container=ErrorResponse,
+            description="Internal solver error",
+        ),
+        HTTP_504_GATEWAY_TIMEOUT: ResponseSpec(
+            data_container=ErrorResponse,
+            description="Repair search time budget exceeded",
+        ),
+    },
+)
+async def repair_post(
+    request: Request,
+    data: RepairRequest,
+    max_suggestions: Annotated[int | None, QueryParameter(ge=1)] = None,
+    max_attempts: Annotated[int | None, QueryParameter(ge=1)] = None,
+    time_budget_ms: Annotated[int | None, QueryParameter(ge=1)] = None,
+) -> Response:
+    """Return verified single-spec relaxations for an infeasible solve."""
+    if not data.specs:
+        return Response(
+            ErrorResponse(error="Provide at least one spec"),
+            status_code=HTTP_400_BAD_REQUEST,
+        )
+    channels = list(data.channels or DEFAULT_CHANNELS)
+    platforms = list(data.platforms or [NATIVE_SUBDIR])
+    if cap_error := validate_caps(data.specs, channels, platforms):
+        return cap_error
+    try:
+        match_specs = [MatchSpec(spec) for spec in data.specs]
+    except (CondaError, ValueError) as exc:
+        return Response(ErrorResponse(error=str(exc)), status_code=HTTP_400_BAD_REQUEST)
+
+    search = RepairSearch(
+        specs=data.specs,
+        match_specs=match_specs,
+        channels=channels,
+        platforms=platforms,
+        max_suggestions=min(
+            max_suggestions or MAX_REPAIR_SUGGESTIONS, MAX_REPAIR_SUGGESTIONS
+        ),
+        max_attempts=min(max_attempts or MAX_REPAIR_ATTEMPTS, MAX_REPAIR_ATTEMPTS),
+        deadline=time.monotonic()
+        + min(time_budget_ms or MAX_REPAIR_TIME_BUDGET_MS, MAX_REPAIR_TIME_BUDGET_MS)
+        / 1_000,
+    )
+    result = await search.run(request)
+    if isinstance(result, Response):
+        return result
+    return Response(result)
 
 
 @post(
@@ -1591,6 +1859,7 @@ app = Litestar(
         resolve_get,
         resolve_post,
         preflight_post,
+        repair_post,
         diff_post,
         explain_post,
         transcode_post,
