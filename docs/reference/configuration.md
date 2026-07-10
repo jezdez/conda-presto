@@ -16,9 +16,10 @@ The server image starts the HTTP API by default:
 docker run -p 8000:8000 ghcr.io/jezdez/conda-presto:latest
 ```
 
-The first startup can take longer while the repodata cache warms up.
-Subsequent solves can reuse the warm repodata and in-memory solver
-indexes.
+The first startup can take longer while its persistent solver worker warms
+repodata and indexes. Subsequent requests reuse that worker directly. A timed
+out solve is isolated to the worker; the server reports unhealthy while a
+replacement warms, then resumes serving requests.
 
 ### CLI image
 
@@ -213,7 +214,10 @@ conda broker endpoint conda-presto.server
 The endpoint command reports the API root; readiness probes `/health`
 separately. The broker child runs a single persistent solver worker so warmed
 repodata and indexes are actually retained between requests. A timed-out solve
-terminates that worker; the broker health check then restarts the service.
+replaces that worker; `/health` stays unavailable until the replacement warms.
+
+The published Docker server image uses the same persistent-worker mode directly.
+It does not start conda-broker inside the container.
 
 See the [warmed local service tutorial](../tutorials/broker-service.md) for
 installation and use.

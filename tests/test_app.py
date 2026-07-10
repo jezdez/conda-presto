@@ -126,6 +126,7 @@ def persistent_solve_worker(monkeypatch):
         terminate_stops=True,
     ):
         calls = []
+        restart_targets = []
         alive = {"value": True}
         received = iter(messages)
 
@@ -150,6 +151,10 @@ def persistent_solve_worker(monkeypatch):
             calls.append(("process", "kill"))
             alive["value"] = False
 
+        def start_process():
+            alive["value"] = True
+            calls.append(("process", "start"))
+
         parent = SimpleNamespace(
             send=send,
             poll=lambda _: poll,
@@ -158,7 +163,7 @@ def persistent_solve_worker(monkeypatch):
         )
         child = SimpleNamespace(close=lambda: calls.append(("child", "close")))
         process = SimpleNamespace(
-            start=lambda: calls.append(("process", "start")),
+            start=start_process,
             is_alive=lambda: alive["value"],
             terminate=terminate,
             kill=kill,
@@ -171,9 +176,17 @@ def persistent_solve_worker(monkeypatch):
         monkeypatch.setattr(
             app_module.multiprocessing, "get_context", lambda _: context
         )
+        monkeypatch.setattr(
+            app_module.threading,
+            "Thread",
+            lambda *, target, daemon: SimpleNamespace(
+                start=lambda: restart_targets.append(target)
+            ),
+        )
         worker = app_module.PersistentSolveWorker(["conda-forge"], ["linux-64"])
         if start:
             worker.start()
+        worker.restart_targets = restart_targets
         return worker, calls
 
     return create
@@ -188,7 +201,7 @@ async def test_health(client):
 
 @pytest.mark.anyio
 async def test_health_is_unavailable_when_persistent_worker_stops(client, test_app):
-    test_app.state.solve_worker = SimpleNamespace(running=False)
+    test_app.state.solve_worker = SimpleNamespace(ready=False)
 
     response = await client.get("/health")
 
@@ -1023,9 +1036,11 @@ async def test_resolve_uses_persistent_worker_when_configured(test_app):
 def test_persistent_solve_worker_returns_result(persistent_solve_worker):
     worker, calls = persistent_solve_worker([("ready", None), ("ok", [])])
 
+    assert worker.ready
     assert worker.solve(["conda-forge"], ["zlib"], ["linux-64"], None, 60) == []
 
     worker.stop()
+    assert not worker.ready
     assert calls == [
         ("process", "start"),
         ("child", "close"),
@@ -1037,6 +1052,14 @@ def test_persistent_solve_worker_returns_result(persistent_solve_worker):
     ]
 
 
+def test_persistent_solve_worker_start_is_idempotent(persistent_solve_worker):
+    worker, calls = persistent_solve_worker([("ready", None)])
+
+    worker.start()
+
+    assert calls == [("process", "start"), ("child", "close")]
+
+
 def test_persistent_solve_worker_rejects_startup_failure(persistent_solve_worker):
     worker, _ = persistent_solve_worker([("startup-failed", None)], start=False)
 
@@ -1045,6 +1068,15 @@ def test_persistent_solve_worker_rejects_startup_failure(persistent_solve_worker
 
     assert worker.connection is None
     assert worker.process is None
+
+
+def test_persistent_solve_worker_logs_restart_failure(persistent_solve_worker):
+    worker, _ = persistent_solve_worker([("ready", None), EOFError()])
+
+    worker.stop()
+    worker.restart()
+
+    assert not worker.ready
 
 
 def test_persistent_solve_worker_rejects_unavailable_worker(persistent_solve_worker):
@@ -1125,6 +1157,21 @@ def test_persistent_solve_worker_kills_timed_out_process(persistent_solve_worker
         ("process", "join:5"),
         ("process", "join:None"),
     ]
+
+
+def test_persistent_solve_worker_restarts_after_timeout(persistent_solve_worker):
+    worker, _ = persistent_solve_worker(
+        [("ready", None), ("ready", None)],
+        poll=False,
+    )
+
+    with pytest.raises(TimeoutError):
+        worker.solve(["conda-forge"], ["zlib"], ["linux-64"], None, 60)
+
+    assert not worker.ready
+    assert len(worker.restart_targets) == 1
+    worker.restart_targets[0]()
+    assert worker.ready
 
 
 def test_persistent_solve_worker_entrypoint_handles_native_requests(monkeypatch):

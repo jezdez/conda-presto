@@ -16,6 +16,9 @@ def test_dockerfile_has_server_healthcheck():
     assert "HEALTHCHECK" in text
     assert "/health" in text
     assert "/app/.pixi/envs/prod/bin/python" in text
+    assert "CONDA_PRESTO_CONCURRENCY=1" in text
+    assert "CONDA_PRESTO_PERSISTENT_WORKER=1" in text
+    assert "--start-period=120s" in text
 
 
 def test_dockerfile_has_cli_target():

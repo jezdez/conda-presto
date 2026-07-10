@@ -974,16 +974,22 @@ class PersistentSolveWorker:
         self.platforms = platforms
         self.connection = None
         self.process = None
+        self.is_ready = False
         self.operation_lock = threading.RLock()
 
     @property
     def running(self) -> bool:
         return self.process is not None and self.process.is_alive()
 
+    @property
+    def ready(self) -> bool:
+        """Return whether the worker has completed its warmup."""
+        return self.is_ready and self.running
+
     def start(self) -> None:
         """Start the worker and wait until its configured indexes are warm."""
         with self.operation_lock:
-            if self.running:
+            if self.ready:
                 return
 
             self.stop()
@@ -1007,6 +1013,7 @@ class PersistentSolveWorker:
             if status != "ready":
                 self.stop()
                 raise RuntimeError("Persistent solve worker failed during startup")
+            self.is_ready = True
 
     def solve(
         self,
@@ -1018,21 +1025,21 @@ class PersistentSolveWorker:
     ) -> list | tuple[str, str]:
         """Return a solve result, replacing the worker if it exceeds its timeout."""
         with self.operation_lock:
-            if self.connection is None or not self.running:
+            if self.connection is None or not self.ready:
                 raise RuntimeError("Persistent solve worker is unavailable")
 
             try:
                 self.connection.send((channels, specs, platforms, format_name))
             except (BrokenPipeError, EOFError, OSError) as exc:
-                self.stop()
+                self.stop(restart=True)
                 raise RuntimeError("Persistent solve worker exited") from exc
             if not self.connection.poll(timeout_s):
-                self.stop()
+                self.stop(restart=True)
                 raise TimeoutError
             try:
                 status, payload = self.connection.recv()
             except EOFError as exc:
-                self.stop()
+                self.stop(restart=True)
                 raise RuntimeError("Persistent solve worker exited") from exc
 
             if status == "ok":
@@ -1041,25 +1048,34 @@ class PersistentSolveWorker:
                 raise UnknownFormatError(payload["format_name"], payload["available"])
             raise RuntimeError("Persistent solve worker failed")
 
-    def stop(self) -> None:
+    def restart(self) -> None:
+        """Start a replacement worker without surfacing background errors."""
+        try:
+            self.start()
+        except Exception:
+            log.exception("Persistent solve worker restart failed")
+
+    def stop(self, *, restart: bool = False) -> None:
         """Stop the worker process if one is running."""
         with self.operation_lock:
             connection, self.connection = self.connection, None
             process, self.process = self.process, None
+            self.is_ready = False
             if connection is not None:
                 try:
                     connection.send(None)
                 except (BrokenPipeError, EOFError, OSError):
                     pass
                 connection.close()
-            if process is None:
-                return
-            if process.is_alive():
-                process.terminate()
-                process.join(5)
-            if process.is_alive():
-                process.kill()
-            process.join()
+            if process is not None:
+                if process.is_alive():
+                    process.terminate()
+                    process.join(5)
+                if process.is_alive():
+                    process.kill()
+                process.join()
+        if restart:
+            threading.Thread(target=self.restart, daemon=True).start()
 
 
 def persistent_solve_worker_entrypoint(
@@ -2003,7 +2019,7 @@ async def parse(request: Request, data: ParseRequest) -> Response:
 async def health(request: Request) -> Response | dict[str, str]:
     """Return readiness for the persistent worker when one is configured."""
     worker = getattr(request.app.state, "solve_worker", None)
-    if worker is not None and not worker.running:
+    if worker is not None and not worker.ready:
         return Response(
             {"status": "unavailable"},
             status_code=HTTP_503_SERVICE_UNAVAILABLE,

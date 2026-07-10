@@ -28,7 +28,7 @@ CLI and the HTTP server.
 | `CONDA_PRESTO_PARSE_TIMEOUT_S` | `10` | Per-request file parsing timeout in seconds. Returns HTTP 504 if exceeded. |
 | `CONDA_PRESTO_HOST` | `127.0.0.1` | Default bind address for `--serve` / `--host`. |
 | `CONDA_PRESTO_PORT` | `8000` | Default port for `--serve` / `--port`. |
-| `CONDA_PRESTO_PERSISTENT_WORKER` | `false` | Run HTTP solves in one warmed, replaceable worker process. Set by the broker provider; normal servers should leave it disabled. |
+| `CONDA_PRESTO_PERSISTENT_WORKER` | `false` | Run HTTP solves in one warmed, replaceable worker process. Set by the broker provider and the Docker server image; normal servers should leave it disabled. |
 | `CONDA_PRESTO_RESULT_CACHE_SIZE` | `256` | Maximum number of solve responses retained by the in-process content-addressed result cache. |
 | `CONDA_PRESTO_RESULT_CACHE_MAX_MEMORY_MB` | `64` | Maximum payload megabytes retained by the in-process result cache. Set to `0` to disable the byte cap. |
 | `CONDA_PRESTO_RESULT_CACHE_BACKEND` | auto | Result cache backend: `memory`, `file`, or `redis`. Defaults to `redis` when `CONDA_PRESTO_RESULT_CACHE_REDIS_URL` is set, `file` when `CONDA_PRESTO_RESULT_CACHE_DIR` is set, otherwise `memory`. |

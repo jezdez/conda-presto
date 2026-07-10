@@ -40,6 +40,9 @@ curl http://localhost:8000/health
 
 Pin a versioned image tag for deployments. See the [container configuration reference](https://jezdez.github.io/conda-presto/reference/configuration/) for server tuning and Redis result-cache setup.
 
+The server image retains its warmed solver worker across requests. It uses this
+directly; it does not start conda-broker inside the container.
+
 ## Run a warmed local service
 
 Install conda-presto, then explicitly start the loopback service when repeated

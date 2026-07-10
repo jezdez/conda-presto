@@ -36,9 +36,12 @@ ENTRYPOINT ["/app/entrypoint.sh", "conda", "presto"]
 
 FROM production AS server
 
+ENV CONDA_PRESTO_CONCURRENCY=1 \
+    CONDA_PRESTO_PERSISTENT_WORKER=1
+
 EXPOSE 8000
 
-HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
+HEALTHCHECK --interval=30s --timeout=5s --start-period=120s --retries=3 \
     CMD /app/.pixi/envs/prod/bin/python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3).read()"
 
 CMD ["--serve", "--host", "0.0.0.0"]
