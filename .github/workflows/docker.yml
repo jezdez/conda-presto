@@ -65,11 +65,10 @@ jobs:
           target: ${{ matrix.target }}
           build-args: |
             PIXI_ENV=${{ matrix.pixi_env }}
+            CONDA_PRESTO_VERSION=${{ github.event.release.tag_name || '0.0.0' }}
           platforms: linux/amd64,linux/arm64
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          build-args: |
-            CONDA_PRESTO_VERSION=${{ github.event.release.tag_name || '0.0.0' }}
           cache-from: type=gha,scope=${{ matrix.flavor }}
           cache-to: type=gha,mode=max,scope=${{ matrix.flavor }}
