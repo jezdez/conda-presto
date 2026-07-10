@@ -95,15 +95,13 @@ litestar = ">=2.18"
 pyjwt = ">=2.0"
 uvicorn = ">=0.34"
 brotli-python = ">=1.1"
-
-[tool.pixi.feature.redis.dependencies]
 redis-py = ">=5.0"
 
 [tool.pixi.environments]
 dev = { features = ["dev", "server"], solve-group = "default" }
-test = { features = ["test", "server", "redis"], solve-group = "default" }
+test = { features = ["test", "server"], solve-group = "default" }
 prod = { features = ["server"], solve-group = "default" }
-redis = { features = ["server", "redis"], solve-group = "default" }
+redis = { features = ["server"], solve-group = "default" }
 cli = { solve-group = "default" }
 docs = { features = ["docs"], solve-group = "default" }
 

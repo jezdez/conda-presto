@@ -221,9 +221,9 @@ export CONDA_PRESTO_RESULT_CACHE_REDIS_URL=redis://localhost:6379/0
 The server still checks the in-process LRU first, then looks up the
 same content-addressed key in the persistent store before running the
 solver. Persistent entries survive server restarts and are stored under
-the same CAS key used by `/r/<sha256>`. Redis support requires the
-`redis` optional dependency; in Pixi, use the `redis` environment or
-include the `redis` feature.
+the same CAS key used by `/r/<sha256>`. Redis support is included in
+the published Docker server image. Other Python environments require
+the `redis` optional dependency.
 
 The key includes the normalized specs, ordered channels, target
 platforms, output format, conda-presto and solver versions, and local
