@@ -90,7 +90,7 @@ from litestar.config.cors import CORSConfig
 from litestar.logging import LoggingConfig
 from litestar.middleware.logging import LoggingMiddlewareConfig
 from litestar.middleware.rate_limit import RateLimitConfig
-from litestar.openapi import OpenAPIConfig
+from litestar.openapi import OpenAPIConfig, ResponseSpec
 from litestar.params import FromPath, FromQuery
 from litestar.response import Response
 from litestar.status_codes import (
@@ -162,6 +162,14 @@ CACHE_DEPENDENCY_PACKAGES = (
 )
 
 
+class ErrorResponse(msgspec.Struct, omit_defaults=True):
+    """A client-facing error payload."""
+
+    error: str
+    platform: str | None = None
+    supported: list[str] | None = None
+
+
 @dataclass
 class ResolveRequest:
     """JSON body for ``POST /resolve`` (Content-Type: application/json).
@@ -188,9 +196,7 @@ class ResolveRequest:
         filename: str | None = None,
     ) -> ResolveRequest | Response:
         """Decode the JSON or raw-file request shape shared by resolve surfaces."""
-        content_type = (
-            request.headers.get("content-type", "").split(";")[0].strip().lower()
-        )
+        content_type, _ = request.content_type
 
         if content_type in ("", "application/json"):
             body = await request.body()
@@ -199,7 +205,7 @@ class ResolveRequest:
                     data = msgspec.json.decode(body, type=cls)
                 except (msgspec.DecodeError, msgspec.ValidationError) as exc:
                     return Response(
-                        {"error": f"Invalid JSON body: {exc}"},
+                        ErrorResponse(error=f"Invalid JSON body: {exc}"),
                         status_code=HTTP_400_BAD_REQUEST,
                     )
             else:
@@ -222,7 +228,7 @@ class ResolveRequest:
                 content = body.decode("utf-8")
             except UnicodeDecodeError as exc:
                 return Response(
-                    {"error": f"Body is not valid UTF-8: {exc}"},
+                    ErrorResponse(error=f"Body is not valid UTF-8: {exc}"),
                     status_code=HTTP_400_BAD_REQUEST,
                 )
             return cls(
@@ -235,15 +241,15 @@ class ResolveRequest:
             )
 
         return Response(
-            {
-                "error": (
+            ErrorResponse(
+                error=(
                     f"Unsupported Content-Type {content_type!r}. "
                     "Use application/json for a ResolveRequest envelope, "
                     "or application/yaml / application/toml / text/plain "
                     "for a raw input file body."
                 ),
-                "supported": ["application/json", *sorted(RAW_CONTENT_TYPE_EXTENSIONS)],
-            },
+                supported=["application/json", *sorted(RAW_CONTENT_TYPE_EXTENSIONS)],
+            ),
             status_code=HTTP_400_BAD_REQUEST,
         )
 
@@ -919,7 +925,24 @@ async def resolve_post(
     )
 
 
-@post("/preflight", status_code=200)
+@post(
+    "/preflight",
+    status_code=200,
+    responses={
+        200: ResponseSpec(
+            data_container=PreflightResult,
+            description="Preflight findings",
+        ),
+        HTTP_400_BAD_REQUEST: ResponseSpec(
+            data_container=ErrorResponse,
+            description="Input error",
+        ),
+        HTTP_504_GATEWAY_TIMEOUT: ResponseSpec(
+            data_container=ErrorResponse,
+            description="Input parsing timed out",
+        ),
+    },
+)
 async def preflight_post(
     request: Request,
     spec: FromQuery[list[str] | None] = None,

@@ -1568,6 +1568,12 @@ async def test_openapi_schema(client):
     assert "/r/{key}" in data["paths"]
     assert "/health" in data["paths"]
 
+    preflight = data["paths"]["/preflight"]["post"]
+    assert preflight["responses"]["200"]["content"]["application/json"][
+        "schema"
+    ]["$ref"].endswith("/PreflightResult")
+    assert {"400", "504"} <= preflight["responses"].keys()
+
 
 @pytest.mark.anyio
 async def test_on_startup_initializes(monkeypatch):
