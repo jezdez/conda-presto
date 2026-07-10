@@ -1760,6 +1760,15 @@ async def test_openapi_schema(client):
     ]["$ref"].endswith("/PreflightResult")
     assert {"400", "504"} <= preflight["responses"].keys()
 
+    diff = data["paths"]["/diff"]["post"]
+    assert diff["requestBody"]["content"]["application/json"]["schema"][
+        "$ref"
+    ].endswith("/DiffRequest")
+    assert diff["responses"]["200"]["content"]["application/json"]["schema"][
+        "$ref"
+    ].endswith("/DiffResponse")
+    assert {"400", "422", "500", "504"} <= diff["responses"].keys()
+
 
 @pytest.mark.anyio
 async def test_on_startup_initializes(monkeypatch):

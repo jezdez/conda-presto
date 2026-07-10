@@ -335,16 +335,16 @@ class ResolveInput:
         if not input_specs and not direct_lockfile:
             if parsed_file and parsed_file.is_lockfile:
                 return Response(
-                    {
-                        "error": (
+                    ErrorResponse(
+                        error=(
                             "Lockfile input cannot be solved for the requested "
                             "platforms; provide specs to solve."
                         )
-                    },
+                    ),
                     status_code=HTTP_400_BAD_REQUEST,
                 )
             return Response(
-                {"error": "Provide specs or file content"},
+                ErrorResponse(error="Provide specs or file content"),
                 status_code=HTTP_400_BAD_REQUEST,
             )
         return cls(
@@ -397,6 +397,14 @@ class DiffResponse(msgspec.Struct):
 
     platforms: list[str]
     diff: dict[str, PlatformDiff]
+
+
+class ValidationErrorResponse(msgspec.Struct, omit_defaults=True):
+    """Litestar's request validation error payload."""
+
+    status_code: int
+    detail: str
+    extra: list[dict[str, str]] | None = None
 
 
 class StoredResult(msgspec.Struct):
@@ -1123,17 +1131,34 @@ async def preflight_post(
     return Response(PreflightResult.from_values(specs, channels, data.file))
 
 
-@post("/diff", status_code=200)
-async def diff_post(request: Request) -> Response:
+@post(
+    "/diff",
+    status_code=200,
+    responses={
+        200: ResponseSpec(
+            data_container=DiffResponse,
+            description="Resolved package differences",
+        ),
+        HTTP_400_BAD_REQUEST: ResponseSpec(
+            data_container=ErrorResponse | ValidationErrorResponse,
+            description="Input or request validation error",
+        ),
+        HTTP_422_UNPROCESSABLE_ENTITY: ResponseSpec(
+            data_container=ErrorResponse,
+            description="Unsatisfiable environment",
+        ),
+        HTTP_500_INTERNAL_SERVER_ERROR: ResponseSpec(
+            data_container=ErrorResponse,
+            description="Internal solver error",
+        ),
+        HTTP_504_GATEWAY_TIMEOUT: ResponseSpec(
+            data_container=ErrorResponse,
+            description="Solve or parsing timeout",
+        ),
+    },
+)
+async def diff_post(request: Request, data: DiffRequest) -> Response:
     """Compare the packages selected by two resolve inputs."""
-    try:
-        data = msgspec.json.decode(await request.body(), type=DiffRequest)
-    except (msgspec.DecodeError, msgspec.ValidationError) as exc:
-        return Response(
-            {"error": f"Invalid JSON body: {exc}"},
-            status_code=HTTP_400_BAD_REQUEST,
-        )
-
     if data.platforms is not None:
         before_request = replace(data.from_, platforms=data.platforms)
         after_request = replace(data.to, platforms=data.platforms)
@@ -1145,7 +1170,7 @@ async def diff_post(request: Request) -> Response:
         ]
         if not platforms:
             return Response(
-                {"error": "The two inputs have no platforms in common"},
+                ErrorResponse(error="The two inputs have no platforms in common"),
                 status_code=HTTP_400_BAD_REQUEST,
             )
         before_request = replace(data.from_, platforms=platforms)
@@ -1176,7 +1201,7 @@ async def diff_post(request: Request) -> Response:
     for result in [*before_results, *after_results]:
         if result.error is not None:
             return Response(
-                {"error": result.error, "platform": result.platform},
+                ErrorResponse(error=result.error, platform=result.platform),
                 status_code=HTTP_422_UNPROCESSABLE_ENTITY,
             )
 
@@ -1188,7 +1213,7 @@ async def diff_post(request: Request) -> Response:
     ]
     if not platforms:
         return Response(
-            {"error": "The two inputs have no platforms in common"},
+            ErrorResponse(error="The two inputs have no platforms in common"),
             status_code=HTTP_400_BAD_REQUEST,
         )
     before_by_platform = {result.platform: result for result in before_results}
