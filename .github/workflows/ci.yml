@@ -46,23 +46,3 @@ jobs:
           restore-keys: repodata-${{ runner.os }}-
       - run: pixi run -e test pytest -m "not crossplatform"
         timeout-minutes: 5
-
-  benchmark:
-    name: Benchmark
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    needs: test
-    steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-        with:
-          persist-credentials: false
-      - uses: prefix-dev/setup-pixi@a09b6247153796b190642a2b53fac4241043cf6f # v0.10.0
-        with:
-          environments: test
-          cache: true
-      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
-        with:
-          path: ~/.cache/rattler/cache
-          key: repodata-${{ runner.os }}-${{ hashFiles('pixi.lock') }}
-          restore-keys: repodata-${{ runner.os }}-
-      - run: pixi run -e test pytest tests/test_benchmarks.py --benchmark-enable --no-cov -m "not crossplatform"

@@ -27,6 +27,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   workflows.
 - Proposal documentation is now a concise roadmap page that links to
   GitHub issues for the detailed design records.
+- Consolidate the server and CLI container builds into one multi-target
+  `docker/Dockerfile`.
 
 ### Fixed
 
@@ -39,6 +41,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Removed
 
 - Experimental external integration surface and tutorial.
+- Generated benchmark result snapshots and the no-signal benchmark CI job.
 
 ## [0.4.0] - 2026-04-16
 

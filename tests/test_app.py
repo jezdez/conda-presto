@@ -18,6 +18,7 @@ from litestar.stores.redis import RedisStore
 import conda_presto.app as app_module
 from conda_presto.app import (
     ResultCache,
+    build_cors_config,
     formats,
     health,
     on_shutdown,
@@ -108,6 +109,16 @@ async def test_health(client):
     resp = await client.get("/health")
     assert resp.status_code == 200
     assert resp.json() == {"status": "ok"}
+
+
+def test_build_cors_config_disabled_without_origins():
+    assert build_cors_config([]) is None
+
+
+def test_build_cors_config_enabled_for_explicit_origins():
+    cors = build_cors_config(["https://app.example.com"])
+    assert cors is not None
+    assert cors.allow_origins == ["https://app.example.com"]
 
 
 @pytest.mark.anyio
@@ -953,6 +964,63 @@ async def test_resolve_rejects_too_many_specs(client, monkeypatch):
 
 
 @pytest.mark.anyio
+async def test_resolve_rejects_too_many_channels(client, monkeypatch):
+    monkeypatch.setattr("conda_presto.app.MAX_CHANNELS", 1)
+
+    resp = await client.post(
+        "/resolve",
+        json={
+            "specs": ["zlib"],
+            "channels": ["conda-forge", "bioconda"],
+            "platforms": ["linux-64"],
+        },
+    )
+
+    assert resp.status_code == 400
+    assert "Too many channels" in resp.json()["error"]
+
+
+@pytest.mark.anyio
+async def test_resolve_rejects_unlisted_channel(client, monkeypatch):
+    monkeypatch.setattr("conda_presto.app.CHANNEL_ALLOWLIST", ["conda-forge"])
+
+    resp = await client.post(
+        "/resolve",
+        json={
+            "specs": ["zlib"],
+            "channels": ["https://example.invalid/private"],
+            "platforms": ["linux-64"],
+        },
+    )
+
+    assert resp.status_code == 400
+    body = resp.json()
+    assert "Unsupported channel" in body["error"]
+    assert "allowed_channels" not in body
+    assert "example.invalid" not in resp.text
+
+
+@pytest.mark.anyio
+async def test_resolve_accepts_allowed_channel_url(client, monkeypatch):
+    monkeypatch.setattr("conda_presto.app.CHANNEL_ALLOWLIST", ["conda-forge"])
+    monkeypatch.setattr(
+        "conda_presto.app.solve",
+        lambda channels, specs, platforms: [],
+    )
+
+    resp = await client.post(
+        "/resolve",
+        json={
+            "specs": ["zlib"],
+            "channels": ["https://conda.anaconda.org/conda-forge"],
+            "platforms": ["linux-64"],
+        },
+    )
+
+    assert resp.status_code == 200
+
+
+@pytest.mark.anyio
 async def test_resolve_get_rejects_too_many_platforms(client, monkeypatch):
     monkeypatch.setattr("conda_presto.app.MAX_PLATFORMS", 1)
     resp = await client.get(
@@ -1515,6 +1583,78 @@ async def test_parse_endpoint(client):
     assert "python=3.12" in data["specs"]
     assert "numpy" in data["specs"]
     assert "conda-forge" in data["channels"]
+
+
+@pytest.mark.anyio
+async def test_parse_endpoint_rejects_too_many_specs(client, monkeypatch):
+    monkeypatch.setattr("conda_presto.app.MAX_SPECS", 2)
+    yml = (
+        "name: test\n"
+        "channels:\n"
+        "  - conda-forge\n"
+        "dependencies:\n"
+        "  - a\n"
+        "  - b\n"
+        "  - c\n"
+    )
+    resp = await client.post(
+        "/parse",
+        json={"file": yml, "filename": "environment.yml"},
+    )
+    assert resp.status_code == 400
+    assert "Too many specs" in resp.json()["error"]
+
+
+@pytest.mark.anyio
+async def test_parse_endpoint_rejects_explicit_lockfile(client):
+    explicit = "@EXPLICIT\nhttps://example.invalid/linux-64/pkg-1.0-0.conda\n"
+    resp = await client.post(
+        "/parse",
+        json={"file": explicit, "filename": "explicit.txt"},
+    )
+    assert resp.status_code == 400
+    assert "Explicit package URL lockfiles" in resp.json()["error"]
+
+
+@pytest.mark.anyio
+async def test_parse_endpoint_timeout(client, monkeypatch):
+    monkeypatch.setattr("conda_presto.app.PARSE_TIMEOUT_S", 0.1)
+
+    def slow_parse(*args, **kwargs):
+        time.sleep(2)
+        return None
+
+    monkeypatch.setattr(
+        "conda_presto.app.ParsedInputFile.from_content", slow_parse
+    )
+    resp = await client.post(
+        "/parse",
+        json={
+            "file": "dependencies:\n  - zlib\n",
+            "filename": "environment.yml",
+        },
+    )
+    assert resp.status_code == 504
+    assert "timeout" in resp.json()["error"].lower()
+
+
+@pytest.mark.anyio
+async def test_resolve_file_rejects_explicit_lockfile(client, monkeypatch):
+    def fail_solve(*args, **kwargs):
+        raise AssertionError("solve should not run")
+
+    monkeypatch.setattr("conda_presto.app.solve", fail_solve)
+    explicit = "@EXPLICIT\nhttps://example.invalid/linux-64/pkg-1.0-0.conda\n"
+    resp = await client.post(
+        "/resolve",
+        json={
+            "file": explicit,
+            "filename": "explicit.txt",
+            "platforms": ["linux-64"],
+        },
+    )
+    assert resp.status_code == 400
+    assert "Explicit package URL lockfiles" in resp.json()["error"]
 
 
 @pytest.mark.anyio

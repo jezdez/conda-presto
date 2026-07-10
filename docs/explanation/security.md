@@ -28,9 +28,8 @@ Request limits
   abusive large solves.
 
 Rate limiting and CORS
-: rate limiting is enabled by default per client IP. CORS defaults to `*` for
-  easy local use, but production deployments should restrict
-  `CONDA_PRESTO_CORS_ORIGINS` to the expected frontend origins.
+: rate limiting is enabled by default per client IP. CORS is disabled unless
+  `CONDA_PRESTO_CORS_ORIGINS` explicitly lists the expected frontend origins.
 
 Dry-run package access
 : conda-presto reads channel metadata and package records but does not download

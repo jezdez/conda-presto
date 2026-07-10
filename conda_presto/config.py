@@ -41,6 +41,9 @@ Request limits (abuse/DoS protection):
     ``CONDA_PRESTO_SOLVE_TIMEOUT_S``
         Max wall-clock seconds per solve request (default: ``60``).
         Returns HTTP 504 if exceeded.
+    ``CONDA_PRESTO_PARSE_TIMEOUT_S``
+        Max wall-clock seconds per file parse request (default: ``10``).
+        Returns HTTP 504 if exceeded.
     ``CONDA_PRESTO_MAX_PLATFORMS``
         Max platforms per request (default: ``8``).  Returns HTTP 400
         if exceeded.
@@ -55,7 +58,7 @@ HTTP middleware:
         start uvicorn with ``--forwarded-allow-ips`` so the client IP
         is taken from ``X-Forwarded-For`` rather than the proxy.
     ``CONDA_PRESTO_CORS_ORIGINS``
-        Comma-separated allowed CORS origins (default: ``*``).
+        Comma-separated allowed CORS origins (default: disabled).
     ``CONDA_PRESTO_LOG_LEVEL``
         Application log level (default: ``INFO``).
 
@@ -98,6 +101,10 @@ def env_list(name: str, default: str) -> list[str]:
 
 
 DEFAULT_CHANNELS = env_list("CONDA_PRESTO_CHANNELS", "conda-forge")
+
+CHANNEL_ALLOWLIST = env_list(
+    "CONDA_PRESTO_ALLOWED_CHANNELS", ",".join(DEFAULT_CHANNELS)
+)
 
 DEFAULT_PLATFORMS = env_list("CONDA_PRESTO_PLATFORMS", "linux-64,osx-arm64,osx-64")
 
@@ -144,9 +151,14 @@ if RESULT_CACHE_BACKEND not in {"memory", "file", "redis"}:
     )
 
 RATE_LIMIT = env_int("CONDA_PRESTO_RATE_LIMIT", 300)
-CORS_ORIGINS = env_list("CONDA_PRESTO_CORS_ORIGINS", "*")
+CORS_ORIGINS = env_list("CONDA_PRESTO_CORS_ORIGINS", "")
 LOG_LEVEL = os.environ.get("CONDA_PRESTO_LOG_LEVEL", "INFO")
 
 SOLVE_TIMEOUT_S = env_int("CONDA_PRESTO_SOLVE_TIMEOUT_S", 60)
+PARSE_TIMEOUT_S = env_int("CONDA_PRESTO_PARSE_TIMEOUT_S", 10)
+MAX_CHANNELS = env_int("CONDA_PRESTO_MAX_CHANNELS", 8)
 MAX_PLATFORMS = env_int("CONDA_PRESTO_MAX_PLATFORMS", 8)
 MAX_SPECS = env_int("CONDA_PRESTO_MAX_SPECS", 200)
+MAX_INDEX_CACHE_ENTRIES = env_int(
+    "CONDA_PRESTO_MAX_INDEX_CACHE_ENTRIES", 128
+)

@@ -12,6 +12,7 @@ from conda.models.environment import Environment
 from conda.models.records import PackageRecord
 
 import conda_presto.resolve as resolve_module
+from conda_presto.exceptions import safe_error_message
 from conda_presto.resolve import (
     ResolvedPackage,
     SolveResult,
@@ -182,12 +183,12 @@ def test_solve_one_platform(deps):
         assert pkg.url, f"{pkg.name} missing url"
 
 
-def test_solve_one_platform_unsatisfiable():
-    result = solve_one_platform(
-        channels=("conda-forge",),
-        dependencies=["nonexistent-package-xyz-zzzzzz"],
-        platform="linux-64",
-    )
+def test_solve_unsatisfiable():
+    result = solve(
+        ["conda-forge"],
+        ["nonexistent-package-xyz-zzzzzz"],
+        ["linux-64"],
+    )[0]
     assert result.error is not None
     assert result.packages == []
 
@@ -281,6 +282,32 @@ def test_clear_index_cache():
     assert idx2 is not idx1
 
 
+def test_build_index_cache_respects_entry_limit(monkeypatch):
+    """The index cache evicts the least-recently used entry at its limit."""
+    clear_index_cache()
+    built = []
+
+    class FakeIndex:
+        def __init__(self, channels, subdirs):
+            self.channels = channels
+            self.subdirs = subdirs
+            built.append((tuple(channels), tuple(subdirs)))
+
+    monkeypatch.setattr(resolve_module, "MAX_INDEX_CACHE_ENTRIES", 1)
+    monkeypatch.setattr(resolve_module, "RattlerIndexHelper", FakeIndex)
+
+    idx1 = build_index(("conda-forge",), "linux-64")
+    idx2 = build_index(("bioconda",), "linux-64")
+
+    assert idx1 is not idx2
+    assert (("conda-forge",), "linux-64") not in index_cache
+    assert (("bioconda",), "linux-64") in index_cache
+    assert built == [
+        (("conda-forge",), ("linux-64", "noarch")),
+        (("bioconda",), ("linux-64", "noarch")),
+    ]
+
+
 def test_cached_solve_produces_correct_results():
     """Two back-to-back solves produce identical results (cache hit)."""
     clear_index_cache()
@@ -291,31 +318,43 @@ def test_cached_solve_produces_correct_results():
     assert names1 == names2
 
 
-def test_solve_one_platform_generic_exception_sanitized(monkeypatch):
+def test_solve_generic_exception_is_sanitized(monkeypatch):
     """Generic exceptions return a generic message, not the raw str."""
     monkeypatch.setattr(
         "conda_presto.resolve.run_solver",
         lambda *a: (_ for _ in ()).throw(TypeError("/Users/secret/path")),
     )
-    result = solve_one_platform(("conda-forge",), ["zlib"], "linux-64")
+    result = solve(["conda-forge"], ["zlib"], ["linux-64"])[0]
     assert result.error == "Internal solver error"
     assert "/Users/" not in (result.error or "")
     assert result.packages == []
 
 
-def test_solve_one_platform_known_exception_surfaces_detail(monkeypatch):
+def test_solve_known_exception_surfaces_detail(monkeypatch):
     """Known solver errors (UnsatisfiableError/PackagesNotFoundError) surface detail."""
     def raise_pnf(*a, **kw):
         raise PackagesNotFoundError(["nonexistent-package-zzzzzz"])
 
     monkeypatch.setattr("conda_presto.resolve.run_solver", raise_pnf)
-    result = solve_one_platform(
-        ("conda-forge",),
-        ["nonexistent-package-zzzzzz"],
-        "linux-64",
-    )
+    result = solve(
+        ["conda-forge"], ["nonexistent-package-zzzzzz"], ["linux-64"]
+    )[0]
     assert result.error is not None
     assert "nonexistent-package-zzzzzz" in result.error
+
+
+def test_safe_error_message_redacts_known_error_channel_urls():
+    exc = PackagesNotFoundError(
+        ["nonexistent-package-zzzzzz"],
+        ["https://token@example.internal/conda?auth=secret"],
+    )
+    message = safe_error_message(exc)
+
+    assert "nonexistent-package-zzzzzz" in message
+    assert "Current channels: [redacted]" in message
+    assert "token" not in message
+    assert "example.internal" not in message
+    assert "auth=secret" not in message
 
 
 def test_solve_result_error_sanitizes_generic():

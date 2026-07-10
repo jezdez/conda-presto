@@ -45,10 +45,10 @@ docker run ghcr.io/jezdez/conda-presto:cli -f environment.yml -p linux-64
 ### Building locally
 
 ```bash
-docker build -f docker/server.Dockerfile -t conda-presto .
+docker build -f docker/Dockerfile --target server --build-arg PIXI_ENV=prod -t conda-presto .
 docker run -p 8000:8000 conda-presto
 
-docker build -f docker/cli.Dockerfile -t conda-presto-cli .
+docker build -f docker/Dockerfile --target cli --build-arg PIXI_ENV=cli -t conda-presto-cli .
 docker run conda-presto-cli -c conda-forge -p linux-64 zlib
 ```
 
@@ -152,8 +152,9 @@ limiting itself).
 
 ### CORS
 
-By default, all origins are allowed (`CONDA_PRESTO_CORS_ORIGINS=*`).
-In production, restrict this to your frontend domains:
+By default, CORS is disabled. To allow browser clients, set
+`CONDA_PRESTO_CORS_ORIGINS` to the frontend domains that should be
+allowed:
 
 ```bash
 export CONDA_PRESTO_CORS_ORIGINS="https://app.example.com,https://ci.example.com"
@@ -166,8 +167,17 @@ requests:
 
 - `CONDA_PRESTO_MAX_BODY_BYTES` caps upload size (default 1 MB)
 - `CONDA_PRESTO_MAX_SPECS` caps specs per request (default 200)
+- `CONDA_PRESTO_MAX_CHANNELS` caps channels per request (default 8)
 - `CONDA_PRESTO_MAX_PLATFORMS` caps platforms per request (default 8)
 - `CONDA_PRESTO_SOLVE_TIMEOUT_S` caps solve duration (default 60s)
+- `CONDA_PRESTO_PARSE_TIMEOUT_S` caps file parsing duration (default 10s)
+- `CONDA_PRESTO_MAX_INDEX_CACHE_ENTRIES` caps in-process solver index
+  cache entries (default 128; set to `0` to disable index caching)
+
+The HTTP server accepts channels from `CONDA_PRESTO_ALLOWED_CHANNELS`
+(defaulting to `CONDA_PRESTO_CHANNELS`). Set it to `*` only when the
+server is already protected by trusted callers and network egress
+controls.
 
 See [Environment variables](environment-variables.md) for the full
 list and their defaults.

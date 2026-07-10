@@ -80,6 +80,7 @@ from pathlib import Path
 
 import anyio
 import msgspec
+from conda.base.constants import KNOWN_SUBDIRS
 from conda.core.subdir_data import SubdirData
 from conda.models.channel import Channel
 from litestar import Litestar, Request, get, post
@@ -101,14 +102,17 @@ from litestar.stores.base import Store
 from litestar.stores.file import FileStore
 
 from .config import (
+    CHANNEL_ALLOWLIST,
     CORS_ORIGINS,
     DEFAULT_CHANNELS,
     DEFAULT_PLATFORMS,
     LOG_LEVEL,
     MAX_BODY_BYTES,
+    MAX_CHANNELS,
     MAX_CONCURRENCY,
     MAX_PLATFORMS,
     MAX_SPECS,
+    PARSE_TIMEOUT_S,
     RATE_LIMIT,
     RESULT_CACHE_BACKEND,
     RESULT_CACHE_DIR,
@@ -395,7 +399,9 @@ class ResultCache:
         )
 
 
-def validate_caps(specs: list[str], platforms: list[str]) -> Response | None:
+def validate_caps(
+    specs: list[str], channels: list[str], platforms: list[str]
+) -> Response | None:
     """Return a 400 response if per-request caps are exceeded, else None."""
     if len(specs) > MAX_SPECS:
         return Response(
@@ -403,6 +409,16 @@ def validate_caps(specs: list[str], platforms: list[str]) -> Response | None:
                 "error": (
                     f"Too many specs: {len(specs)} > {MAX_SPECS} "
                     f"(CONDA_PRESTO_MAX_SPECS)"
+                )
+            },
+            status_code=HTTP_400_BAD_REQUEST,
+        )
+    if len(channels) > MAX_CHANNELS:
+        return Response(
+            {
+                "error": (
+                    f"Too many channels: {len(channels)} > {MAX_CHANNELS} "
+                    f"(CONDA_PRESTO_MAX_CHANNELS)"
                 )
             },
             status_code=HTTP_400_BAD_REQUEST,
@@ -417,7 +433,80 @@ def validate_caps(specs: list[str], platforms: list[str]) -> Response | None:
             },
             status_code=HTTP_400_BAD_REQUEST,
         )
+    invalid_platforms = sorted(set(platforms) - set(KNOWN_SUBDIRS))
+    if invalid_platforms:
+        return Response(
+            {
+                "error": f"Unsupported platform(s): {', '.join(invalid_platforms)}",
+                "supported": sorted(KNOWN_SUBDIRS),
+            },
+            status_code=HTTP_400_BAD_REQUEST,
+        )
+    if channel_error := validate_channels(channels):
+        return channel_error
     return None
+
+
+def canonical_channel_name(channel: str) -> str:
+    """Return conda's canonical channel name for allowlist comparison."""
+    return Channel(channel).canonical_name
+
+
+def validate_channels(channels: list[str]) -> Response | None:
+    """Return a 400 response when channels are outside the server allowlist."""
+    if "*" in CHANNEL_ALLOWLIST:
+        return None
+
+    try:
+        allowed = {canonical_channel_name(ch) for ch in CHANNEL_ALLOWLIST}
+    except Exception as exc:
+        return Response(
+            {"error": f"Invalid channel configuration: {exc}"},
+            status_code=HTTP_400_BAD_REQUEST,
+        )
+
+    invalid = []
+    for channel in channels:
+        try:
+            canonical = canonical_channel_name(channel)
+        except Exception:
+            invalid.append(channel)
+            continue
+        if not channel.strip() or canonical not in allowed:
+            invalid.append(channel)
+    if invalid:
+        return Response(
+            {"error": "Unsupported channel(s)"},
+            status_code=HTTP_400_BAD_REQUEST,
+        )
+    return None
+
+
+async def parse_input_for_request(
+    request: Request,
+    content: str,
+    filename: str | None,
+    target_platforms: list[str] | None = None,
+) -> ParsedInputFile | Response:
+    """Parse input off the event loop with a bounded wall-clock time."""
+    try:
+        with anyio.fail_after(PARSE_TIMEOUT_S):
+            return await anyio.to_thread.run_sync(
+                ParsedInputFile.from_content,
+                content,
+                filename,
+                target_platforms,
+                limiter=request.app.state.solver_limiter,
+                abandon_on_cancel=True,
+            )
+    except TimeoutError:
+        log.warning("Parse timeout after %ss", PARSE_TIMEOUT_S)
+        return Response(
+            {"error": f"Parse exceeded {PARSE_TIMEOUT_S}s timeout"},
+            status_code=HTTP_504_GATEWAY_TIMEOUT,
+        )
+    except ValueError as exc:
+        return Response({"error": str(exc)}, status_code=HTTP_400_BAD_REQUEST)
 
 
 async def run_solve(
@@ -660,11 +749,11 @@ async def resolve_get(
             status_code=HTTP_400_BAD_REQUEST,
         )
 
-    if cap_error := validate_caps(specs, platforms):
-        return cap_error
-
     if not channels:
         channels = list(DEFAULT_CHANNELS)
+
+    if cap_error := validate_caps(specs, channels, platforms):
+        return cap_error
 
     return await run_cached_solve(
         request, specs, channels, platforms or None, format_name=format
@@ -760,12 +849,12 @@ async def resolve_post(
         )
 
     if file_content is not None:
-        try:
-            parsed_file = ParsedInputFile.from_content(
-                file_content, file_name, platforms or [NATIVE_SUBDIR]
-            )
-        except ValueError as exc:
-            return Response({"error": str(exc)}, status_code=HTTP_400_BAD_REQUEST)
+        parsed = await parse_input_for_request(
+            request, file_content, file_name, platforms or [NATIVE_SUBDIR]
+        )
+        if isinstance(parsed, Response):
+            return parsed
+        parsed_file = parsed
 
         specs = list(specs) + parsed_file.specs
         if not channels:
@@ -789,11 +878,11 @@ async def resolve_post(
             status_code=HTTP_400_BAD_REQUEST,
         )
 
-    if cap_error := validate_caps(specs, platforms):
-        return cap_error
-
     if not channels:
         channels = list(DEFAULT_CHANNELS)
+
+    if cap_error := validate_caps(specs, channels, platforms):
+        return cap_error
 
     return await run_cached_solve(
         request, specs, channels, platforms or None, format_name=format
@@ -869,7 +958,7 @@ async def transcode_post(
         )
 
     target_platforms = platforms or [NATIVE_SUBDIR]
-    if cap_error := validate_caps([], target_platforms):
+    if cap_error := validate_caps([], [], target_platforms):
         return cap_error
 
     has_extra_specs = bool(spec) or bool(body_specs)
@@ -883,12 +972,12 @@ async def transcode_post(
             has_channel_override,
         )
 
-    try:
-        parsed_file = ParsedInputFile.from_content(
-            file_content, file_name, target_platforms
-        )
-    except ValueError as exc:
-        return Response({"error": str(exc)}, status_code=HTTP_400_BAD_REQUEST)
+    parsed = await parse_input_for_request(
+        request, file_content, file_name, target_platforms
+    )
+    if isinstance(parsed, Response):
+        return parsed
+    parsed_file = parsed
 
     if (
         parsed_file.is_lockfile
@@ -994,13 +1083,14 @@ async def parse(request: Request) -> Response:
             {"error": "Field 'file' is required"},
             status_code=HTTP_400_BAD_REQUEST,
         )
-    try:
-        parsed_file = ParsedInputFile.from_content(data.file, data.filename)
-    except ValueError as exc:
-        return Response(
-            {"error": str(exc)},
-            status_code=HTTP_400_BAD_REQUEST,
-        )
+    parsed = await parse_input_for_request(request, data.file, data.filename)
+    if isinstance(parsed, Response):
+        return parsed
+    parsed_file = parsed
+    if cap_error := validate_caps(
+        parsed_file.specs, parsed_file.channels, []
+    ):
+        return cap_error
     return Response({"specs": parsed_file.specs, "channels": parsed_file.channels})
 
 
@@ -1037,6 +1127,13 @@ async def on_shutdown(app: Litestar) -> None:
     shutdown_process_pool()
 
 
+def build_cors_config(origins: list[str]) -> CORSConfig | None:
+    """Return a CORS config only when origins are explicitly configured."""
+    if not origins:
+        return None
+    return CORSConfig(allow_origins=origins)
+
+
 middleware = [LoggingMiddlewareConfig().middleware]
 if RATE_LIMIT:
     middleware.append(RateLimitConfig(rate_limit=("minute", RATE_LIMIT)).middleware)
@@ -1070,7 +1167,7 @@ app = Litestar(
     ),
     request_max_body_size=MAX_BODY_BYTES,
     compression_config=CompressionConfig(backend="brotli", brotli_gzip_fallback=True),
-    cors_config=CORSConfig(allow_origins=CORS_ORIGINS),
+    cors_config=build_cors_config(CORS_ORIGINS),
     logging_config=LoggingConfig(
         log_exceptions="always",
         loggers={"conda_presto": {"level": LOG_LEVEL}},
