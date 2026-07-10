@@ -202,10 +202,82 @@ def test_resolved_package_uses_version_change_for_invalid_version_order(
     assert sample_resolved_package.change_kind(changed) == "version-change"
 
 
-def test_solve_result_error_serializes(sample_resolved_package):
+def test_solve_result_explain_returns_requested_dependency_chain(make_package_record):
     result = SolveResult(
-        platform="linux-64", packages=[], error="solver failed"
+        platform="linux-64",
+        packages=[
+            ResolvedPackage.from_record(
+                make_package_record(name="app", depends=("library >=1",))
+            ),
+            ResolvedPackage.from_record(
+                make_package_record(name="library", depends=())
+            ),
+        ],
     )
+
+    explanation = result.explain(["app"], "library")
+
+    assert explanation is not None
+    assert explanation.chains == [["app", "library"]]
+    assert explanation.complete
+    assert result.explain(["app"], "app").chains == [["app"]]
+
+
+def test_solve_result_explain_marks_virtual_dependencies_incomplete(
+    make_package_record,
+):
+    result = SolveResult(
+        platform="linux-64",
+        packages=[
+            ResolvedPackage.from_record(
+                make_package_record(
+                    name="app",
+                    depends=("__glibc >=2.17", "library"),
+                )
+            ),
+            ResolvedPackage.from_record(
+                make_package_record(name="library", depends=())
+            ),
+        ],
+    )
+
+    explanation = result.explain(["app"], "library")
+
+    assert explanation is not None
+    assert explanation.chains == [["app", "library"]]
+    assert not explanation.complete
+
+
+def test_solve_result_explain_bounds_invalid_and_cyclic_metadata(
+    make_package_record,
+):
+    result = SolveResult(
+        platform="linux-64",
+        packages=[
+            ResolvedPackage.from_record(
+                make_package_record(
+                    name="app",
+                    depends=("invalid [", "missing", "__glibc >=2.17", "middle"),
+                )
+            ),
+            ResolvedPackage.from_record(
+                make_package_record(name="middle", depends=("app", "target"))
+            ),
+            ResolvedPackage.from_record(make_package_record(name="target", depends=())),
+        ],
+    )
+
+    explanation = result.explain(["app", "invalid ["], "target")
+
+    assert explanation is not None
+    assert explanation.chains == [["app", "middle", "target"]]
+    assert not explanation.complete
+    assert not result.explain(["app"], "target", max_depth=1).complete
+    assert not result.explain(["app"], "target", max_chains=0).complete
+
+
+def test_solve_result_error_serializes(sample_resolved_package):
+    result = SolveResult(platform="linux-64", packages=[], error="solver failed")
     decoded = msgspec.json.decode(msgspec.json.encode(result))
     assert decoded["error"] == "solver failed"
     assert decoded["packages"] == []

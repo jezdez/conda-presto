@@ -11,6 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `POST /preflight` for deterministic local input validation without solver or channel access.
 - `POST /diff` for platform-aware resolved package comparisons, including direct lockfile reads when covered.
+- `POST /explain` for bounded dependency chains from requested specs to a selected package.
 
 ### Fixed
 

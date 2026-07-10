@@ -3,13 +3,14 @@ from __future__ import annotations
 
 import logging
 import threading
-from collections import OrderedDict
+from collections import OrderedDict, deque
 from collections.abc import Callable
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from operator import attrgetter
 
 import msgspec
 from conda.base.context import context
+from conda.models.channel import Channel
 from conda.models.environment import Environment
 from conda.models.match_spec import MatchSpec
 from conda.models.records import PackageRecord
@@ -160,6 +161,20 @@ class ResolvedPackage(msgspec.Struct):
         """Return the package identity used by review surfaces."""
         return self.manager, self.name
 
+    def matches(self, spec: MatchSpec) -> bool:
+        """Return whether a conda match spec selects this package."""
+        return spec.match(
+            PackageRecord(
+                name=self.name,
+                version=self.version,
+                build=self.build,
+                build_number=self.build_number,
+                channel=Channel(self.channel) if self.channel else None,
+                subdir=self.subdir,
+                depends=self.depends,
+            )
+        )
+
     def change_kind(self, other: ResolvedPackage) -> str:
         """Classify this package's transition to *other*."""
         if self.version == other.version:
@@ -225,6 +240,16 @@ class PlatformDiff(msgspec.Struct):
     removed: list[DiffPackage]
     changed: list[ChangedPackage]
     unchanged_count: int
+
+
+class ExplainResult(msgspec.Struct):
+    """Dependency chains explaining one selected package."""
+
+    package: str
+    version: str
+    platform: str
+    chains: list[list[str]]
+    complete: bool
 
 
 class SolveResult(msgspec.Struct):
@@ -302,6 +327,77 @@ class SolveResult(msgspec.Struct):
             removed=removed,
             changed=changed,
             unchanged_count=len(before.keys() & after.keys()) - len(changed),
+        )
+
+    def explain(
+        self,
+        requested: list[str],
+        package_name: str,
+        max_depth: int = 20,
+        max_chains: int = 20,
+    ) -> ExplainResult | None:
+        """Return bounded requested-package chains for *package_name*."""
+        packages = [package for package in self.packages if package.manager == "conda"]
+        target = next(
+            (package for package in packages if package.name == package_name), None
+        )
+        if target is None:
+            return None
+
+        complete = True
+        edges = {package.name: [] for package in packages}
+        for parent in packages:
+            for dependency in parent.depends:
+                try:
+                    spec = MatchSpec(dependency)
+                except Exception:
+                    complete = False
+                    continue
+                if spec.name is None or spec.name.startswith("__"):
+                    complete = False
+                    continue
+                matches = [
+                    package.name for package in packages if package.matches(spec)
+                ]
+                if not matches:
+                    complete = False
+                edges[parent.name].extend(matches)
+
+        roots: list[str] = []
+        for value in requested:
+            try:
+                spec = MatchSpec(value)
+            except Exception:
+                complete = False
+                continue
+            matches = [package.name for package in packages if package.matches(spec)]
+            if not matches:
+                complete = False
+            roots.extend(matches)
+
+        chains: list[list[str]] = []
+        queue = deque((root, [root]) for root in dict.fromkeys(roots))
+        while queue and len(chains) < max_chains:
+            package_name, chain = queue.popleft()
+            if package_name == target.name:
+                chains.append(chain)
+                continue
+            if len(chain) >= max_depth:
+                complete = False
+                continue
+            for child in edges[package_name]:
+                if child in chain:
+                    complete = False
+                    continue
+                queue.append((child, [*chain, child]))
+        if queue:
+            complete = False
+        return ExplainResult(
+            package=target.name,
+            version=target.version,
+            platform=self.platform,
+            chains=chains,
+            complete=complete,
         )
 
 

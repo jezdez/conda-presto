@@ -22,6 +22,7 @@ from conda_presto.app import (
     ResultCache,
     build_cors_config,
     diff_post,
+    explain_post,
     formats,
     health,
     on_shutdown,
@@ -47,6 +48,7 @@ def test_app():
             resolve_post,
             preflight_post,
             diff_post,
+            explain_post,
             transcode_post,
             result_get,
             formats,
@@ -1440,6 +1442,131 @@ async def test_diff_post_rejects_uncovered_lockfile_platform(client, pixi_lock_v
 
 
 @pytest.mark.anyio
+async def test_explain_post_returns_requested_dependency_chain(client, monkeypatch):
+    async def fake_run_solve(request, specs, channels, platforms, format_name=None):
+        return (
+            msgspec.json.encode(
+                [
+                    SolveResult(
+                        platform=platforms[0],
+                        packages=[
+                            ResolvedPackage(
+                                name="app",
+                                version="1.0",
+                                build="0",
+                                build_number=0,
+                                channel="conda-forge",
+                                subdir=platforms[0],
+                                url="",
+                                sha256="",
+                                md5="",
+                                size=None,
+                                depends=("library >=1",),
+                                constrains=(),
+                            ),
+                            ResolvedPackage(
+                                name="library",
+                                version="1.0",
+                                build="0",
+                                build_number=0,
+                                channel="conda-forge",
+                                subdir=platforms[0],
+                                url="",
+                                sha256="",
+                                md5="",
+                                size=None,
+                                depends=(),
+                                constrains=(),
+                            ),
+                        ],
+                    )
+                ]
+            ),
+            "application/json",
+        )
+
+    monkeypatch.setattr(app_module, "run_solve", fake_run_solve)
+    resp = await client.post(
+        "/explain",
+        json={"package": "library", "specs": ["app"], "platforms": ["linux-64"]},
+    )
+
+    assert resp.status_code == 200
+    assert resp.json()["chains"] == [["app", "library"]]
+    assert resp.json()["complete"] is True
+
+
+@pytest.mark.anyio
+async def test_explain_post_returns_not_found_for_absent_package(client, monkeypatch):
+    async def fake_run_solve(request, specs, channels, platforms, format_name=None):
+        return (
+            msgspec.json.encode([SolveResult(platform=platforms[0], packages=[])]),
+            "application/json",
+        )
+
+    monkeypatch.setattr(app_module, "run_solve", fake_run_solve)
+    resp = await client.post("/explain", json={"package": "missing", "specs": ["app"]})
+
+    assert resp.status_code == 404
+    assert resp.json()["error"] == "Package not found: missing"
+
+
+@pytest.mark.anyio
+async def test_explain_post_rejects_invalid_request_shapes(client):
+    invalid = await client.post("/explain", content=b"[")
+    missing_package = await client.post("/explain", json={"specs": ["zlib"]})
+    unknown_field = await client.post(
+        "/explain",
+        json={"package": "zlib", "specs": ["zlib"], "unknown": True},
+    )
+    empty_package = await client.post(
+        "/explain", json={"package": "", "specs": ["zlib"]}
+    )
+    missing_input = await client.post("/explain", json={"package": "zlib"})
+    platforms = await client.post(
+        "/explain",
+        json={
+            "package": "zlib",
+            "specs": ["zlib"],
+            "platforms": ["linux-64", "osx-arm64"],
+        },
+    )
+
+    assert invalid.status_code == 400
+    assert missing_package.status_code == 400
+    assert unknown_field.status_code == 400
+    assert empty_package.status_code == 400
+    assert missing_input.status_code == 400
+    assert platforms.status_code == 400
+    assert platforms.json()["error"] == "/explain requires exactly one platform"
+
+
+@pytest.mark.anyio
+async def test_explain_post_returns_solver_failure_as_unprocessable(
+    client, monkeypatch
+):
+    async def fake_run_solve(request, specs, channels, platforms, format_name=None):
+        return (
+            msgspec.json.encode(
+                [
+                    SolveResult(
+                        platform=platforms[0],
+                        packages=[],
+                        error="Unsatisfiable environment",
+                    )
+                ]
+            ),
+            "application/json",
+        )
+
+    monkeypatch.setattr(app_module, "run_solve", fake_run_solve)
+    resp = await client.post("/explain", json={"package": "zlib", "specs": ["zlib"]})
+
+    assert resp.status_code == 422
+    assert resp.json()["error"] == "Unsatisfiable environment"
+
+
+@pytest.mark.anyio
 @pytest.mark.parametrize(
     "url, request_kind, expected_version",
     [
@@ -1750,6 +1877,7 @@ async def test_openapi_schema(client):
     assert "/resolve" in data["paths"]
     assert "/preflight" in data["paths"]
     assert "/diff" in data["paths"]
+    assert "/explain" in data["paths"]
     assert "/transcode" in data["paths"]
     assert "/r/{key}" in data["paths"]
     assert "/health" in data["paths"]
@@ -1768,6 +1896,15 @@ async def test_openapi_schema(client):
         "$ref"
     ].endswith("/DiffResponse")
     assert {"400", "422", "500", "504"} <= diff["responses"].keys()
+
+    explain = data["paths"]["/explain"]["post"]
+    assert explain["requestBody"]["content"]["application/json"]["schema"][
+        "$ref"
+    ].endswith("/ExplainRequest")
+    assert explain["responses"]["200"]["content"]["application/json"]["schema"][
+        "$ref"
+    ].endswith("/ExplainResult")
+    assert {"400", "404", "422", "500", "504"} <= explain["responses"].keys()
 
 
 @pytest.mark.anyio

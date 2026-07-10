@@ -155,6 +155,33 @@ return HTTP 400.
 
 ---
 
+### `POST /explain`
+
+Show the dependency chains from requested specs to one selected package. Its
+JSON body has the `ResolveRequest` fields plus a required `package` field and
+must select exactly one platform (the host platform is used when omitted).
+
+```bash
+curl -sS http://localhost:8000/explain \
+  --json '{"package":"zlib","specs":["python"],"platforms":["linux-64"]}'
+```
+
+```json
+{
+  "package": "zlib",
+  "version": "1.3.1",
+  "platform": "linux-64",
+  "chains": [["python", "zlib"]],
+  "complete": true
+}
+```
+
+`complete` is false when the bounded local graph cannot account for every
+edge, such as a virtual package or an unresolvable dependency record. Missing
+packages return HTTP 404; solver failures return HTTP 422.
+
+---
+
 ### `POST /transcode`
 
 Convert one lockfile format to another without running the solver. The
