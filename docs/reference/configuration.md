@@ -45,10 +45,10 @@ docker run ghcr.io/jezdez/conda-presto:cli -f environment.yml -p linux-64
 ### Building locally
 
 ```bash
-docker build -f docker/server.Dockerfile -t conda-presto .
+docker build -f docker/Dockerfile --target server --build-arg PIXI_ENV=prod -t conda-presto .
 docker run -p 8000:8000 conda-presto
 
-docker build -f docker/cli.Dockerfile -t conda-presto-cli .
+docker build -f docker/Dockerfile --target cli --build-arg PIXI_ENV=cli -t conda-presto-cli .
 docker run conda-presto-cli -c conda-forge -p linux-64 zlib
 ```
 

@@ -18,6 +18,7 @@ def test_action_yaml_loads():
 
     assert data["name"] == "conda-presto"
     assert data["runs"]["using"] == "composite"
+    assert "command" not in data["inputs"]
 
 
 def test_action_runs_from_checked_out_action_path():

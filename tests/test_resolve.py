@@ -183,12 +183,12 @@ def test_solve_one_platform(deps):
         assert pkg.url, f"{pkg.name} missing url"
 
 
-def test_solve_one_platform_unsatisfiable():
-    result = solve_one_platform(
-        channels=("conda-forge",),
-        dependencies=["nonexistent-package-xyz-zzzzzz"],
-        platform="linux-64",
-    )
+def test_solve_unsatisfiable():
+    result = solve(
+        ["conda-forge"],
+        ["nonexistent-package-xyz-zzzzzz"],
+        ["linux-64"],
+    )[0]
     assert result.error is not None
     assert result.packages == []
 
@@ -318,29 +318,27 @@ def test_cached_solve_produces_correct_results():
     assert names1 == names2
 
 
-def test_solve_one_platform_generic_exception_sanitized(monkeypatch):
+def test_solve_generic_exception_is_sanitized(monkeypatch):
     """Generic exceptions return a generic message, not the raw str."""
     monkeypatch.setattr(
         "conda_presto.resolve.run_solver",
         lambda *a: (_ for _ in ()).throw(TypeError("/Users/secret/path")),
     )
-    result = solve_one_platform(("conda-forge",), ["zlib"], "linux-64")
+    result = solve(["conda-forge"], ["zlib"], ["linux-64"])[0]
     assert result.error == "Internal solver error"
     assert "/Users/" not in (result.error or "")
     assert result.packages == []
 
 
-def test_solve_one_platform_known_exception_surfaces_detail(monkeypatch):
+def test_solve_known_exception_surfaces_detail(monkeypatch):
     """Known solver errors (UnsatisfiableError/PackagesNotFoundError) surface detail."""
     def raise_pnf(*a, **kw):
         raise PackagesNotFoundError(["nonexistent-package-zzzzzz"])
 
     monkeypatch.setattr("conda_presto.resolve.run_solver", raise_pnf)
-    result = solve_one_platform(
-        ("conda-forge",),
-        ["nonexistent-package-zzzzzz"],
-        "linux-64",
-    )
+    result = solve(
+        ["conda-forge"], ["nonexistent-package-zzzzzz"], ["linux-64"]
+    )[0]
     assert result.error is not None
     assert "nonexistent-package-zzzzzz" in result.error
 

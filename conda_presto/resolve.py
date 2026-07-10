@@ -1,40 +1,4 @@
-"""Core resolving logic using conda's solver API.
-
-This module performs dry-run solves: it resolves a set of package specs
-against conda channels and returns fully-pinned package metadata
-(versions, builds, SHA256 hashes, URLs) without downloading or
-installing anything.
-
-Performance notes:
-    - ``build_index()`` caches ``RattlerIndexHelper`` objects keyed by
-      ``(channels, platform)``.  Building an index (~700 ms) is the
-      dominant cost of a solve; the cache reduces repeat solves to just
-      the SAT time (~20-100 ms).  ``index_lock`` makes check-then-build
-      atomic, preventing thundering-herd on cold or cleared caches.
-      Call ``clear_index_cache()`` to invalidate all entries.
-    - Multi-platform solves run in a persistent ``ProcessPoolExecutor``
-      to bypass the GIL. Workers retain their own index caches across
-      requests.
-    - All arguments to ``solve_one_platform`` are plain strings/tuples
-      so they serialize cheaply for cross-process dispatch.
-    - ``ResolvedPackage`` and ``SolveResult`` are ``msgspec.Struct``
-      subclasses, which are faster to instantiate and use less memory
-      than dataclasses.  Both the HTTP API and the CLI's default
-      output encode them directly via ``msgspec.json`` — there is no
-      intermediate ``dict`` conversion.  The CLI's ``--format`` path
-      feeds conda's exporter plugins with ``Environment`` objects
-      (via ``solve_environments``) instead.
-
-Security notes:
-    - ``run_solver`` is protected by ``platform_lock`` so that
-      concurrent threads (from ``anyio.to_thread``) cannot race on the
-      conda ``context`` singleton state.
-    - Solver errors are caught and wrapped via
-      :func:`conda_presto.exceptions.safe_error_message` so that only
-      an allow-list of known exception types surfaces its detail to
-      API clients; everything else returns a generic message.  Full
-      detail is still logged server-side.
-"""
+"""Conda solve orchestration and cross-platform dispatch."""
 from __future__ import annotations
 
 import logging
@@ -339,14 +303,7 @@ def solve_one_platform(
     Used by the HTTP API.  Wraps solver output in lightweight
     ``ResolvedPackage`` objects for fast serialization and low memory.
     """
-    try:
-        records = run_solver(channels, dependencies, platform)
-    except Exception as exc:
-        log.warning("Solver error for %s: %s", platform, exc)
-        return SolveResult(
-            platform=platform, packages=[], error=safe_error_message(exc)
-        )
-
+    records = run_solver(channels, dependencies, platform)
     packages = [ResolvedPackage.from_record(r) for r in records]
     return SolveResult(platform=platform, packages=packages)
 

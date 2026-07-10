@@ -9,10 +9,6 @@ inputs:
     description: "Run mode: 'local' installs conda-presto on the runner, 'remote' calls a hosted endpoint"
     required: false
     default: local
-  command:
-    description: Action to perform (solve is the only supported command today)
-    required: true
-    default: solve
   file:
     description: Path to an environment file (environment.yml, pixi.lock, etc.)
     required: false
@@ -59,7 +55,6 @@ runs:
       if: inputs.mode == 'local'
       shell: bash
       env:
-        INPUT_COMMAND: ${{ inputs.command }}
         INPUT_FILE: ${{ inputs.file }}
         INPUT_SPECS: ${{ inputs.specs }}
         INPUT_CHANNELS: ${{ inputs.channels }}
@@ -67,11 +62,6 @@ runs:
         INPUT_FORMAT: ${{ inputs.format }}
       run: |
         set -euo pipefail
-
-        if [[ "${INPUT_COMMAND}" != "solve" ]]; then
-          echo "::error::Unsupported command '${INPUT_COMMAND}'. Supported: solve"
-          exit 1
-        fi
 
         args=()
 
@@ -124,7 +114,6 @@ runs:
       if: inputs.mode == 'remote'
       shell: bash
       env:
-        INPUT_COMMAND: ${{ inputs.command }}
         INPUT_FILE: ${{ inputs.file }}
         INPUT_SPECS: ${{ inputs.specs }}
         INPUT_CHANNELS: ${{ inputs.channels }}
@@ -133,11 +122,6 @@ runs:
         INPUT_ENDPOINT: ${{ inputs.endpoint }}
       run: |
         set -euo pipefail
-
-        if [[ "${INPUT_COMMAND}" != "solve" ]]; then
-          echo "::error::Unsupported command '${INPUT_COMMAND}'. Supported: solve"
-          exit 1
-        fi
 
         if [[ -z "${INPUT_ENDPOINT:-}" ]]; then
           echo "::error::Input 'endpoint' is required when mode is 'remote'"
