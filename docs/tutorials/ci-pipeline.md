@@ -13,7 +13,7 @@ No infrastructure required.
 ### Basic solve
 
 ```yaml
-- uses: jezdez/conda-presto@v0.5.0
+- uses: jezdez/conda-presto@v0.6.0
   with:
     command: solve
     file: environment.yml
@@ -25,7 +25,7 @@ No infrastructure required.
 Add `format` and `output` to write the result to a file:
 
 ```yaml
-- uses: jezdez/conda-presto@v0.5.0
+- uses: jezdez/conda-presto@v0.6.0
   with:
     command: solve
     file: environment.yml
@@ -42,7 +42,7 @@ as an artifact or pass it to `conda env create`.
 Instead of an environment file, pass specs directly:
 
 ```yaml
-- uses: jezdez/conda-presto@v0.5.0
+- uses: jezdez/conda-presto@v0.6.0
   with:
     command: solve
     specs: python=3.12,numpy,pandas
@@ -57,7 +57,7 @@ for teams that already run a server (shared repodata cache, no
 install step on the runner).
 
 ```yaml
-- uses: jezdez/conda-presto@v0.5.0
+- uses: jezdez/conda-presto@v0.6.0
   with:
     mode: remote
     endpoint: ${{ vars.CONDA_PRESTO_URL }}
@@ -72,7 +72,7 @@ rather than hardcoding it.
 ### Remote with lockfile output
 
 ```yaml
-- uses: jezdez/conda-presto@v0.5.0
+- uses: jezdez/conda-presto@v0.6.0
   with:
     mode: remote
     endpoint: ${{ vars.CONDA_PRESTO_URL }}
@@ -100,7 +100,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: jezdez/conda-presto@v0.5.0
+      - uses: jezdez/conda-presto@v0.6.0
         id: solve
         with:
           command: solve
