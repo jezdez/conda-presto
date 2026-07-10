@@ -1568,24 +1568,39 @@ async def test_explain_post_returns_solver_failure_as_unprocessable(
 
 @pytest.mark.anyio
 @pytest.mark.parametrize(
-    "url, request_kind, expected_version",
+    "url, request_kind, expected_version, content_type",
     [
         pytest.param(
             "/transcode?format=conda-lock-v1",
             "json",
             1,
+            None,
             id="json-to-conda-lock",
         ),
         pytest.param(
             "/transcode?format=pixi-lock-v6&filename=pixi.lock&platform=linux-64",
             "raw",
             6,
+            "application/yaml",
             id="raw-to-pixi-lock",
+        ),
+        pytest.param(
+            "/transcode?format=pixi-lock-v6&filename=pixi.lock&platform=linux-64",
+            "raw",
+            6,
+            "application/yaml; charset=utf-8",
+            id="raw-with-content-type-parameters",
         ),
     ],
 )
 async def test_transcode_post_lockfile_to_lockfile_without_solver(
-    client, monkeypatch, pixi_lock_v6_text, url, request_kind, expected_version
+    client,
+    monkeypatch,
+    pixi_lock_v6_text,
+    url,
+    request_kind,
+    expected_version,
+    content_type,
 ):
     def fail_solve(*args, **kwargs):
         raise AssertionError("solver should not run")
@@ -1604,7 +1619,7 @@ async def test_transcode_post_lockfile_to_lockfile_without_solver(
         resp = await client.post(
             url,
             content=pixi_lock_v6_text,
-            headers={"content-type": "application/yaml"},
+            headers={"content-type": content_type},
         )
 
     assert resp.status_code == 200
@@ -1879,13 +1894,14 @@ async def test_openapi_schema(client):
     assert "/diff" in data["paths"]
     assert "/explain" in data["paths"]
     assert "/transcode" in data["paths"]
+    assert "/parse" in data["paths"]
     assert "/r/{key}" in data["paths"]
     assert "/health" in data["paths"]
 
     preflight = data["paths"]["/preflight"]["post"]
-    assert preflight["responses"]["200"]["content"]["application/json"][
-        "schema"
-    ]["$ref"].endswith("/PreflightResult")
+    assert preflight["responses"]["200"]["content"]["application/json"]["schema"][
+        "$ref"
+    ].endswith("/PreflightResult")
     assert {"400", "504"} <= preflight["responses"].keys()
 
     diff = data["paths"]["/diff"]["post"]
@@ -1905,6 +1921,15 @@ async def test_openapi_schema(client):
         "$ref"
     ].endswith("/ExplainResult")
     assert {"400", "404", "422", "500", "504"} <= explain["responses"].keys()
+
+    parse_operation = data["paths"]["/parse"]["post"]
+    assert parse_operation["requestBody"]["content"]["application/json"]["schema"][
+        "$ref"
+    ].endswith("/ParseRequest")
+    assert parse_operation["responses"]["200"]["content"]["application/json"]["schema"][
+        "$ref"
+    ].endswith("/ParseResult")
+    assert {"400", "504"} <= parse_operation["responses"].keys()
 
 
 @pytest.mark.anyio
@@ -1981,15 +2006,7 @@ async def test_parse_endpoint(client):
 @pytest.mark.anyio
 async def test_parse_endpoint_rejects_too_many_specs(client, monkeypatch):
     monkeypatch.setattr("conda_presto.app.MAX_SPECS", 2)
-    yml = (
-        "name: test\n"
-        "channels:\n"
-        "  - conda-forge\n"
-        "dependencies:\n"
-        "  - a\n"
-        "  - b\n"
-        "  - c\n"
-    )
+    yml = "name: test\nchannels:\n  - conda-forge\ndependencies:\n  - a\n  - b\n  - c\n"
     resp = await client.post(
         "/parse",
         json={"file": yml, "filename": "environment.yml"},
@@ -2017,9 +2034,7 @@ async def test_parse_endpoint_timeout(client, monkeypatch):
         time.sleep(2)
         return None
 
-    monkeypatch.setattr(
-        "conda_presto.app.ParsedInputFile.from_content", slow_parse
-    )
+    monkeypatch.setattr("conda_presto.app.ParsedInputFile.from_content", slow_parse)
     resp = await client.post(
         "/parse",
         json={
@@ -2051,8 +2066,18 @@ async def test_resolve_file_rejects_explicit_lockfile(client, monkeypatch):
 
 
 @pytest.mark.anyio
-async def test_parse_endpoint_no_file(client):
-    resp = await client.post("/parse", json={})
+@pytest.mark.parametrize(
+    "body",
+    [
+        pytest.param({}, id="missing-file"),
+        pytest.param(
+            {"file": "dependencies:\n  - zlib\n", "unknown": True},
+            id="unknown-field",
+        ),
+    ],
+)
+async def test_parse_endpoint_rejects_invalid_request_shapes(client, body):
+    resp = await client.post("/parse", json=body)
     assert resp.status_code == 400
 
 

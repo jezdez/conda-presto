@@ -272,6 +272,20 @@ class TranscodeRequest:
     channels: list[str] | None = None
 
 
+class ParseRequest(msgspec.Struct, forbid_unknown_fields=True):
+    """JSON body for ``POST /parse``."""
+
+    file: str
+    filename: str | None = None
+
+
+class ParseResult(msgspec.Struct):
+    """Specs and channels parsed from an input file."""
+
+    specs: list[str]
+    channels: list[str]
+
+
 @dataclass
 class ResolveInput:
     """One parsed request ready for direct lockfile use or a solve."""
@@ -1336,7 +1350,7 @@ async def transcode_post(
     filename: FromQuery[str | None] = None,
 ) -> Response:
     """Convert one lockfile format to another without solving."""
-    content_type = request.headers.get("content-type", "").split(";")[0].strip().lower()
+    content_type, _ = request.content_type
 
     file_content: str | None = None
     file_name: str | None = None
@@ -1496,36 +1510,35 @@ async def version() -> dict[str, str]:
 @post(
     "/parse",
     status_code=200,
+    responses={
+        200: ResponseSpec(
+            data_container=ParseResult,
+            description="Specs and channels extracted from an input file",
+        ),
+        HTTP_400_BAD_REQUEST: ResponseSpec(
+            data_container=ErrorResponse | ValidationErrorResponse,
+            description="Input or request validation error",
+        ),
+        HTTP_504_GATEWAY_TIMEOUT: ResponseSpec(
+            data_container=ErrorResponse,
+            description="Input parsing timed out",
+        ),
+    },
 )
-async def parse(request: Request) -> Response:
+async def parse(request: Request, data: ParseRequest) -> Response:
     """Parse an input file and return its specs and channels."""
-    body = await request.body()
-    if not body:
-        return Response(
-            {"error": "Provide a JSON body with 'file' content"},
-            status_code=HTTP_400_BAD_REQUEST,
-        )
-    try:
-        data = msgspec.json.decode(body, type=ResolveRequest)
-    except (msgspec.DecodeError, msgspec.ValidationError) as exc:
-        return Response(
-            {"error": f"Invalid JSON body: {exc}"},
-            status_code=HTTP_400_BAD_REQUEST,
-        )
     if not data.file:
         return Response(
-            {"error": "Field 'file' is required"},
+            ErrorResponse(error="Field 'file' is required"),
             status_code=HTTP_400_BAD_REQUEST,
         )
     parsed = await parse_input_for_request(request, data.file, data.filename)
     if isinstance(parsed, Response):
         return parsed
     parsed_file = parsed
-    if cap_error := validate_caps(
-        parsed_file.specs, parsed_file.channels, []
-    ):
+    if cap_error := validate_caps(parsed_file.specs, parsed_file.channels, []):
         return cap_error
-    return Response({"specs": parsed_file.specs, "channels": parsed_file.channels})
+    return Response(ParseResult(parsed_file.specs, parsed_file.channels))
 
 
 @get("/health")
