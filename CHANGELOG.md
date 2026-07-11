@@ -14,6 +14,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Require `conda-broker` and provide the broker-managed service lifecycle tutorial and reference.
 - Run the Docker server image through the same warmed persistent worker without starting conda-broker in the container.
 
+### Fixed
+
+- Refresh persistent solver indexes with conda's repodata freshness policy and keep cached results aligned with the index used to solve.
+- Recover a failed persistent worker in the Docker server while leaving broker-managed process recovery to conda-broker.
+
 ## [0.6.0] - 2026-07-10
 
 ### Added

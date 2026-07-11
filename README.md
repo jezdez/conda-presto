@@ -50,7 +50,7 @@ local API calls need to retain warm solve state:
 
 ```bash
 conda broker start conda-presto.server
-conda broker wait conda-presto.server
+conda broker wait conda-presto.server --timeout 180
 conda broker endpoint conda-presto.server
 ```
 

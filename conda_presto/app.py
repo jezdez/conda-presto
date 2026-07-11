@@ -77,8 +77,9 @@ import hashlib
 import json
 import logging
 import multiprocessing
-import time
+import os
 import threading
+import time
 from collections import OrderedDict
 from collections.abc import Iterator
 from dataclasses import dataclass, field, replace
@@ -89,7 +90,6 @@ from typing import Annotated, Literal
 import anyio
 import msgspec
 from conda.base.constants import KNOWN_SUBDIRS
-from conda.core.subdir_data import SubdirData
 from conda.exceptions import CondaError
 from conda.models.channel import Channel
 from conda.models.match_spec import MatchSpec
@@ -147,6 +147,7 @@ from .resolve import (
     VIRTUAL_PACKAGES,
     ExplainResult,
     PlatformDiff,
+    RepodataSnapshot,
     SolveResult,
     shutdown_process_pool,
     solve,
@@ -658,13 +659,13 @@ class ResultCache:
     entries: OrderedDict[str, StoredResult] = field(default_factory=OrderedDict)
     current_bytes: int = 0
 
-    @classmethod
+    @staticmethod
     def key_for(
-        cls,
         specs: list[str],
         channels: list[str],
         platforms: list[str] | None,
         format_name: str | None,
+        repodata: RepodataSnapshot | None = None,
     ) -> str:
         """Return the SHA-256 key for a canonical resolve request."""
         resolved_platforms = list(platforms or [NATIVE_SUBDIR])
@@ -675,25 +676,8 @@ class ResultCache:
             except Exception:
                 versions[package] = "unknown"
 
-        repodata: list[dict[str, object]] = []
-        seen_urls: set[str] = set()
-        for channel in channels:
-            for platform in resolved_platforms:
-                for url in Channel(channel).urls(subdirs=(platform, "noarch")):
-                    if url in seen_urls:
-                        continue
-                    seen_urls.add(url)
-                    subdir_data = SubdirData(
-                        Channel.from_url(url),
-                        repodata_fn="repodata.json",
-                    )
-                    repodata.append(
-                        {
-                            "url": url,
-                            "json": cls.file_marker(subdir_data.cache_path_json),
-                            "state": cls.file_marker(subdir_data.cache_path_state),
-                        }
-                    )
+        if repodata is None:
+            repodata = RepodataSnapshot.capture(channels, resolved_platforms)
 
         envelope = {
             "version": CACHE_ENVELOPE_VERSION,
@@ -703,7 +687,7 @@ class ResultCache:
             "format": format_name or DEFAULT_RESOLVE_FORMAT,
             "dependency_versions": versions,
             "virtual_packages": VIRTUAL_PACKAGES,
-            "repodata": repodata,
+            "repodata": repodata.records,
         }
         body = json.dumps(
             envelope,
@@ -711,18 +695,6 @@ class ResultCache:
             separators=(",", ":"),
         ).encode()
         return hashlib.sha256(body).hexdigest()
-
-    @staticmethod
-    def file_marker(path: Path) -> dict[str, object]:
-        try:
-            stat = path.stat()
-        except FileNotFoundError:
-            return {"exists": False}
-        return {
-            "exists": True,
-            "size": stat.st_size,
-            "mtime_ns": stat.st_mtime_ns,
-        }
 
     def store_from(self, request: Request) -> Store | None:
         """Return the configured persistent store, if enabled."""
@@ -969,11 +941,19 @@ async def parse_input_for_request(
 class PersistentSolveWorker:
     """Run HTTP solve work in one warmed process that can be replaced on timeout."""
 
-    def __init__(self, channels: list[str], platforms: list[str]) -> None:
+    def __init__(
+        self,
+        channels: list[str],
+        platforms: list[str],
+        *,
+        restart_on_failure: bool = True,
+    ) -> None:
         self.channels = channels
         self.platforms = platforms
+        self.restart_on_failure = restart_on_failure
         self.connection = None
         self.process = None
+        self.restart_thread = None
         self.is_ready = False
         self.operation_lock = threading.RLock()
 
@@ -1021,11 +1001,12 @@ class PersistentSolveWorker:
         specs: list[str],
         platforms: list[str] | None,
         format_name: str | None,
-        timeout_s: int,
+        timeout_s: float,
     ) -> list | tuple[str, str]:
         """Return a solve result, replacing the worker if it exceeds its timeout."""
         with self.operation_lock:
             if self.connection is None or not self.ready:
+                self.recover_if_stopped()
                 raise RuntimeError("Persistent solve worker is unavailable")
 
             try:
@@ -1055,6 +1036,13 @@ class PersistentSolveWorker:
         except Exception:
             log.exception("Persistent solve worker restart failed")
 
+    def recover_if_stopped(self) -> None:
+        """Schedule recovery when the worker process is no longer running."""
+        with self.operation_lock:
+            if self.running:
+                return
+            self.stop(restart=True)
+
     def stop(self, *, restart: bool = False) -> None:
         """Stop the worker process if one is running."""
         with self.operation_lock:
@@ -1074,8 +1062,13 @@ class PersistentSolveWorker:
                 if process.is_alive():
                     process.kill()
                 process.join()
-        if restart:
-            threading.Thread(target=self.restart, daemon=True).start()
+        if restart and self.restart_on_failure:
+            if self.restart_thread is None or not self.restart_thread.is_alive():
+                self.restart_thread = threading.Thread(
+                    target=self.restart,
+                    daemon=True,
+                )
+                self.restart_thread.start()
 
 
 def persistent_solve_worker_entrypoint(
@@ -1337,8 +1330,10 @@ async def run_cached_solve(
     """Run a solve through the content-addressed result cache."""
     cache: ResultCache = request.app.state.result_cache
     store = cache.store_from(request)
-    key = cache.key_for(specs, channels, platforms, format_name)
-    if cached_response := await cache.get_response(key, store):
+    resolved_platforms = list(platforms or [NATIVE_SUBDIR])
+    repodata = RepodataSnapshot.capture(channels, resolved_platforms)
+    key = cache.key_for(specs, channels, platforms, format_name, repodata)
+    if not repodata.stale and (cached_response := await cache.get_response(key, store)):
         return cached_response
 
     payload = await run_solve(
@@ -1347,9 +1342,9 @@ async def run_cached_solve(
     if isinstance(payload, Response):
         return payload
 
-    # Recompute after solving so a cold repodata cache stores under the
-    # marker that exists after conda has fetched repodata.
-    key = cache.key_for(specs, channels, platforms, format_name)
+    # Recompute after solving so refreshed repodata and the worker's index agree.
+    repodata = RepodataSnapshot.capture(channels, resolved_platforms)
+    key = cache.key_for(specs, channels, platforms, format_name, repodata)
     body, media_type = payload
     return await cache.remember(key, body, media_type, store)
 
@@ -2020,6 +2015,10 @@ async def health(request: Request) -> Response | dict[str, str]:
     """Return readiness for the persistent worker when one is configured."""
     worker = getattr(request.app.state, "solve_worker", None)
     if worker is not None and not worker.ready:
+        await anyio.to_thread.run_sync(
+            worker.recover_if_stopped,
+            abandon_on_cancel=True,
+        )
         return Response(
             {"status": "unavailable"},
             status_code=HTTP_503_SERVICE_UNAVAILABLE,
@@ -2039,7 +2038,9 @@ async def on_startup(app: Litestar) -> None:
     )
     if PERSISTENT_WORKER:
         app.state.solve_worker = PersistentSolveWorker(
-            DEFAULT_CHANNELS, DEFAULT_PLATFORMS
+            DEFAULT_CHANNELS,
+            DEFAULT_PLATFORMS,
+            restart_on_failure="CONDA_BROKER_SERVICE_NAME" not in os.environ,
         )
         log.info(
             "Starting persistent solve worker for %s on %s",

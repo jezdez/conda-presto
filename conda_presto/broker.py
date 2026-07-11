@@ -32,6 +32,7 @@ def conda_broker_services():
             command=(sys.executable, "-m", "conda_presto.broker"),
             interval_s=2,
             timeout_s=2,
+            start_period_s=120,
         ),
         process=ProcessSpec(
             argv=(sys.executable, "-m", "conda_presto.cli", "--serve"),

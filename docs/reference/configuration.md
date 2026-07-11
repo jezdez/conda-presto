@@ -207,17 +207,19 @@ loopback-only, uses a broker-assigned port, and has a manual lifecycle:
 
 ```bash
 conda broker start conda-presto.server
-conda broker wait conda-presto.server
+conda broker wait conda-presto.server --timeout 180
 conda broker endpoint conda-presto.server
 ```
 
 The endpoint command reports the API root; readiness probes `/health`
 separately. The broker child runs a single persistent solver worker so warmed
-repodata and indexes are actually retained between requests. A timed-out solve
-replaces that worker; `/health` stays unavailable until the replacement warms.
+repodata and indexes are actually retained between requests. If that worker
+fails or times out, `/health` reports unavailable and conda-broker replaces the
+server process.
 
 The published Docker server image uses the same persistent-worker mode directly.
-It does not start conda-broker inside the container.
+It does not start conda-broker inside the container, so the server replaces a
+failed worker itself.
 
 See the [warmed local service tutorial](../tutorials/broker-service.md) for
 installation and use.
@@ -254,8 +256,8 @@ the `redis` optional dependency.
 
 The key includes the normalized specs, ordered channels, target
 platforms, output format, conda-presto and solver versions, and local
-repodata cache file markers. Repodata refreshes therefore produce new
-keys instead of reusing stale solve results.
+repodata cache file markers. A cached response is bypassed when conda considers
+those files stale, and changed repodata produces a new key after refresh.
 
 ### Concurrency tuning
 

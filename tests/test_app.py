@@ -5,6 +5,7 @@ from __future__ import annotations
 import time
 from types import SimpleNamespace
 
+import anyio
 import msgspec
 import pytest
 import yaml
@@ -38,7 +39,7 @@ from conda_presto.app import (
     version,
 )
 from conda_presto.inputs import ParsedInputFile
-from conda_presto.resolve import ResolvedPackage, SolveResult
+from conda_presto.resolve import RepodataSnapshot, ResolvedPackage, SolveResult
 
 
 @pytest.fixture()
@@ -124,6 +125,7 @@ def persistent_solve_worker(monkeypatch):
         start=True,
         send_error_on: str | None = None,
         terminate_stops=True,
+        restart_on_failure=True,
     ):
         calls = []
         restart_targets = []
@@ -180,10 +182,15 @@ def persistent_solve_worker(monkeypatch):
             app_module.threading,
             "Thread",
             lambda *, target, daemon: SimpleNamespace(
-                start=lambda: restart_targets.append(target)
+                start=lambda: restart_targets.append(target),
+                is_alive=lambda: False,
             ),
         )
-        worker = app_module.PersistentSolveWorker(["conda-forge"], ["linux-64"])
+        worker = app_module.PersistentSolveWorker(
+            ["conda-forge"],
+            ["linux-64"],
+            restart_on_failure=restart_on_failure,
+        )
         if start:
             worker.start()
         worker.restart_targets = restart_targets
@@ -201,12 +208,17 @@ async def test_health(client):
 
 @pytest.mark.anyio
 async def test_health_is_unavailable_when_persistent_worker_stops(client, test_app):
-    test_app.state.solve_worker = SimpleNamespace(ready=False)
+    recoveries = []
+    test_app.state.solve_worker = SimpleNamespace(
+        ready=False,
+        recover_if_stopped=lambda: recoveries.append("recover"),
+    )
 
     response = await client.get("/health")
 
     assert response.status_code == 503
     assert response.json() == {"status": "unavailable"}
+    assert recoveries == ["recover"]
 
 
 def test_build_cors_config_disabled_without_origins():
@@ -589,6 +601,47 @@ async def test_spec_order_canonicalization_reuses_cached_result(client, monkeypa
 
     assert calls == 1
     assert second.headers["location"] == first.headers["location"]
+
+
+@pytest.mark.anyio
+async def test_stale_repodata_bypasses_cached_result(client, test_app, monkeypatch):
+    records = (("https://conda.example/linux-64", 10, 1),)
+    stale = RepodataSnapshot(records, True)
+    fresh = RepodataSnapshot(records, False)
+    key = ResultCache.key_for(
+        ["zlib"],
+        ["conda-forge"],
+        ["linux-64"],
+        None,
+        stale,
+    )
+    test_app.state.result_cache.remember_memory(
+        key,
+        app_module.StoredResult(b'[{"stale":true}]', "application/json"),
+    )
+    snapshots = iter([stale, fresh])
+    monkeypatch.setattr(
+        app_module.RepodataSnapshot,
+        "capture",
+        lambda *_: next(snapshots),
+    )
+    calls = []
+    monkeypatch.setattr(
+        app_module,
+        "solve",
+        lambda *_: (
+            calls.append("solve") or [SolveResult(platform="linux-64", packages=[])]
+        ),
+    )
+
+    response = await client.post(
+        "/resolve",
+        json={"specs": ["zlib"], "platforms": ["linux-64"]},
+    )
+
+    assert response.status_code == 200
+    assert response.json() == [{"platform": "linux-64", "packages": [], "error": None}]
+    assert calls == ["solve"]
 
 
 def test_different_output_formats_produce_different_cache_keys():
@@ -1033,6 +1086,61 @@ async def test_resolve_uses_persistent_worker_when_configured(test_app):
     ]
 
 
+@pytest.mark.anyio
+async def test_run_solve_passes_per_call_timeout(test_app):
+    calls = []
+
+    def solve(*args):
+        calls.append(args)
+        return []
+
+    test_app.state.solve_worker = SimpleNamespace(solve=solve)
+
+    response = await app_module.run_solve(
+        SimpleNamespace(app=test_app),
+        ["zlib"],
+        ["conda-forge"],
+        ["linux-64"],
+        timeout_s=0.25,
+    )
+
+    assert response == (b"[]", "application/json")
+    assert calls == [
+        (["conda-forge"], ["zlib"], ["linux-64"], None, 0.25),
+    ]
+
+
+@pytest.mark.anyio
+async def test_run_solve_timeout_includes_persistent_worker_queue(test_app):
+    calls = []
+    occupied = anyio.Event()
+    release = anyio.Event()
+    test_app.state.solver_limiter = anyio.CapacityLimiter(1)
+    test_app.state.solve_worker = SimpleNamespace(
+        solve=lambda *_: calls.append("solve") or []
+    )
+
+    async def occupy_limiter():
+        async with test_app.state.solver_limiter:
+            occupied.set()
+            await release.wait()
+
+    async with anyio.create_task_group() as tasks:
+        tasks.start_soon(occupy_limiter)
+        await occupied.wait()
+        response = await app_module.run_solve(
+            SimpleNamespace(app=test_app),
+            ["zlib"],
+            ["conda-forge"],
+            ["linux-64"],
+            timeout_s=0.05,
+        )
+        release.set()
+
+    assert response.status_code == 504
+    assert calls == []
+
+
 def test_persistent_solve_worker_returns_result(persistent_solve_worker):
     worker, calls = persistent_solve_worker([("ready", None), ("ok", [])])
 
@@ -1172,6 +1280,47 @@ def test_persistent_solve_worker_restarts_after_timeout(persistent_solve_worker)
     assert len(worker.restart_targets) == 1
     worker.restart_targets[0]()
     assert worker.ready
+
+
+def test_persistent_solve_worker_recovers_after_idle_exit(persistent_solve_worker):
+    worker, _ = persistent_solve_worker([("ready", None), ("ready", None)])
+    worker.recover_if_stopped()
+    assert worker.restart_targets == []
+
+    worker.process.terminate()
+
+    worker.recover_if_stopped()
+
+    worker.restart_targets[0]()
+    assert worker.ready
+
+
+def test_persistent_solve_worker_retries_failed_recovery(persistent_solve_worker):
+    worker, _ = persistent_solve_worker([("ready", None), EOFError(), ("ready", None)])
+    worker.process.terminate()
+
+    with pytest.raises(RuntimeError, match="unavailable"):
+        worker.solve(["conda-forge"], ["zlib"], ["linux-64"], None, 60)
+    worker.restart_targets[0]()
+    assert not worker.ready
+
+    with pytest.raises(RuntimeError, match="unavailable"):
+        worker.solve(["conda-forge"], ["zlib"], ["linux-64"], None, 60)
+    worker.restart_targets[1]()
+    assert worker.ready
+
+
+def test_persistent_solve_worker_leaves_recovery_to_broker(persistent_solve_worker):
+    worker, _ = persistent_solve_worker(
+        [("ready", None)],
+        restart_on_failure=False,
+    )
+    worker.process.terminate()
+
+    with pytest.raises(RuntimeError, match="unavailable"):
+        worker.solve(["conda-forge"], ["zlib"], ["linux-64"], None, 60)
+
+    assert worker.restart_targets == []
 
 
 def test_persistent_solve_worker_entrypoint_handles_native_requests(monkeypatch):
@@ -2793,8 +2942,10 @@ async def test_on_startup_initializes(monkeypatch):
 @pytest.mark.anyio
 async def test_on_startup_starts_persistent_worker(monkeypatch):
     started = []
+    monkeypatch.delenv("CONDA_BROKER_SERVICE_NAME", raising=False)
 
-    def create_worker(channels, platforms):
+    def create_worker(channels, platforms, *, restart_on_failure):
+        assert restart_on_failure
         return SimpleNamespace(
             running=True,
             start=lambda: started.append((channels, platforms)),
@@ -2810,6 +2961,24 @@ async def test_on_startup_starts_persistent_worker(monkeypatch):
         (app_module.DEFAULT_CHANNELS, app_module.DEFAULT_PLATFORMS),
     ]
     assert dummy_app.state.solve_worker.running
+
+
+@pytest.mark.anyio
+async def test_on_startup_leaves_broker_worker_recovery_to_broker(monkeypatch):
+    captured = {}
+
+    def create_worker(channels, platforms, *, restart_on_failure):
+        captured["restart_on_failure"] = restart_on_failure
+        return SimpleNamespace(running=True, start=lambda: None)
+
+    monkeypatch.setenv("CONDA_BROKER_SERVICE_NAME", "conda-presto.server")
+    monkeypatch.setattr(app_module, "PERSISTENT_WORKER", True)
+    monkeypatch.setattr(app_module, "PersistentSolveWorker", create_worker)
+    dummy_app = Litestar(route_handlers=[health])
+
+    await on_startup(dummy_app)
+
+    assert captured == {"restart_on_failure": False}
 
 
 @pytest.mark.anyio

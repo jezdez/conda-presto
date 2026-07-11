@@ -22,7 +22,7 @@ report ready:
 
 ```bash
 conda broker start conda-presto.server
-conda broker wait conda-presto.server
+conda broker wait conda-presto.server --timeout 180
 conda broker endpoint conda-presto.server
 ```
 
@@ -36,7 +36,8 @@ curl -X POST http://127.0.0.1:PORT/resolve \
 
 `wait` finishes only after the service's solver worker has warmed the configured
 channels and platforms. It runs on a broker-assigned loopback port and disables
-rate limiting only for that child process.
+rate limiting only for that child process. The longer timeout allows for an
+initial repodata download on a cold cache.
 
 ## Stop the service
 

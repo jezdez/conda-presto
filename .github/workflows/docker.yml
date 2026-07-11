@@ -1,6 +1,13 @@
 name: Docker
 
 on:
+  pull_request:
+    paths:
+      - .github/workflows/docker.yml
+      - conda_presto/**
+      - docker/Dockerfile
+      - pixi.lock
+      - pyproject.toml
   release:
     types: [published]
   workflow_dispatch:
@@ -12,7 +19,7 @@ on:
 
 env:
   REGISTRY: ghcr.io
-  RELEASE_TAG: ${{ github.event.release.tag_name || inputs.tag }}
+  RELEASE_TAG: ${{ github.event.release.tag_name || inputs.tag || '0.0.0' }}
 
 permissions: {}
 
@@ -21,8 +28,104 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  smoke-server:
+    name: Build and run server image
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
+          persist-credentials: false
+
+      - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4
+
+      - uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7
+        with:
+          context: .
+          file: docker/Dockerfile
+          target: server
+          build-args: |
+            PIXI_ENV=prod
+            CONDA_PRESTO_VERSION=${{ env.RELEASE_TAG }}
+          load: true
+          push: false
+          tags: conda-presto:smoke
+          cache-from: type=gha,scope=server-smoke
+          cache-to: type=gha,mode=max,scope=server-smoke
+
+      - name: Exercise server
+        run: |
+          docker run --detach --name conda-presto-smoke \
+            --publish 127.0.0.1:8000:8000 conda-presto:smoke
+          for _ in {1..180}; do
+            if curl --fail --silent http://127.0.0.1:8000/health >/dev/null; then
+              break
+            fi
+            if ! docker inspect --format '{{.State.Running}}' conda-presto-smoke | grep -q true; then
+              exit 1
+            fi
+            sleep 1
+          done
+          curl --fail --silent http://127.0.0.1:8000/health >/dev/null
+          curl --fail --silent --max-time 90 \
+            --header 'content-type: application/json' \
+            --data '{"specs":["zlib"],"platforms":["linux-64"]}' \
+            http://127.0.0.1:8000/resolve \
+            | jq --exit-status '.[0].platform == "linux-64" and (.[0].packages | length > 0)'
+          worker_pid="$(docker exec conda-presto-smoke sh -c '
+            for path in /proc/[0-9]*/cmdline; do
+              pid="${path#/proc/}"
+              pid="${pid%/cmdline}"
+              if test "$pid" != "$$" \
+                && grep -aq spawn_main "$path" \
+                && grep -Eq "^PPid:[[:space:]]+1$" "/proc/$pid/status"; then
+                echo "$pid"
+                break
+              fi
+            done
+          ')"
+          test -n "$worker_pid"
+          docker exec conda-presto-smoke sh -c \
+            "grep -aq spawn_main /proc/$worker_pid/cmdline"
+          docker exec conda-presto-smoke sh -c "kill -9 $worker_pid"
+          unavailable=false
+          for _ in {1..30}; do
+            http_status="$(curl --silent --output /dev/null --write-out '%{http_code}' \
+              http://127.0.0.1:8000/health)"
+            if test "$http_status" = 503; then
+              unavailable=true
+              break
+            fi
+            sleep 1
+          done
+          test "$unavailable" = true
+          for _ in {1..180}; do
+            if curl --fail --silent http://127.0.0.1:8000/health >/dev/null; then
+              break
+            fi
+            sleep 1
+          done
+          curl --fail --silent http://127.0.0.1:8000/health >/dev/null
+          curl --fail --silent --max-time 90 \
+            --header 'content-type: application/json' \
+            --data '{"specs":["xz"],"platforms":["linux-64"]}' \
+            http://127.0.0.1:8000/resolve \
+            | jq --exit-status '.[0].platform == "linux-64" and (.[0].packages | length > 0)'
+
+      - name: Show server logs
+        if: failure()
+        run: docker logs conda-presto-smoke || true
+
+      - name: Stop server
+        if: always()
+        run: docker rm --force conda-presto-smoke || true
+
   build-and-push:
     name: Build and push ${{ matrix.flavor }} image
+    if: github.event_name != 'pull_request'
+    needs: smoke-server
     runs-on: ubuntu-latest
     permissions:
       contents: read # Check out the release source.

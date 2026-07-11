@@ -26,6 +26,7 @@ def test_broker_service_exposes_root_and_health_check():
     assert service.endpoints[0].url_env == "CONDA_PRESTO_URL"
     assert service.health_check.type == "exec"
     assert service.health_check.command[-1] == "conda_presto.broker"
+    assert service.health_check.start_period_s == 120
     assert service.process is not None
     assert service.process.argv[-1] == "--serve"
     assert service.process.env == {

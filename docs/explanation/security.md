@@ -39,8 +39,8 @@ Dry-run package access
 
 HTTP `/resolve` responses can be stored under content-addressed `/r/<hash>`
 permalinks. The cache key includes the normalized request, output format,
-dependency versions, and local repodata cache file markers so repodata refreshes
-produce new keys.
+dependency versions, and local repodata cache file markers. Expired repodata
+bypasses the stored result, and changed package metadata produces a new key.
 
 The shared cache is currently appropriate for public-channel solves. Avoid
 using a shared public deployment for private channels or credential-bearing

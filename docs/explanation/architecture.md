@@ -92,15 +92,16 @@ On-disk repodata cache
 
 In-memory solver index cache
 : a `RattlerIndexHelper` is cached by `(channels, platform)` inside each
-  process. Repeated solves for the same channel/platform pair skip index
-  construction and pay mostly SAT solving time.
+  process. Repeated solves reuse it until conda's repodata policy requires a
+  refresh, at which point the cached index reloads its channels before solving.
 
 Content-addressed result cache
 : successful HTTP `/resolve` responses are stored under a SHA-256 key and
   returned with `Location: /r/<hash>` when retained. The key includes normalized
   specs, ordered channels, target platforms, output format, relevant dependency
   versions, and markers for conda's local repodata cache files. Repodata
-  refreshes therefore create new keys instead of reusing stale solve results.
+  expiry bypasses stored results, and changed metadata creates a new key instead
+  of reusing a stale solve result.
   The in-process LRU can be backed by Litestar file or Redis stores.
 
 ## HTTP layer
