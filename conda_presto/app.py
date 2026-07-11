@@ -527,6 +527,8 @@ class RepairSearch:
         candidates = []
         seen = set()
         for position, spec in enumerate(self.match_specs):
+            if spec.get_raw_value("url") or spec.get_raw_value("fn"):
+                continue
             replacements = []
             if spec.get_exact_value("version") is not None:
                 replacements.append(("*", "relax_exact_pin"))
@@ -1002,15 +1004,17 @@ async def run_solve(
                     abandon_on_cancel=True,
                 )
         else:
-            result = await anyio.to_thread.run_sync(
-                run_solve_in_process,
-                channels,
-                specs,
-                platforms,
-                format_name,
-                timeout_s,
-                limiter=limiter,
-            )
+            with anyio.fail_after(timeout_s):
+                result = await anyio.to_thread.run_sync(
+                    run_solve_in_process,
+                    channels,
+                    specs,
+                    platforms,
+                    format_name,
+                    timeout_s,
+                    abandon_on_cancel=True,
+                    limiter=limiter,
+                )
     except TimeoutError:
         log.warning(
             "Solve timeout after %ss (specs=%d platforms=%s format=%s)",

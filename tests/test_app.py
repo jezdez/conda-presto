@@ -847,8 +847,9 @@ async def test_resolve_uses_terminable_worker_when_limiter_present(
         captured["args"] = channels, specs, platforms, format_name, timeout_s
         return []
 
-    async def fake_run_sync(func, *args, limiter):
+    async def fake_run_sync(func, *args, abandon_on_cancel, limiter):
         captured["limiter"] = limiter
+        captured["abandon_on_cancel"] = abandon_on_cancel
         return func(*args)
 
     monkeypatch.setattr(app_module, "run_solve_in_process", fake_run_solve_in_process)
@@ -863,6 +864,7 @@ async def test_resolve_uses_terminable_worker_when_limiter_present(
 
     assert response.status_code == 200
     assert captured["limiter"] is test_app.state.solver_limiter
+    assert captured["abandon_on_cancel"] is True
     assert captured["args"] == (
         ["conda-forge"],
         ["zlib"],
@@ -1369,6 +1371,45 @@ async def test_repair_post_verifies_an_exact_pin_relaxation_on_every_platform(
 
 
 @pytest.mark.anyio
+@pytest.mark.parametrize(
+    "spec",
+    [
+        "https://conda.anaconda.org/conda-forge/linux-64/zlib-1.3.1-h4ab18f5_1.conda",
+        "zlib==1.3.1[fn=zlib-1.3.1-h4ab18f5_1.conda]",
+    ],
+    ids=["url", "filename"],
+)
+async def test_repair_post_does_not_relax_package_artifacts(client, monkeypatch, spec):
+    calls = []
+
+    async def fake_run_solve(
+        request, specs, channels, platforms, format_name=None, timeout_s=None
+    ):
+        calls.append(specs)
+        return (
+            msgspec.json.encode(
+                [
+                    SolveResult(
+                        platform=platform,
+                        packages=[],
+                        error="Unsatisfiable environment",
+                    )
+                    for platform in platforms
+                ]
+            ),
+            "application/json",
+        )
+
+    monkeypatch.setattr(app_module, "run_solve", fake_run_solve)
+    response = await client.post("/repair", json={"specs": [spec]})
+
+    assert response.status_code == 200
+    assert response.json()["suggestions"] == []
+    assert response.json()["completion_reason"] == "exhausted"
+    assert calls == [[spec]]
+
+
+@pytest.mark.anyio
 async def test_repair_post_relaxes_one_side_of_a_bounded_spec(client, monkeypatch):
     async def fake_run_solve(
         request, specs, channels, platforms, format_name=None, timeout_s=None
@@ -1547,6 +1588,42 @@ async def test_repair_post_keeps_verified_results_when_a_candidate_times_out(
     assert len(result["suggestions"]) == 1
     assert result["partial"] is True
     assert result["completion_reason"] == "time_limit"
+
+
+@pytest.mark.anyio
+async def test_repair_post_time_budget_includes_solver_queue(
+    client, test_app, monkeypatch
+):
+    worker_started = False
+
+    def fail_run_solve_in_process(*args):
+        nonlocal worker_started
+        worker_started = True
+        raise AssertionError("queued solve must not start after the repair deadline")
+
+    limiter = app_module.anyio.CapacityLimiter(1)
+    occupied = app_module.anyio.Event()
+    release = app_module.anyio.Event()
+
+    async def occupy_solver():
+        async with limiter:
+            occupied.set()
+            await release.wait()
+
+    monkeypatch.setattr(app_module, "run_solve_in_process", fail_run_solve_in_process)
+    test_app.state.solver_limiter = limiter
+    async with app_module.anyio.create_task_group() as task_group:
+        task_group.start_soon(occupy_solver)
+        await occupied.wait()
+        response = await client.post(
+            "/repair?time_budget_ms=10",
+            json={"specs": ["zlib==1.3.1"]},
+        )
+        release.set()
+
+    assert response.status_code == 504
+    assert response.json() == {"error": "Repair exceeded its time budget"}
+    assert worker_started is False
 
 
 @pytest.mark.anyio
