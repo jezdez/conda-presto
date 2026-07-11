@@ -30,12 +30,14 @@ In-memory solver index cache
   Reuse follows conda's repodata freshness policy. When repodata expires or a
   cache file changes, the existing index reloads those channels before solving.
 
-Content-addressed result cache
+Result cache
 : successful HTTP `/resolve` responses and internal `/solver/v1` final states
-  share a bounded in-process LRU keyed by SHA-256. A hit skips solving and
-  serialization; solver hits also skip state-specific index construction. The
-  LRU can be backed by a persistent file or Redis store, which lets cached
-  results survive server restarts.
+  share a bounded in-process LRU. Resolve responses use content-addressed keys;
+  solver final states use stable workload slots whose values carry the
+  worker-observed repodata snapshot. A hit skips solving and serialization;
+  solver hits also skip state-specific index construction. The LRU can be
+  backed by a persistent file or Redis store, which lets cached results survive
+  server restarts.
 
 ## Cache key safety
 
@@ -44,11 +46,13 @@ normalized specs, ordered channels, target platforms, output format, relevant
 dependency versions, and markers for conda's local `repodata.json` files. A
 request bypasses a stored result when conda's effective policy requires any
 corresponding repodata metadata to refresh. If refreshed package metadata
-changes, the next result uses a different key. Solver final-state keys
-additionally include the complete solver-relevant state:
-installed records, history, pins, virtual packages, operation modifiers, and
-solver settings. They exclude the prefix path and file inventory, allowing
-identical logical states at different paths to share an answer.
+changes, the next `/resolve` result uses a different key. Solver final-state
+slot keys additionally include the complete solver-relevant state: installed
+records, history, pins, virtual packages, operation modifiers, solver settings,
+credential scope, and dependency versions. They exclude the prefix path, file
+inventory, and repodata markers, allowing identical logical states at different
+paths to share one refreshable slot. The stored value carries the exact
+worker-observed repodata snapshot, and lookup requires a fresh exact match.
 
 That design keeps shared caching practical for public channels while avoiding
 reuse across channel metadata snapshots. Private channels and credentialed
@@ -63,11 +67,11 @@ index. Server startup can pre-warm expected channel/platform combinations using
 `CONDA_PRESTO_CHANNELS` and `CONDA_PRESTO_PLATFORMS`, shifting that cost from
 the first user request to startup.
 
-The result cache adds one freshness check and store lookup on each HTTP solve
-request. On a miss or expired repodata, conda-presto recomputes the key after
-the solve so the result uses the metadata markers loaded by the solver. That
-overhead scales with the number of channel/platform repodata files and is
-normally much smaller than solving.
+The result cache adds a store lookup and freshness check on each HTTP solve
+request. On a solver miss, conda-presto captures metadata immediately before
+and after worker index collection, then verifies the current snapshot before
+atomically replacing the stable slot. That overhead scales with the number of
+channel/platform repodata files and is normally much smaller than solving.
 
 The final-state cache is intentionally narrower than `/resolve`: repeated
 dry-runs, retries, creates, and cloned prefix states can hit, while a completed

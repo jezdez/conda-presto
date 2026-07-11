@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import ipaddress
 import json
+import logging
 from contextlib import ExitStack
 from importlib.metadata import version as pkg_version
 from types import MappingProxyType
@@ -35,7 +36,9 @@ from conda_rattler_solver.state import SolverInputState, SolverOutputState
 from .config import SOLVE_TIMEOUT_S
 from .resolve import RepodataSnapshot, platform_lock
 
-SOLVER_CACHE_ENVELOPE_VERSION = 1
+log = logging.getLogger(__name__)
+
+SOLVER_CACHE_ENVELOPE_VERSION = 2
 SOLVER_CACHE_DEPENDENCY_PACKAGES = (
     "conda-presto",
     "conda",
@@ -117,6 +120,30 @@ class PrestoSolveError(msgspec.Struct):
         if self.allow_retry is not None:
             error.allow_retry = self.allow_retry
         raise error
+
+
+class PrestoSolveOutcome(msgspec.Struct):
+    """A worker result and any repodata state observed while producing it."""
+
+    result: PrestoSolveResponse | PrestoSolveError
+    metadata_before: RepodataSnapshot | None
+    metadata_used: RepodataSnapshot | None
+
+    def is_cacheable_with(self, current: RepodataSnapshot) -> bool:
+        """Return whether the response can be published for *current* metadata."""
+        if (
+            isinstance(self.result, PrestoSolveError)
+            or self.metadata_before is None
+            or self.metadata_used is None
+            or current.stale
+            or current.records != self.metadata_used.records
+        ):
+            return False
+        if not self.metadata_used.is_cacheable_after(self.metadata_before):
+            return False
+        return self.metadata_before.stale or (
+            self.metadata_before.records == self.metadata_used.records
+        )
 
 
 class PrestoSolveRequest(msgspec.Struct):
@@ -227,8 +254,8 @@ class PrestoSolveRequest(msgspec.Struct):
         ]
         return request
 
-    def cache_key(self, repodata: RepodataSnapshot) -> str:
-        """Return the content-addressed key for this solver state."""
+    def cache_key(self) -> str:
+        """Return the stable cache-slot key for this solver state."""
         versions = {}
         for package in SOLVER_CACHE_DEPENDENCY_PACKAGES:
             try:
@@ -242,7 +269,6 @@ class PrestoSolveRequest(msgspec.Struct):
             "operation": "solver/v1",
             "request": request,
             "dependency_versions": versions,
-            "repodata": repodata.records,
         }
         body = json.dumps(
             envelope,
@@ -272,13 +298,19 @@ class PrestoSolveRequest(msgspec.Struct):
                 ):
                     overrides.enter_context(context._override(key, value))
                 solver = self.rattler_solver()
-                return RepodataSnapshot.capture(
-                    solver._collect_channel_list(PrestoSolverInputState(self)),
-                    [target_subdir],
-                    repodata_fn=self.effective_repodata_fn(),
-                    use_shards=self.repodata_use_shards,
-                    use_index_cache=self.use_index_cache,
+                return self.capture_repodata(
+                    solver._collect_channel_list(PrestoSolverInputState(self))
                 )
+
+    def capture_repodata(self, channels: list[Channel]) -> RepodataSnapshot:
+        """Capture repodata for an effective channel list under the caller's lock."""
+        return RepodataSnapshot.capture(
+            channels,
+            [self.target_subdir()],
+            repodata_fn=self.effective_repodata_fn(),
+            use_shards=self.repodata_use_shards,
+            use_index_cache=self.use_index_cache,
+        )
 
     def effective_repodata_fn(self) -> str:
         """Return the repodata filename the server backend will use."""
@@ -317,8 +349,8 @@ class PrestoSolveRequest(msgspec.Struct):
             )
         return target_subdir
 
-    def solve(self) -> PrestoSolveResponse:
-        """Solve this captured state with the server's rattler backend."""
+    def solve(self) -> PrestoSolveOutcome:
+        """Solve this captured state and report the repodata observed by the worker."""
         target_subdir = self.target_subdir()
         if self.offline:
             raise PrestoSolverError(
@@ -348,28 +380,72 @@ class PrestoSolveRequest(msgspec.Struct):
                 solver = self.rattler_solver()
                 input_state = PrestoSolverInputState(self)
                 output_state = SolverOutputState(solver_input_state=input_state)
-                if (solution := output_state.early_exit()) is not None:
-                    return PrestoSolveResponse(
-                        records=[record.dump() for record in solution],
-                        neutered=[],
-                    )
                 channels = solver._collect_channel_list(input_state)
+                if (solution := output_state.early_exit()) is not None:
+                    return PrestoSolveOutcome(
+                        result=PrestoSolveResponse(
+                            records=[record.dump() for record in solution],
+                            neutered=[],
+                        ),
+                        metadata_before=None,
+                        metadata_used=None,
+                    )
                 conda_build_channels = (
                     solver._collect_channels_subdirs_from_conda_build(
                         seen=set(channels)
                     )
                 )
-                index = solver._collect_all_metadata(
-                    channels=channels,
-                    conda_build_channels=conda_build_channels,
-                    subdirs=solver.subdirs,
-                    in_state=input_state,
-                )
-                output_state.check_for_pin_conflicts(index)
-                output_state = solver._solving_loop(input_state, output_state, index)
-                return PrestoSolveResponse(
-                    records=[record.dump() for record in output_state.current_solution],
-                    neutered=[str(spec) for spec in output_state.neutered.values()],
+                metadata_before = None
+                metadata_used = None
+                try:
+                    metadata_before = self.capture_repodata(channels)
+                except Exception:
+                    log.warning(
+                        "Worker repodata metadata unavailable before index collection",
+                    )
+                try:
+                    index = solver._collect_all_metadata(
+                        channels=channels,
+                        conda_build_channels=conda_build_channels,
+                        subdirs=solver.subdirs,
+                        in_state=input_state,
+                    )
+                    try:
+                        metadata_used = self.capture_repodata(channels)
+                    except Exception:
+                        log.warning(
+                            "Worker repodata metadata unavailable after "
+                            "index collection",
+                        )
+                    output_state.check_for_pin_conflicts(index)
+                    output_state = solver._solving_loop(
+                        input_state,
+                        output_state,
+                        index,
+                    )
+                except CondaError as exc:
+                    if metadata_used is None:
+                        try:
+                            metadata_used = self.capture_repodata(channels)
+                        except Exception:
+                            log.warning(
+                                "Worker repodata metadata unavailable after "
+                                "solver error",
+                            )
+                    return PrestoSolveOutcome(
+                        result=PrestoSolveError.from_exception(exc),
+                        metadata_before=metadata_before,
+                        metadata_used=metadata_used,
+                    )
+                return PrestoSolveOutcome(
+                    result=PrestoSolveResponse(
+                        records=[
+                            record.dump() for record in output_state.current_solution
+                        ],
+                        neutered=[str(spec) for spec in output_state.neutered.values()],
+                    ),
+                    metadata_before=metadata_before,
+                    metadata_used=metadata_used,
                 )
 
 

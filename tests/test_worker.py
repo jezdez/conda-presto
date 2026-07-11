@@ -12,7 +12,7 @@ from conda.models.environment import Environment
 
 import conda_presto.worker as worker_module
 from conda_presto.resolve import SolveResult
-from conda_presto.solver import PrestoSolveError
+from conda_presto.solver import PrestoSolveError, PrestoSolveOutcome
 
 
 @pytest.fixture()
@@ -585,8 +585,11 @@ def test_persistent_solve_worker_entrypoint_serializes_conda_error(monkeypatch):
 
     assert sent[0] == ("ready", None)
     assert sent[1][0] == "ok"
-    assert isinstance(sent[1][1], PrestoSolveError)
-    assert sent[1][1].kind == "packages-not-found"
+    assert isinstance(sent[1][1], PrestoSolveOutcome)
+    assert isinstance(sent[1][1].result, PrestoSolveError)
+    assert sent[1][1].result.kind == "packages-not-found"
+    assert sent[1][1].metadata_before is None
+    assert sent[1][1].metadata_used is None
     assert sent[2] == "closed"
 
 

@@ -29,6 +29,7 @@ import conda_presto.solver as solver_module
 from conda_presto.resolve import RepodataSnapshot
 from conda_presto.solver import (
     PrestoSolveError,
+    PrestoSolveOutcome,
     PrestoSolver,
     PrestoSolverClient,
     PrestoSolveRequest,
@@ -89,54 +90,218 @@ def solver_repodata():
             {"installed": [{"name": "python", "version": "3.13"}]},
             id="installed",
         ),
+        pytest.param({"subdirs": ["osx-arm64", "noarch"]}, id="subdirs"),
+        pytest.param({"specs_to_add": ["python"]}, id="specs-to-add"),
+        pytest.param({"specs_to_remove": ["zlib"]}, id="specs-to-remove"),
         pytest.param({"history": ["python=3.13"]}, id="history"),
         pytest.param({"pinned": ["python<3.14"]}, id="pinned"),
+        pytest.param(
+            {"virtual": [{"name": "__linux", "version": "6"}]},
+            id="virtual",
+        ),
+        pytest.param(
+            {"aggressive_updates": ["openssl"]},
+            id="aggressive-updates",
+        ),
+        pytest.param({"always_update": ["python"]}, id="always-update"),
         pytest.param({"update_modifier": "UPDATE_ALL"}, id="update-modifier"),
+        pytest.param({"deps_modifier": "NO_DEPS"}, id="deps-modifier"),
+        pytest.param({"ignore_pinned": True}, id="ignore-pinned"),
+        pytest.param({"force_remove": True}, id="force-remove"),
+        pytest.param({"prune": True}, id="prune"),
+        pytest.param({"command": "create"}, id="command"),
+        pytest.param({"offline": True}, id="offline"),
+        pytest.param({"channel_priority": "flexible"}, id="channel-priority"),
         pytest.param({"use_only_tar_bz2": True}, id="package-format"),
         pytest.param(
             {"add_pip_as_python_dependency": False},
             id="add-pip-as-python-dependency",
         ),
         pytest.param({"allow_cycles": False}, id="allow-cycles"),
+        pytest.param(
+            {"restore_free_channel": True},
+            id="restore-free-channel",
+        ),
+        pytest.param({"repodata_use_shards": False}, id="repodata-shards"),
+        pytest.param({"use_index_cache": True}, id="index-cache"),
         pytest.param({"channels": [Channel("bioconda").dump()]}, id="channels"),
+        pytest.param(
+            {
+                "channels": [
+                    {
+                        **Channel("conda-forge").dump(),
+                        "auth": "user:password",
+                    }
+                ]
+            },
+            id="channel-auth",
+        ),
+        pytest.param(
+            {
+                "channels": [
+                    {
+                        **Channel("conda-forge").dump(),
+                        "token": "secret",
+                    }
+                ]
+            },
+            id="channel-token",
+        ),
     ],
 )
-def test_solver_cache_key_covers_final_state(solver_request, solver_repodata, change):
+def test_solver_cache_key_covers_final_state(solver_request, change):
     changed = msgspec.structs.replace(solver_request, **change)
 
-    assert changed.cache_key(solver_repodata) != solver_request.cache_key(
-        solver_repodata
+    assert changed.cache_key() != solver_request.cache_key()
+
+
+def test_solver_cache_key_preserves_channel_order(solver_request):
+    first = msgspec.structs.replace(
+        solver_request,
+        channels=[Channel("conda-forge").dump(), Channel("bioconda").dump()],
+    )
+    second = msgspec.structs.replace(
+        solver_request,
+        channels=[Channel("bioconda").dump(), Channel("conda-forge").dump()],
     )
 
+    assert first.cache_key() != second.cache_key()
 
-def test_solver_cache_key_covers_repodata(solver_request, solver_repodata):
+
+def test_solver_cache_key_covers_protocol_version(monkeypatch, solver_request):
+    first = solver_request.cache_key()
+    monkeypatch.setattr(solver_module, "SOLVER_CACHE_ENVELOPE_VERSION", 3)
+
+    assert solver_request.cache_key() != first
+
+
+def test_solver_cache_key_covers_effective_repodata_filename(
+    monkeypatch,
+    solver_request,
+):
+    monkeypatch.setattr(
+        solver_module,
+        "maybe_ignore_current_repodata",
+        lambda value: value,
+    )
+    changed = msgspec.structs.replace(
+        solver_request,
+        repodata_fn="current_repodata.json",
+    )
+
+    assert changed.cache_key() != solver_request.cache_key()
+
+
+def test_solver_cache_key_is_stable_across_repodata(
+    monkeypatch, solver_request, solver_repodata
+):
+    monkeypatch.setattr(
+        solver_module.RepodataSnapshot,
+        "capture",
+        lambda *_args, **_kwargs: solver_repodata,
+    )
+    first = solver_request.cache_key()
     changed = RepodataSnapshot(
         (("https://conda.example/linux-64", "repodata.json", 20, 2),),
         False,
     )
-
-    assert solver_request.cache_key(changed) != solver_request.cache_key(
-        solver_repodata
+    monkeypatch.setattr(
+        solver_module.RepodataSnapshot,
+        "capture",
+        lambda *_args, **_kwargs: changed,
     )
+
+    assert solver_request.cache_key() == first
+
+
+@pytest.mark.parametrize(
+    ("metadata_before", "metadata_used", "current", "expected"),
+    [
+        pytest.param(
+            RepodataSnapshot((("channel", "repodata.json", 10, 1),), False),
+            RepodataSnapshot((("channel", "repodata.json", 10, 1),), False),
+            RepodataSnapshot((("channel", "repodata.json", 10, 1),), False),
+            True,
+            id="fresh-unchanged",
+        ),
+        pytest.param(
+            RepodataSnapshot((("channel", "repodata.json", 10, 1),), False),
+            RepodataSnapshot((("channel", "repodata.json", 20, 2),), False),
+            RepodataSnapshot((("channel", "repodata.json", 20, 2),), False),
+            False,
+            id="fresh-changed-during-index",
+        ),
+        pytest.param(
+            RepodataSnapshot((("channel", "repodata.json", 10, 1),), True),
+            RepodataSnapshot((("channel", "repodata.json", 20, 2),), False),
+            RepodataSnapshot((("channel", "repodata.json", 20, 2),), False),
+            True,
+            id="stale-refreshed",
+        ),
+        pytest.param(
+            RepodataSnapshot((("channel", "repodata.json", 10, 1),), False),
+            RepodataSnapshot((("channel", "repodata.json", 10, 1),), False),
+            RepodataSnapshot((("channel", "repodata.json", 20, 2),), False),
+            False,
+            id="changed-after-index",
+        ),
+        pytest.param(
+            RepodataSnapshot((("channel", "repodata.json", 10, 1),), False),
+            RepodataSnapshot((("channel", "repodata.json", 10, 1),), False),
+            RepodataSnapshot((("channel", "repodata.json", 10, 1),), True),
+            False,
+            id="current-stale",
+        ),
+        pytest.param(
+            RepodataSnapshot(
+                (("channel", "repodata_shards.msgpack.zst", 10, 1),),
+                True,
+            ),
+            RepodataSnapshot(
+                (("channel", "repodata_shards.msgpack.zst", 10, 1),),
+                False,
+            ),
+            RepodataSnapshot(
+                (("channel", "repodata_shards.msgpack.zst", 10, 1),),
+                False,
+            ),
+            False,
+            id="transient-shard-fallback",
+        ),
+    ],
+)
+def test_solver_outcome_validates_worker_observed_repodata(
+    metadata_before,
+    metadata_used,
+    current,
+    expected,
+):
+    outcome = PrestoSolveOutcome(
+        result=PrestoSolveResponse(records=[], neutered=[]),
+        metadata_before=metadata_before,
+        metadata_used=metadata_used,
+    )
+
+    assert outcome.is_cacheable_with(current) is expected
 
 
 @pytest.mark.parametrize("package", solver_module.SOLVER_CACHE_DEPENDENCY_PACKAGES)
 def test_solver_cache_key_covers_dependency_versions(
-    monkeypatch, solver_request, solver_repodata, package
+    monkeypatch, solver_request, package
 ):
     monkeypatch.setattr(
         solver_module,
         "pkg_version",
         lambda name: "one" if name == package else "same",
     )
-    first = solver_request.cache_key(solver_repodata)
+    first = solver_request.cache_key()
     monkeypatch.setattr(
         solver_module,
         "pkg_version",
         lambda name: "two" if name == package else "same",
     )
 
-    assert solver_request.cache_key(solver_repodata) != first
+    assert solver_request.cache_key() != first
 
 
 def test_solver_uses_server_effective_repodata_fn(
@@ -163,10 +328,13 @@ def test_solver_uses_server_effective_repodata_fn(
     request.repodata_snapshot()
 
     assert captured["repodata_fn"] == "repodata.json"
-    assert request.cache_key(solver_repodata) == msgspec.structs.replace(
-        request,
-        repodata_fn="repodata.json",
-    ).cache_key(solver_repodata)
+    assert (
+        request.cache_key()
+        == msgspec.structs.replace(
+            request,
+            repodata_fn="repodata.json",
+        ).cache_key()
+    )
 
 
 @pytest.mark.parametrize(
@@ -335,22 +503,29 @@ def test_presto_request_uses_rattler_backend(
     monkeypatch, package_record, solver_request
 ):
     calls = []
+    order = []
 
     class Backend:
         def __call__(self, **kwargs):
             calls.append(kwargs)
+
+            def solve(*_):
+                order.append("sat")
+                return SimpleNamespace(
+                    current_solution=[package_record],
+                    neutered=OrderedDict([(package_record.name, MatchSpec("zlib"))]),
+                )
+
             solver = SimpleNamespace(
                 subdirs=kwargs["subdirs"],
                 _repodata_fn="repodata.json",
                 _collect_channel_list=lambda _: ["conda-forge"],
                 _collect_channels_subdirs_from_conda_build=lambda **_: [],
-                _solving_loop=lambda *_: SimpleNamespace(
-                    current_solution=[package_record],
-                    neutered=OrderedDict([(package_record.name, MatchSpec("zlib"))]),
-                ),
+                _solving_loop=solve,
             )
             solver._collect_all_metadata = lambda **_: (
-                calls.append(
+                order.append("index")
+                or calls.append(
                     {
                         "offline": context.offline,
                         "channel_priority": context.channel_priority.value,
@@ -386,6 +561,15 @@ def test_presto_request_uses_rattler_backend(
         lambda name: Backend() if name == "rattler" else None,
     )
     monkeypatch.setattr(solver_module, "SolverOutputState", OutputState)
+    repodata = RepodataSnapshot(
+        (("https://conda.example/linux-64", "repodata.json", 10, 1),),
+        False,
+    )
+    monkeypatch.setattr(
+        solver_module.RepodataSnapshot,
+        "capture",
+        lambda *_args, **_kwargs: order.append("metadata") or repodata,
+    )
     request = msgspec.structs.replace(
         solver_request,
         channel_priority="disabled",
@@ -397,10 +581,13 @@ def test_presto_request_uses_rattler_backend(
         use_index_cache=True,
         repodata_fn="current_repodata.json",
     )
-    response = request.solve()
+    outcome = request.solve()
+    response = outcome.result
 
     assert response.records[0]["name"] == "zlib"
     assert response.neutered == ["zlib"]
+    assert outcome.metadata_before == outcome.metadata_used == repodata
+    assert order == ["metadata", "index", "metadata", "sat"]
     assert [str(channel) for channel in calls[0]["channels"]] == [
         "https://conda.anaconda.org/conda-forge"
     ]
@@ -420,11 +607,127 @@ def test_presto_request_uses_rattler_backend(
     }
 
 
+@pytest.mark.parametrize(
+    "failure_index",
+    [pytest.param(0, id="before-index"), pytest.param(1, id="after-index")],
+)
+def test_presto_request_metadata_failure_does_not_fail_solve(
+    monkeypatch,
+    package_record,
+    solver_request,
+    failure_index,
+):
+    class Backend:
+        def __call__(self, **kwargs):
+            return SimpleNamespace(
+                subdirs=kwargs["subdirs"],
+                _repodata_fn=kwargs["repodata_fn"],
+                _collect_channel_list=lambda _: [Channel("conda-forge")],
+                _collect_channels_subdirs_from_conda_build=lambda **_: [],
+                _collect_all_metadata=lambda **_: "index",
+                _solving_loop=lambda *_: SimpleNamespace(
+                    current_solution=[package_record],
+                    neutered=OrderedDict(),
+                ),
+            )
+
+    class OutputState:
+        def __init__(self, *, solver_input_state):
+            self.solver_input_state = solver_input_state
+
+        def early_exit(self):
+            return None
+
+        def check_for_pin_conflicts(self, index):
+            assert index == "index"
+
+    repodata = RepodataSnapshot(
+        (("https://conda.example/linux-64", "repodata.json", 10, 1),),
+        False,
+    )
+    snapshots = iter(
+        [
+            RuntimeError("metadata unavailable") if index == failure_index else repodata
+            for index in range(2)
+        ]
+    )
+
+    def capture(*_args, **_kwargs):
+        snapshot = next(snapshots)
+        if isinstance(snapshot, Exception):
+            raise snapshot
+        return snapshot
+
+    monkeypatch.setattr(
+        solver_module.context.plugin_manager,
+        "get_solver_backend",
+        lambda name: Backend() if name == "rattler" else None,
+    )
+    monkeypatch.setattr(solver_module, "SolverOutputState", OutputState)
+    monkeypatch.setattr(solver_module.RepodataSnapshot, "capture", capture)
+
+    outcome = solver_request.solve()
+
+    assert outcome.result.records[0]["name"] == "zlib"
+    assert (outcome.metadata_before is None) is (failure_index == 0)
+    assert (outcome.metadata_used is None) is (failure_index == 1)
+
+
+def test_presto_request_error_retains_worker_metadata(
+    monkeypatch,
+    solver_request,
+):
+    error = PackagesNotFoundError(["missing"], ["https://example.invalid"])
+
+    class Backend:
+        def __call__(self, **kwargs):
+            return SimpleNamespace(
+                subdirs=kwargs["subdirs"],
+                _repodata_fn=kwargs["repodata_fn"],
+                _collect_channel_list=lambda _: [Channel("conda-forge")],
+                _collect_channels_subdirs_from_conda_build=lambda **_: [],
+                _collect_all_metadata=lambda **_: "index",
+                _solving_loop=lambda *_: (_ for _ in ()).throw(error),
+            )
+
+    class OutputState:
+        def __init__(self, *, solver_input_state):
+            self.solver_input_state = solver_input_state
+
+        def early_exit(self):
+            return None
+
+        def check_for_pin_conflicts(self, index):
+            assert index == "index"
+
+    repodata = RepodataSnapshot(
+        (("https://conda.example/linux-64", "repodata.json", 10, 1),),
+        False,
+    )
+    monkeypatch.setattr(
+        solver_module.context.plugin_manager,
+        "get_solver_backend",
+        lambda name: Backend() if name == "rattler" else None,
+    )
+    monkeypatch.setattr(solver_module, "SolverOutputState", OutputState)
+    monkeypatch.setattr(
+        solver_module.RepodataSnapshot,
+        "capture",
+        lambda *_args, **_kwargs: repodata,
+    )
+
+    outcome = solver_request.solve()
+
+    assert outcome.result.kind == "packages-not-found"
+    assert outcome.metadata_before == outcome.metadata_used == repodata
+
+
 def test_presto_request_accepts_empty_early_exit(monkeypatch, solver_request):
     class Backend:
         def __call__(self, **kwargs):
             return SimpleNamespace(
                 _repodata_fn=kwargs["repodata_fn"],
+                _collect_channel_list=lambda _: [Channel("conda-forge")],
                 _collect_all_metadata=lambda **_: pytest.fail(
                     "empty early exit must not collect metadata"
                 ),
@@ -440,10 +743,23 @@ def test_presto_request_accepts_empty_early_exit(monkeypatch, solver_request):
         "SolverOutputState",
         lambda **_: SimpleNamespace(early_exit=lambda: []),
     )
+    repodata = RepodataSnapshot(
+        (("https://conda.example/linux-64", "repodata.json", 10, 1),),
+        False,
+    )
+    monkeypatch.setattr(
+        solver_module.RepodataSnapshot,
+        "capture",
+        lambda *_args, **_kwargs: repodata,
+    )
 
-    response = solver_request.solve()
+    outcome = solver_request.solve()
 
-    assert response == PrestoSolveResponse(records=[], neutered=[])
+    assert outcome == PrestoSolveOutcome(
+        result=PrestoSolveResponse(records=[], neutered=[]),
+        metadata_before=None,
+        metadata_used=None,
+    )
 
 
 def test_presto_request_requires_rattler_backend(monkeypatch, solver_request):

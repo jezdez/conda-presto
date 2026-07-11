@@ -95,16 +95,17 @@ In-memory solver index cache
   process. Repeated solves reuse it until conda's repodata policy requires a
   refresh, at which point the cached index reloads its channels before solving.
 
-Content-addressed result cache
+Result cache
 : successful HTTP `/resolve` responses and internal `/solver/v1` final states
   share a bounded in-process LRU backed optionally by Litestar file or Redis
-  stores. Resolve entries use `resolve-v1:` keys and public `/r/<hash>`
-  permalinks. Solver entries use private `solver-v1:` keys with no public
-  retrieval route. Both key envelopes include dependency versions and the
-  effective JSON or sharded-repodata markers; the solver envelope also contains
-  its complete canonical solver-relevant state and operation settings. Cache
-  reuse is bypassed when conda's effective policy requires a metadata refresh, and
-  changed metadata creates a new key instead of reusing a stale solve result.
+  stores. Resolve entries use content-addressed `resolve-v1:` keys and public
+  `/r/<hash>` permalinks. Solver entries use private stable `solver-v1:` slots
+  with no public retrieval route. A solver slot key contains dependency
+  versions and the complete canonical solver-relevant state and operation
+  settings; its value contains the worker-observed JSON or sharded-repodata
+  snapshot. Cache reuse is bypassed when conda requires a metadata refresh or
+  the current snapshot differs, and a valid refresh atomically replaces the
+  existing slot.
 
 ## HTTP layer
 

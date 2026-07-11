@@ -14,7 +14,7 @@ from conda.exceptions import CondaError
 from .exceptions import UnknownFormatError
 from .exporter import OutputFormat
 from .resolve import shutdown_process_pool, solve, solve_environments, warmup
-from .solver import PrestoSolveError, PrestoSolveRequest
+from .solver import PrestoSolveError, PrestoSolveOutcome, PrestoSolveRequest
 
 log = logging.getLogger(__name__)
 
@@ -134,7 +134,7 @@ class PersistentSolveWorker:
         self,
         request: PrestoSolveRequest,
         timeout_s: float,
-    ) -> object:
+    ) -> PrestoSolveOutcome | PrestoSolveError:
         """Run an internal solver request in the persistent worker."""
         return self.execute(("solver", request), timeout_s)
 
@@ -265,7 +265,11 @@ def persistent_solve_worker_entrypoint(
                     try:
                         result = request[1].solve()
                     except CondaError as exc:
-                        result = PrestoSolveError.from_exception(exc)
+                        result = PrestoSolveOutcome(
+                            result=PrestoSolveError.from_exception(exc),
+                            metadata_before=None,
+                            metadata_used=None,
+                        )
                 else:
                     channels, specs, platforms, format_name = request
                     if format_name is None:

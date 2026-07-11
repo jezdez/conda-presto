@@ -62,17 +62,23 @@ on-disk repodata cache. Before constructing a state-specific rattler index, the
 its optional persistent file or Redis store, under a private `solver-v1:`
 namespace. A hit skips index construction and SAT solving.
 
-The key contains the complete canonical solver-relevant state, effective
-ordered channels, target subdirs, solver settings,
-conda-presto/conda/rattler versions, and the selected JSON or
-sharded-repodata metadata markers. Prefix paths and file inventories are not
-included, so identical logical prefix states can share a result. Changed
-installed records, history, pins, virtual packages, requested specs, settings,
-or repodata produce a different key. Missing repodata and local `file://`
-sources bypass the cache, as does metadata that conda's effective policy
-requires it to refresh. A transient JSON fallback that leaves an old shard
-marker unchanged is returned but not retained. Only successful final states are
-retained.
+The stable slot key contains the complete canonical solver-relevant state,
+effective ordered channels and credential scope, target subdirs, solver
+settings, and conda-presto/conda/rattler versions. Prefix paths and file
+inventories are not included, so identical logical prefix states can share a
+result. Changed installed records, history, pins, virtual packages, requested
+specs, settings, or dependency versions select a different slot.
+
+Each slot stores the successful response with the exact JSON or
+sharded-repodata snapshot observed by the worker after index collection. A hit
+requires a fresh current snapshot with the same records. A solve is published
+only when the worker's pre-index, used, and current snapshots prove which
+metadata produced it; a metadata change during the solve, an unavailable
+snapshot, or a transient JSON fallback that leaves an old shard marker
+unchanged returns the result without retaining it. Refreshing repodata
+atomically overwrites the same stable slot instead of creating one persistent
+entry per metadata generation. Missing repodata and local `file://` sources
+remain uncacheable. Errors and metadata-free early exits are not retained.
 
 In-memory solver entries share `CONDA_PRESTO_RESULT_CACHE_SIZE` and
 `CONDA_PRESTO_RESULT_CACHE_MAX_MEMORY_MB` with `/resolve`. They can use the

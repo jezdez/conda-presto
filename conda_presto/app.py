@@ -154,7 +154,13 @@ from .resolve import (
     solve_environments,
     warmup,
 )
-from .solver import PrestoSolveError, PrestoSolverClient, PrestoSolveRequest
+from .solver import (
+    PrestoSolveError,
+    PrestoSolveOutcome,
+    PrestoSolverClient,
+    PrestoSolveRequest,
+    PrestoSolveResponse,
+)
 from .worker import PersistentSolveWorker
 
 log = logging.getLogger(__name__)
@@ -657,13 +663,44 @@ class StoredResult(msgspec.Struct):
         return len(self.body) + len(self.media_type)
 
 
+class StoredSolverResult(msgspec.Struct):
+    """One stable solver slot and the repodata snapshot for its response."""
+
+    response: PrestoSolveResponse
+    metadata_used: RepodataSnapshot
+    version: Literal[1] = 1
+
+    @property
+    def memory_size(self) -> int:
+        return len(msgspec.json.encode(self.response)) + sum(
+            len(url) + len(source) + 16
+            for url, source, _, _ in self.metadata_used.records
+        )
+
+    def matches(self, repodata: RepodataSnapshot) -> bool:
+        """Return whether this slot is current for *repodata*."""
+        return not repodata.stale and self.metadata_used.records == repodata.records
+
+
+StoredCacheEntry = StoredResult | StoredSolverResult
+SolverCacheDisposition = Literal[
+    "cache-hit",
+    "published",
+    "already-current",
+    "not-retained",
+    "publication-rejected",
+    "solver-error",
+]
+
+
 @dataclass
 class ResultCache:
     max_size: int
     max_bytes: int = 0
     store_name: str | None = None
-    entries: OrderedDict[str, StoredResult] = field(default_factory=OrderedDict)
+    entries: OrderedDict[str, StoredCacheEntry] = field(default_factory=OrderedDict)
     current_bytes: int = 0
+    solver_publication_lock: anyio.Lock = field(default_factory=anyio.Lock)
 
     @staticmethod
     def key_for(
@@ -715,7 +752,7 @@ class ResultCache:
 
     @staticmethod
     def solver_key(key: str) -> str:
-        """Return the private storage key for a solver-state digest."""
+        """Return the private storage key for a stable solver-state slot."""
         return f"{SOLVER_CACHE_STORE_PREFIX}{key}"
 
     @classmethod
@@ -757,7 +794,7 @@ class ResultCache:
             }
         raise ValueError(f"Unsupported result cache backend: {backend}")
 
-    def remember_memory(self, key: str, stored: StoredResult) -> bool:
+    def remember_memory(self, key: str, stored: StoredCacheEntry) -> bool:
         if self.max_bytes > 0 and stored.memory_size > self.max_bytes:
             if previous := self.entries.pop(key, None):
                 self.current_bytes -= previous.memory_size
@@ -776,17 +813,20 @@ class ResultCache:
             self.current_bytes -= evicted.memory_size
         return key in self.entries
 
-    async def get_response(
+    async def get_stored(
         self,
         key: str,
+        entry_type: type[StoredResult] | type[StoredSolverResult],
         store: Store | None = None,
-        *,
-        location: str | None = None,
-    ) -> Response | None:
+    ) -> StoredCacheEntry | None:
+        """Load one typed cache entry from memory or persistent storage."""
         stored = self.entries.get(key)
-        if stored is not None:
+        if isinstance(stored, entry_type):
             self.entries.move_to_end(key)
-            return self.response_for(stored, location)
+            return stored
+        if stored is not None:
+            self.current_bytes -= stored.memory_size
+            del self.entries[key]
 
         if store is None:
             return None
@@ -800,7 +840,7 @@ class ResultCache:
             return None
 
         try:
-            stored = msgspec.msgpack.decode(stored_payload, type=StoredResult)
+            stored = msgspec.msgpack.decode(stored_payload, type=entry_type)
         except (msgspec.DecodeError, msgspec.ValidationError):
             log.warning("Ignoring corrupt persistent result cache entry for %s", key)
             try:
@@ -814,7 +854,56 @@ class ResultCache:
             return None
 
         self.remember_memory(key, stored)
+        return stored
+
+    async def get_response(
+        self,
+        key: str,
+        store: Store | None = None,
+        *,
+        location: str | None = None,
+    ) -> Response | None:
+        stored = await self.get_stored(key, StoredResult, store)
+        if not isinstance(stored, StoredResult):
+            return None
         return self.response_for(stored, location)
+
+    async def get_solver_result(
+        self,
+        request: PrestoSolveRequest,
+        store: Store | None = None,
+    ) -> StoredSolverResult | None:
+        """Return a solver result only after a post-read freshness check."""
+        async with self.solver_publication_lock:
+            stored = await self.get_stored(
+                self.solver_key(request.cache_key()),
+                StoredSolverResult,
+                store,
+            )
+            if not isinstance(stored, StoredSolverResult):
+                return None
+            try:
+                current = request.repodata_snapshot()
+            except Exception:
+                log.warning("Presto solver cache metadata unavailable during lookup")
+                return None
+            return stored if stored.matches(current) else None
+
+    async def store_entry(
+        self,
+        key: str,
+        stored: StoredCacheEntry,
+        store: Store | None = None,
+    ) -> bool:
+        """Retain one cache entry and return whether a cache accepted it."""
+        retained = self.remember_memory(key, stored)
+        if store is not None:
+            try:
+                await store.set(key, msgspec.msgpack.encode(stored))
+                retained = True
+            except Exception:
+                log.warning("Persistent result cache write failed", exc_info=True)
+        return retained
 
     async def remember(
         self,
@@ -826,16 +915,45 @@ class ResultCache:
         location: str | None = None,
     ) -> Response:
         stored = StoredResult(body=body, media_type=media_type)
-        retained = self.remember_memory(key, stored)
-        if store is not None:
-            try:
-                await store.set(key, msgspec.msgpack.encode(stored))
-                retained = True
-            except Exception:
-                log.warning("Persistent result cache write failed", exc_info=True)
+        retained = await self.store_entry(key, stored, store)
         if retained:
             return self.response_for(stored, location)
         return Response(stored.body, media_type=stored.media_type)
+
+    async def publish_solver(
+        self,
+        request: PrestoSolveRequest,
+        outcome: PrestoSolveOutcome,
+        store: Store | None = None,
+    ) -> tuple[StoredSolverResult | None, SolverCacheDisposition]:
+        """Publish a worker result or return the already-current stable slot."""
+        if isinstance(outcome.result, PrestoSolveError):
+            return None, "solver-error"
+        async with self.solver_publication_lock:
+            existing = await self.get_stored(
+                self.solver_key(request.cache_key()),
+                StoredSolverResult,
+                store,
+            )
+            try:
+                current = request.repodata_snapshot()
+            except Exception:
+                log.warning("Presto solver cache metadata unavailable after solve")
+                return None, "publication-rejected"
+            if isinstance(existing, StoredSolverResult) and existing.matches(current):
+                return existing, "already-current"
+            if not outcome.is_cacheable_with(current):
+                return None, "publication-rejected"
+            stored = StoredSolverResult(
+                response=outcome.result,
+                metadata_used=outcome.metadata_used,
+            )
+            retained = await self.store_entry(
+                self.solver_key(request.cache_key()),
+                stored,
+                store,
+            )
+        return stored, "published" if retained else "not-retained"
 
     @staticmethod
     def response_for(
@@ -1920,24 +2038,12 @@ async def solver_v1(
             status_code=HTTP_503_SERVICE_UNAVAILABLE,
         )
     cache: ResultCache = request.app.state.result_cache
-    store = cache.store_from(request)
-    initial_repodata = None
+    service = SolverResultService(cache, cache.store_from(request))
     async with request.app.state.solver_limiter:
         try:
-            initial_repodata = data.repodata_snapshot()
-            key = cache.solver_key(data.cache_key(initial_repodata))
-        except Exception:
-            log.warning("Presto solver cache metadata unavailable; bypassing cache")
-        else:
-            if not initial_repodata.stale and (
-                cached_response := await cache.get_response(key, store)
-            ):
-                return cached_response
-
-        try:
-            result = await anyio.to_thread.run_sync(
-                worker.solve_final_state,
+            result = await service.resolve(
                 data,
+                worker,
                 SOLVE_TIMEOUT_S,
             )
         except TimeoutError:
@@ -1956,24 +2062,9 @@ async def solver_v1(
                 ErrorResponse(error="Internal solver error"),
                 status_code=HTTP_500_INTERNAL_SERVER_ERROR,
             )
-        if isinstance(result, PrestoSolveError):
-            return Response(result, status_code=HTTP_422_UNPROCESSABLE_ENTITY)
-
-        body = msgspec.json.encode(result)
-        try:
-            repodata = data.repodata_snapshot()
-            key = cache.solver_key(data.cache_key(repodata))
-        except Exception:
-            log.warning("Presto solver cache metadata unavailable after solve")
-        else:
-            if repodata.is_cacheable_after(initial_repodata):
-                return await cache.remember(
-                    key,
-                    body,
-                    "application/json",
-                    store,
-                )
-        return Response(body, media_type="application/json")
+        if isinstance(result.result, PrestoSolveError):
+            return Response(result.result, status_code=HTTP_422_UNPROCESSABLE_ENTITY)
+        return Response(result.result)
 
 
 async def on_startup(app: Litestar) -> None:
