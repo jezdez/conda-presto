@@ -20,6 +20,7 @@ the result as native JSON or any conda exporter format
 - Content-addressed HTTP result cache with `/r/<sha256>` lookups and optional file or Redis backing
 - HTTP API with interactive docs (Scalar UI), compression, rate limiting
 - Optional broker-managed local service for repeated local HTTP solves
+- Internal `conda --solver=presto` backend with cached final-state solves through that local service
 - GitHub Action for CI pipelines (local CLI and hosted API modes)
 - Docker images for server and CLI deployment
 - Uses `conda-rattler-solver` for fast SAT solving
@@ -50,6 +51,10 @@ conda-presto registers a manual, loopback-only service with conda-broker. It
 does not start automatically or change normal `conda presto` commands. See the
 [broker-managed local service tutorial](https://jezdez.github.io/conda-presto/tutorials/broker-service/)
 to start the service and find its endpoint.
+
+The service can also back the internal `conda --solver=presto` backend. It
+remains loopback-only and is not available through the Docker server image; see
+the [Presto solver tutorial](https://jezdez.github.io/conda-presto/tutorials/solver-backend/).
 
 ## Documentation
 

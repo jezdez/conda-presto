@@ -96,13 +96,15 @@ In-memory solver index cache
   refresh, at which point the cached index reloads its channels before solving.
 
 Content-addressed result cache
-: successful HTTP `/resolve` responses are stored under a SHA-256 key and
-  returned with `Location: /r/<hash>` when retained. The key includes normalized
-  specs, ordered channels, target platforms, output format, relevant dependency
-  versions, and markers for conda's local repodata cache files. Repodata
-  expiry bypasses stored results, and changed metadata creates a new key instead
-  of reusing a stale solve result.
-  The in-process LRU can be backed by Litestar file or Redis stores.
+: successful HTTP `/resolve` responses and internal `/solver/v1` final states
+  share a bounded in-process LRU backed optionally by Litestar file or Redis
+  stores. Resolve entries use `resolve-v1:` keys and public `/r/<hash>`
+  permalinks. Solver entries use private `solver-v1:` keys with no public
+  retrieval route. Both key envelopes include dependency versions and the
+  effective JSON or sharded-repodata markers; the solver envelope also contains
+  its complete canonical solver-relevant state and operation settings. Cache
+  reuse is bypassed when conda's effective policy requires a metadata refresh, and
+  changed metadata creates a new key instead of reusing a stale solve result.
 
 ## HTTP layer
 

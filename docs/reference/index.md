@@ -40,6 +40,13 @@ Tuning knobs for caching, rate limiting, server behaviour, and solver.
 Server, Docker, cache, and development settings.
 :::
 
+:::{grid-item-card} {octicon}`beaker` Presto solver
+:link: solver-backend
+:link-type: doc
+
+Internal broker-backed `conda --solver=presto` contract and boundaries.
+:::
+
 ::::
 
 ```{toctree}
@@ -50,4 +57,5 @@ http-api
 output-formats
 environment-variables
 configuration
+solver-backend
 ```

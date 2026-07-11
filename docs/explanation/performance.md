@@ -31,8 +31,9 @@ In-memory solver index cache
   cache file changes, the existing index reloads those channels before solving.
 
 Content-addressed result cache
-: successful HTTP `/resolve` responses are stored by a SHA-256 key. A cache hit
-  skips solving and exporting entirely and returns the stored body. The in-memory
+: successful HTTP `/resolve` responses and internal `/solver/v1` final states
+  share a bounded in-process LRU keyed by SHA-256. A hit skips solving and
+  serialization; solver hits also skip state-specific index construction. The
   LRU can be backed by a persistent file or Redis store, which lets cached
   results survive server restarts.
 
@@ -41,9 +42,13 @@ Content-addressed result cache
 The result cache key is tied to the inputs that can change the response:
 normalized specs, ordered channels, target platforms, output format, relevant
 dependency versions, and markers for conda's local `repodata.json` files. A
-request bypasses a stored result when conda considers any corresponding
-repodata cache stale. If refreshed package metadata changes, the next result
-uses a different key.
+request bypasses a stored result when conda's effective policy requires any
+corresponding repodata metadata to refresh. If refreshed package metadata
+changes, the next result uses a different key. Solver final-state keys
+additionally include the complete solver-relevant state:
+installed records, history, pins, virtual packages, operation modifiers, and
+solver settings. They exclude the prefix path and file inventory, allowing
+identical logical states at different paths to share an answer.
 
 That design keeps shared caching practical for public channels while avoiding
 reuse across channel metadata snapshots. Private channels and credentialed
@@ -63,6 +68,12 @@ request. On a miss or expired repodata, conda-presto recomputes the key after
 the solve so the result uses the metadata markers loaded by the solver. That
 overhead scales with the number of channel/platform repodata files and is
 normally much smaller than solving.
+
+The final-state cache is intentionally narrower than `/resolve`: repeated
+dry-runs, retries, creates, and cloned prefix states can hit, while a completed
+transaction normally changes the installed state and therefore the next key.
+This preserves conda transaction correctness instead of reusing a result across
+different prefix histories or pins.
 
 ## Multi-platform solving
 

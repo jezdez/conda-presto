@@ -13,11 +13,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Register `conda-presto.server` as a manual, loopback-only conda-broker service.
 - Require `conda-broker` and document how to run the local service.
 - Run the Docker server in persistent-worker mode without starting conda-broker.
+- Add the internal `conda --solver=presto` backend through the broker-managed loopback service.
+- Cache successful `/solver/v1` final states in solver cache entries that include worker-recorded repodata cache-file markers.
 
 ### Fixed
 
 - Refresh loaded solver indexes when conda considers their repodata stale, and key cached results by the repodata cache files used.
 - Restart failed persistent workers in Docker while conda-broker restarts its server process.
+- Invalidate cached solver results when py-rattler or repodata cache-file markers change, and do not retain transient shard fallback results.
 
 ## [0.6.0] - 2026-07-10
 

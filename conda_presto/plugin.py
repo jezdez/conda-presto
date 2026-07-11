@@ -4,12 +4,13 @@ This module is imported on every ``conda`` invocation via the entry
 point system.  See :func:`conda_subcommands` for why the CLI module
 is imported lazily inside the hook rather than at module top.
 """
+
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
 from conda.plugins import hookimpl
-from conda.plugins.types import CondaSubcommand
+from conda.plugins.types import CondaSolver, CondaSubcommand
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
@@ -37,3 +38,11 @@ def conda_subcommands() -> Iterable[CondaSubcommand]:
         action=execute,
         configure_parser=configure_parser,
     )
+
+
+@hookimpl
+def conda_solvers() -> Iterable[CondaSolver]:
+    """Register the broker-backed Presto solver backend."""
+    from .solver import PrestoSolver
+
+    yield CondaSolver(name="presto", backend=PrestoSolver)

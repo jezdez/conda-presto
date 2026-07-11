@@ -7,7 +7,7 @@ import importlib
 import pytest
 
 import conda_presto.config as config_module
-from conda_presto.config import env_int, env_list
+from conda_presto.config import env_bool, env_int, env_list
 
 
 @pytest.mark.parametrize(
@@ -48,6 +48,28 @@ def test_env_int_uses_default(monkeypatch, raw):
     else:
         monkeypatch.setenv("CONDA_PRESTO_TEST_INT", raw)
     assert env_int("CONDA_PRESTO_TEST_INT", 42) == 42
+
+
+@pytest.mark.parametrize(
+    "raw, expected",
+    [
+        pytest.param("1", True, id="one"),
+        pytest.param("true", True, id="true"),
+        pytest.param("yes", True, id="yes"),
+        pytest.param("0", False, id="zero"),
+        pytest.param("false", False, id="false"),
+        pytest.param("no", False, id="no"),
+    ],
+)
+def test_env_bool_parses_known_values(monkeypatch, raw, expected):
+    monkeypatch.setenv("CONDA_PRESTO_TEST_BOOL", raw)
+    assert env_bool("CONDA_PRESTO_TEST_BOOL") is expected
+
+
+def test_env_bool_rejects_ambiguous_value(monkeypatch):
+    monkeypatch.setenv("CONDA_PRESTO_TEST_BOOL", "sometimes")
+    with pytest.raises(ValueError, match="Invalid boolean for CONDA_PRESTO_TEST_BOOL"):
+        env_bool("CONDA_PRESTO_TEST_BOOL")
 
 
 @pytest.mark.parametrize(

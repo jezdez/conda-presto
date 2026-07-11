@@ -502,7 +502,9 @@ def test_repodata_snapshot_uses_conda_freshness(monkeypatch, tmp_path):
     cache_path.write_text("{}")
     cache = SimpleNamespace(
         cache_path_json=cache_path,
-        load_state=lambda: None,
+        cache_path_shards=tmp_path / "repodata.msgpack.zst",
+        state=SimpleNamespace(should_check_format=lambda _: False),
+        load_state=lambda **_: None,
         stale=lambda: True,
     )
     monkeypatch.setattr(
@@ -524,14 +526,166 @@ def test_repodata_snapshot_uses_conda_freshness(monkeypatch, tmp_path):
 
 
 @pytest.mark.parametrize(
+    ("use_shards", "use_index_cache", "source", "expected_stale"),
+    [
+        pytest.param(
+            False,
+            True,
+            "repodata.json",
+            False,
+            id="forced-json-cache",
+        ),
+        pytest.param(
+            True,
+            True,
+            "repodata_shards.msgpack.zst",
+            True,
+            id="expired-shards",
+        ),
+    ],
+)
+def test_repodata_snapshot_tracks_effective_source(
+    monkeypatch,
+    tmp_path,
+    use_shards,
+    use_index_cache,
+    source,
+    expected_stale,
+):
+    json_path = tmp_path / "repodata.json"
+    shards_path = tmp_path / "repodata.msgpack.zst"
+    json_path.write_text("{}")
+    shards_path.write_bytes(b"shards")
+    loads = []
+    cache = SimpleNamespace(
+        cache_path_json=json_path,
+        cache_path_shards=shards_path,
+        state=SimpleNamespace(should_check_format=lambda _: True),
+        load_state=lambda **kwargs: loads.append(kwargs),
+        stale=lambda: True,
+    )
+    monkeypatch.setattr(
+        resolve_module,
+        "SubdirData",
+        lambda *_, **__: SimpleNamespace(repo_cache=cache),
+    )
+
+    snapshot = RepodataSnapshot.capture(
+        ["https://conda.example/channel"],
+        ["linux-64"],
+        use_shards=use_shards,
+        use_index_cache=use_index_cache,
+    )
+
+    assert snapshot.stale is expected_stale
+    assert {record[1] for record in snapshot.records} == {source}
+    assert loads == [{"binary": use_shards}] * 2
+
+
+def test_repodata_snapshot_uses_effective_json_when_no_channel_has_shards(
+    monkeypatch, tmp_path
+):
+    default_json = tmp_path / "repodata.json"
+    current_json = tmp_path / "current_repodata.json"
+    default_json.write_text("{}")
+    current_json.write_text('{"current": true}')
+    missing_shards = tmp_path / "repodata.msgpack.zst"
+    state = SimpleNamespace(should_check_format=lambda _: False)
+    default_cache = SimpleNamespace(
+        cache_path_json=default_json,
+        cache_path_shards=missing_shards,
+        state=state,
+        load_state=lambda **_: None,
+        stale=lambda: False,
+    )
+    current_cache = SimpleNamespace(
+        cache_path_json=current_json,
+        cache_path_shards=missing_shards,
+        state=state,
+        load_state=lambda **_: None,
+        stale=lambda: False,
+    )
+
+    def subdir_data(*_, repodata_fn):
+        cache = (
+            current_cache if repodata_fn == "current_repodata.json" else default_cache
+        )
+        return SimpleNamespace(repo_cache=cache)
+
+    monkeypatch.setattr(resolve_module, "SubdirData", subdir_data)
+
+    snapshot = RepodataSnapshot.capture(
+        ["https://conda.example/channel"],
+        ["linux-64"],
+        repodata_fn="current_repodata.json",
+        use_shards=True,
+    )
+
+    assert not snapshot.stale
+    assert {record[1] for record in snapshot.records} == {"current_repodata.json"}
+    assert {record[2] for record in snapshot.records} == {current_json.stat().st_size}
+
+
+def test_repodata_snapshot_uses_default_json_for_mixed_shard_channels(
+    monkeypatch, tmp_path
+):
+    sharded_json = tmp_path / "sharded-repodata.json"
+    shards = tmp_path / "repodata.msgpack.zst"
+    plain_json = tmp_path / "plain-repodata.json"
+    missing_shards = tmp_path / "missing-repodata.msgpack.zst"
+    sharded_json.write_text("{}")
+    shards.write_bytes(b"shards")
+    plain_json.write_text('{"default": true}')
+
+    def cache(json_path, shards_path, *, sharded):
+        return SimpleNamespace(
+            cache_path_json=json_path,
+            cache_path_shards=shards_path,
+            state=SimpleNamespace(should_check_format=lambda _: sharded),
+            load_state=lambda **_: None,
+            stale=lambda: False,
+        )
+
+    sharded_cache = cache(sharded_json, shards, sharded=True)
+    plain_cache = cache(plain_json, missing_shards, sharded=False)
+    repodata_fns = []
+
+    def subdir_data(channel, *, repodata_fn):
+        repodata_fns.append(repodata_fn)
+        selected = sharded_cache if channel.name == "sharded" else plain_cache
+        return SimpleNamespace(repo_cache=selected)
+
+    monkeypatch.setattr(resolve_module, "SubdirData", subdir_data)
+
+    snapshot = RepodataSnapshot.capture(
+        [
+            "https://conda.example/sharded",
+            "https://conda.example/plain",
+        ],
+        ["linux-64"],
+        repodata_fn="current_repodata.json",
+        use_shards=True,
+    )
+
+    sources = {url: source for url, source, _, _ in snapshot.records}
+    assert {source for url, source in sources.items() if "/sharded/" in url} == {
+        "repodata_shards.msgpack.zst"
+    }
+    assert {source for url, source in sources.items() if "/plain/" in url} == {
+        "repodata.json"
+    }
+    assert set(repodata_fns) == {"repodata.json"}
+
+
+@pytest.mark.parametrize(
     "second_snapshot",
     [
         pytest.param(
-            RepodataSnapshot((("channel/linux-64", 20, 2),), False),
+            RepodataSnapshot((("channel/linux-64", "repodata.json", 20, 2),), False),
             id="cache-file-changed",
         ),
         pytest.param(
-            RepodataSnapshot((("channel/linux-64", 10, 1),), True),
+            RepodataSnapshot((("channel/linux-64", "repodata.json", 10, 1),), True),
             id="cache-expired",
         ),
     ],
@@ -539,7 +693,7 @@ def test_repodata_snapshot_uses_conda_freshness(monkeypatch, tmp_path):
 def test_build_index_refreshes_reused_repodata(monkeypatch, second_snapshot):
     snapshots = iter(
         [
-            RepodataSnapshot((("channel/linux-64", 10, 1),), False),
+            RepodataSnapshot((("channel/linux-64", "repodata.json", 10, 1),), False),
             second_snapshot,
             RepodataSnapshot(second_snapshot.records, False),
         ]

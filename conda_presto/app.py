@@ -136,6 +136,7 @@ from .config import (
     RESULT_CACHE_REDIS_URL,
     RESULT_CACHE_SIZE,
     SOLVE_TIMEOUT_S,
+    SOLVER_ENDPOINT,
 )
 from .exceptions import SAFE_ERROR_TYPES, UnknownFormatError
 from .exporter import OutputFormat
@@ -153,6 +154,7 @@ from .resolve import (
     solve_environments,
     warmup,
 )
+from .solver import PrestoSolveError, PrestoSolverClient, PrestoSolveRequest
 from .worker import PersistentSolveWorker
 
 log = logging.getLogger(__name__)
@@ -170,13 +172,15 @@ RAW_CONTENT_TYPE_EXTENSIONS: dict[str, str] = {
 
 RESULT_CACHE_CONTROL = "public, max-age=86400, immutable"
 DEFAULT_RESOLVE_FORMAT = "conda-presto-json-v1"
-CACHE_ENVELOPE_VERSION = 2
+CACHE_ENVELOPE_VERSION = 3
 RESULT_CACHE_STORE_NAME = "result_cache"
 RESULT_CACHE_STORE_PREFIX = "resolve-v1:"
+SOLVER_CACHE_STORE_PREFIX = "solver-v1:"
 CACHE_DEPENDENCY_PACKAGES = (
     "conda-presto",
     "conda",
     "conda-rattler-solver",
+    "py-rattler",
     "conda-lockfiles",
 )
 
@@ -705,8 +709,14 @@ class ResultCache:
         return request.app.stores.get(self.store_name)
 
     @staticmethod
-    def store_key(key: str) -> str:
+    def resolve_key(key: str) -> str:
+        """Return the private storage key for a public resolve digest."""
         return f"{RESULT_CACHE_STORE_PREFIX}{key}"
+
+    @staticmethod
+    def solver_key(key: str) -> str:
+        """Return the private storage key for a solver-state digest."""
+        return f"{SOLVER_CACHE_STORE_PREFIX}{key}"
 
     @classmethod
     def stores_for_config(
@@ -767,18 +777,22 @@ class ResultCache:
         return key in self.entries
 
     async def get_response(
-        self, key: str, store: Store | None = None
+        self,
+        key: str,
+        store: Store | None = None,
+        *,
+        location: str | None = None,
     ) -> Response | None:
         stored = self.entries.get(key)
         if stored is not None:
             self.entries.move_to_end(key)
-            return self.response_for(key, stored)
+            return self.response_for(stored, location)
 
         if store is None:
             return None
 
         try:
-            stored_payload = await store.get(self.store_key(key))
+            stored_payload = await store.get(key)
         except Exception:
             log.warning("Persistent result cache read failed", exc_info=True)
             return None
@@ -789,11 +803,18 @@ class ResultCache:
             stored = msgspec.msgpack.decode(stored_payload, type=StoredResult)
         except (msgspec.DecodeError, msgspec.ValidationError):
             log.warning("Ignoring corrupt persistent result cache entry for %s", key)
-            await store.delete(self.store_key(key))
+            try:
+                await store.delete(key)
+            except Exception:
+                log.warning(
+                    "Persistent result cache cleanup failed for %s",
+                    key,
+                    exc_info=True,
+                )
             return None
 
         self.remember_memory(key, stored)
-        return self.response_for(key, stored)
+        return self.response_for(stored, location)
 
     async def remember(
         self,
@@ -801,28 +822,35 @@ class ResultCache:
         body: bytes,
         media_type: str,
         store: Store | None = None,
+        *,
+        location: str | None = None,
     ) -> Response:
         stored = StoredResult(body=body, media_type=media_type)
         retained = self.remember_memory(key, stored)
         if store is not None:
             try:
-                await store.set(self.store_key(key), msgspec.msgpack.encode(stored))
+                await store.set(key, msgspec.msgpack.encode(stored))
                 retained = True
             except Exception:
                 log.warning("Persistent result cache write failed", exc_info=True)
         if retained:
-            return self.response_for(key, stored)
+            return self.response_for(stored, location)
         return Response(stored.body, media_type=stored.media_type)
 
     @staticmethod
-    def response_for(key: str, stored: StoredResult) -> Response:
+    def response_for(
+        stored: StoredResult,
+        location: str | None = None,
+    ) -> Response:
+        headers = (
+            {"Location": location, "Cache-Control": RESULT_CACHE_CONTROL}
+            if location is not None
+            else None
+        )
         return Response(
             stored.body,
             media_type=stored.media_type,
-            headers={
-                "Location": f"/r/{key}",
-                "Cache-Control": RESULT_CACHE_CONTROL,
-            },
+            headers=headers,
         )
 
 
@@ -1145,9 +1173,13 @@ async def run_cached_solve(
     cache: ResultCache = request.app.state.result_cache
     store = cache.store_from(request)
     resolved_platforms = list(platforms or [NATIVE_SUBDIR])
-    repodata = RepodataSnapshot.capture(channels, resolved_platforms)
-    key = cache.key_for(specs, channels, platforms, format_name, repodata)
-    if not repodata.stale and (cached_response := await cache.get_response(key, store)):
+    initial_repodata = RepodataSnapshot.capture(channels, resolved_platforms)
+    digest = cache.key_for(specs, channels, platforms, format_name, initial_repodata)
+    key = cache.resolve_key(digest)
+    location = f"/r/{digest}"
+    if not initial_repodata.stale and (
+        cached_response := await cache.get_response(key, store, location=location)
+    ):
         return cached_response
 
     payload = await run_solve(
@@ -1158,9 +1190,18 @@ async def run_cached_solve(
 
     # Recompute after solving so refreshed repodata and the worker's index agree.
     repodata = RepodataSnapshot.capture(channels, resolved_platforms)
-    key = cache.key_for(specs, channels, platforms, format_name, repodata)
+    digest = cache.key_for(specs, channels, platforms, format_name, repodata)
+    key = cache.resolve_key(digest)
     body, media_type = payload
-    return await cache.remember(key, body, media_type, store)
+    if not repodata.is_cacheable_after(initial_repodata):
+        return Response(body, media_type=media_type)
+    return await cache.remember(
+        key,
+        body,
+        media_type,
+        store,
+        location=f"/r/{digest}",
+    )
 
 
 def transcode_rejection(
@@ -1754,7 +1795,11 @@ async def transcode_post(
 async def result_get(request: Request, key: FromPath[str]) -> Response:
     """Return a stored content-addressed solve result."""
     cache: ResultCache = request.app.state.result_cache
-    cached_response = await cache.get_response(key, cache.store_from(request))
+    cached_response = await cache.get_response(
+        cache.resolve_key(key),
+        cache.store_from(request),
+        location=f"/r/{key}",
+    )
     if cached_response is None:
         return Response(
             {"error": "result not in cache; re-POST to recompute"},
@@ -1848,6 +1893,89 @@ async def health(request: Request) -> Response[HealthResponse]:
     return Response(HealthResponse(status="ok"))
 
 
+@post("/solver/v1", status_code=200, include_in_schema=False)
+async def solver_v1(
+    request: Request,
+    data: PrestoSolveRequest,
+) -> Response:
+    """Run the broker-only internal Presto solver protocol."""
+    client = request.client
+    if (
+        not SOLVER_ENDPOINT
+        or client is None
+        or not PrestoSolverClient.is_loopback(client.host)
+    ):
+        return Response({}, status_code=HTTP_404_NOT_FOUND)
+    if cap_error := validate_caps(
+        data.specs_to_add + data.specs_to_remove,
+        data.channels,
+        data.subdirs,
+        validate_channel_allowlist=False,
+    ):
+        return cap_error
+    worker = getattr(request.app.state, "solve_worker", None)
+    if worker is None:
+        return Response(
+            ErrorResponse(error="Internal Presto solver worker is unavailable"),
+            status_code=HTTP_503_SERVICE_UNAVAILABLE,
+        )
+    cache: ResultCache = request.app.state.result_cache
+    store = cache.store_from(request)
+    initial_repodata = None
+    async with request.app.state.solver_limiter:
+        try:
+            initial_repodata = data.repodata_snapshot()
+            key = cache.solver_key(data.cache_key(initial_repodata))
+        except Exception:
+            log.warning("Presto solver cache metadata unavailable; bypassing cache")
+        else:
+            if not initial_repodata.stale and (
+                cached_response := await cache.get_response(key, store)
+            ):
+                return cached_response
+
+        try:
+            result = await anyio.to_thread.run_sync(
+                worker.solve_final_state,
+                data,
+                SOLVE_TIMEOUT_S,
+            )
+        except TimeoutError:
+            return Response(
+                ErrorResponse(error=f"Solve exceeded {SOLVE_TIMEOUT_S}s timeout"),
+                status_code=HTTP_504_GATEWAY_TIMEOUT,
+            )
+        except CondaError as exc:
+            return Response(
+                ErrorResponse(error=str(exc)),
+                status_code=HTTP_422_UNPROCESSABLE_ENTITY,
+            )
+        except Exception:
+            log.exception("Internal Presto solver failed")
+            return Response(
+                ErrorResponse(error="Internal solver error"),
+                status_code=HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+        if isinstance(result, PrestoSolveError):
+            return Response(result, status_code=HTTP_422_UNPROCESSABLE_ENTITY)
+
+        body = msgspec.json.encode(result)
+        try:
+            repodata = data.repodata_snapshot()
+            key = cache.solver_key(data.cache_key(repodata))
+        except Exception:
+            log.warning("Presto solver cache metadata unavailable after solve")
+        else:
+            if repodata.is_cacheable_after(initial_repodata):
+                return await cache.remember(
+                    key,
+                    body,
+                    "application/json",
+                    store,
+                )
+        return Response(body, media_type="application/json")
+
+
 async def on_startup(app: Litestar) -> None:
     """Initialize solver limiter and pre-warm repodata caches."""
     app.state.solver_limiter = anyio.CapacityLimiter(MAX_CONCURRENCY)
@@ -1902,7 +2030,7 @@ def build_cors_config(origins: list[str]) -> CORSConfig | None:
     return CORSConfig(allow_origins=origins)
 
 
-middleware = [LoggingMiddlewareConfig().middleware]
+middleware = [LoggingMiddlewareConfig(exclude=r"^/solver/v1$").middleware]
 if RATE_LIMIT:
     middleware.append(RateLimitConfig(rate_limit=("minute", RATE_LIMIT)).middleware)
 
@@ -1922,6 +2050,7 @@ app = Litestar(
         version,
         parse,
         health,
+        solver_v1,
     ],
     openapi_config=OpenAPIConfig(
         title="conda-presto",

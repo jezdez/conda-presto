@@ -7,10 +7,12 @@ import time
 from types import SimpleNamespace
 
 import pytest
+from conda.exceptions import PackagesNotFoundError
 from conda.models.environment import Environment
 
 import conda_presto.worker as worker_module
 from conda_presto.resolve import SolveResult
+from conda_presto.solver import PrestoSolveError
 
 
 @pytest.fixture()
@@ -562,6 +564,30 @@ def test_persistent_solve_worker_entrypoint_handles_exporters(monkeypatch):
     )
 
     assert sent == [("ready", None), ("ok", ("output", "text/plain")), "closed"]
+
+
+def test_persistent_solve_worker_entrypoint_serializes_conda_error(monkeypatch):
+    sent = []
+    error = PackagesNotFoundError(["missing"], ["https://example.invalid"])
+    solve_request = SimpleNamespace(solve=lambda: (_ for _ in ()).throw(error))
+    requests = iter([("solver", solve_request), None])
+    connection = SimpleNamespace(
+        recv=lambda: next(requests),
+        send=sent.append,
+        close=lambda: sent.append("closed"),
+    )
+    monkeypatch.setattr(worker_module, "warmup", lambda *_: None)
+    monkeypatch.setattr(worker_module, "shutdown_process_pool", lambda: None)
+
+    worker_module.persistent_solve_worker_entrypoint(
+        connection, ["conda-forge"], ["linux-64"]
+    )
+
+    assert sent[0] == ("ready", None)
+    assert sent[1][0] == "ok"
+    assert isinstance(sent[1][1], PrestoSolveError)
+    assert sent[1][1].kind == "packages-not-found"
+    assert sent[2] == "closed"
 
 
 @pytest.mark.parametrize(
