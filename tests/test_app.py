@@ -40,6 +40,7 @@ from conda_presto.app import (
     version,
 )
 from conda_presto.cache import ResultCache
+from conda_presto.hotset import SolverHotSet
 from conda_presto.inputs import ParsedInputFile
 from conda_presto.resolve import RepodataSnapshot, ResolvedPackage, SolveResult
 from conda_presto.solver import (
@@ -247,6 +248,7 @@ async def test_solver_v1_caches_successful_final_state(
     )
     test_app.state.solve_worker = SimpleNamespace(solve_final_state=solve)
     test_app.state.solver_limiter = anyio.CapacityLimiter(1)
+    test_app.state.solver_hot_set = SolverHotSet(max_size=32)
 
     first = await client.post(
         "/solver/v1",
@@ -265,6 +267,8 @@ async def test_solver_v1_caches_successful_final_state(
     assert "location" not in second.headers
     assert [data for data, _ in calls] == [presto_solver_request]
     assert calls[0][1] > time.monotonic()
+    entry = next(iter(test_app.state.solver_hot_set.entries.values()))
+    assert entry.observations == 2
 
 
 @pytest.mark.anyio
@@ -524,6 +528,7 @@ async def test_solver_v1_coalesces_concurrent_cache_misses(
     )
     test_app.state.solve_worker = SimpleNamespace(solve_final_state=solve)
     test_app.state.solver_limiter = anyio.CapacityLimiter(1)
+    test_app.state.solver_hot_set = SolverHotSet(max_size=32)
 
     try:
         async with anyio.create_task_group() as tasks:
@@ -568,6 +573,7 @@ async def test_solver_v1_returns_structured_conda_error(
     )
     test_app.state.solve_worker = SimpleNamespace(solve_final_state=solve)
     test_app.state.solver_limiter = anyio.CapacityLimiter(1)
+    test_app.state.solver_hot_set = SolverHotSet(max_size=32)
 
     responses = [
         await client.post(
@@ -582,6 +588,7 @@ async def test_solver_v1_returns_structured_conda_error(
     assert responses[0].json()["kind"] == "packages-not-found"
     assert responses[0].json()["packages"] == ["missing"]
     assert [data for data, _ in calls] == [presto_solver_request] * 2
+    assert not test_app.state.solver_hot_set.entries
 
 
 @pytest.mark.anyio
@@ -681,6 +688,7 @@ async def test_solver_v1_does_not_cache_transient_shard_fallback(
         )
     )
     test_app.state.solver_limiter = anyio.CapacityLimiter(1)
+    test_app.state.solver_hot_set = SolverHotSet(max_size=32)
 
     response = await client.post(
         "/solver/v1",
@@ -691,6 +699,7 @@ async def test_solver_v1_does_not_cache_transient_shard_fallback(
     assert response.status_code == 200
     assert response.json()["records"] == [{"name": "zlib"}]
     assert not test_app.state.result_cache.entries
+    assert not test_app.state.solver_hot_set.entries
 
 
 @pytest.mark.anyio

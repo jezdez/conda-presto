@@ -40,6 +40,11 @@ Result cache
   client. The LRU can be backed by a persistent file or Redis store, which lets
   cached results survive server restarts.
 
+Cache-warming candidates
+: successful cacheable foreground solver requests are recorded and ranked for
+  later refresh. Background refreshes do not increase a candidate's request
+  count.
+
 ## Cache keys and repodata checks
 
 The result cache key is tied to the inputs that can change the response:
@@ -79,6 +84,13 @@ The final-state cache has narrower reuse than `/resolve`: repeated dry-runs,
 retries, creates, and cloned prefix states can hit, while a completed transaction
 normally changes the installed records and therefore the next key. Requests
 with different prefix histories or pins also use different keys.
+
+Hot-set identity intentionally omits dependency versions and current repodata
+markers so the same exact workload remains a warming candidate across metadata
+refreshes and compatible upgrades. Actual result reuse remains stricter: the
+stable cache slot includes dependency versions and its value must match a fresh
+worker-observed repodata snapshot. The hot set is local by default and filters
+credential-bearing requests from opt-in persistent checkpoints.
 
 ## Multi-platform solving
 

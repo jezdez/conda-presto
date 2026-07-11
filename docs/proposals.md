@@ -47,6 +47,8 @@ Long-lived local service and conda solver integration.
 |---|:---:|---|
 | [Broker-managed local service](https://github.com/jezdez/conda-presto/issues/39) | {bdg-warning}`in progress` | User-scoped local HTTP service that retains loaded repodata and indexes between requests |
 | [Internal conda solver backend](https://github.com/jezdez/conda-presto/issues/40) | {bdg-warning}`in progress` | Broker-only loopback delegation and caching of final-state solves through private rattler APIs |
+| [Replayable solver hot set](https://github.com/jezdez/conda-presto/issues/77) | {bdg-warning}`in progress` | Bounded local demand state for exact successful solver workloads |
+| [Regular solver cache warming](https://github.com/jezdez/conda-presto/issues/78) | {bdg-secondary}`proposed` | Foreground-aware replay of hot workloads before cached states expire |
 ````
 
 ````{tab-item} Trust
@@ -75,6 +77,8 @@ graph TD
     P["result cache + permalink\n(shipped)"] --> PV["provenance fields"]
     P --> B["broker-managed local service"]
     B --> FS["internal Presto solver backend"]
+    FS --> HS["replayable solver hot set"]
+    HS --> CW["regular solver cache warming"]
     PF --> RPR
     E --> RPR
     PV --> A["signed provenance"]
@@ -95,6 +99,8 @@ solver attempts under an explicit budget. The internal Presto solver backend
 uses the broker-managed local process and does not define a remote protocol.
 Its final-state entries share the configured cache storage and
 in-memory bounds, but remain separate from public `/resolve` permalinks.
+Successful foreground requests can be recorded as candidates for later cache
+refresh without changing the final-state cache key.
 
 ## Conventions
 

@@ -103,3 +103,34 @@ def test_repair_limits_must_be_positive(monkeypatch, name):
         importlib.reload(config_module)
     monkeypatch.delenv(name)
     importlib.reload(config_module)
+
+
+def test_solver_hot_set_size_must_not_be_negative(monkeypatch):
+    monkeypatch.setenv("CONDA_PRESTO_SOLVER_CACHE_HOTSET_SIZE", "-1")
+    with pytest.raises(ValueError, match="must not be negative"):
+        importlib.reload(config_module)
+    monkeypatch.delenv("CONDA_PRESTO_SOLVER_CACHE_HOTSET_SIZE")
+    importlib.reload(config_module)
+
+
+def test_solver_hot_set_persistence_rejects_memory_backend(monkeypatch):
+    monkeypatch.setenv("CONDA_PRESTO_SOLVER_CACHE_HOTSET_PERSIST", "true")
+    monkeypatch.setenv("CONDA_PRESTO_RESULT_CACHE_BACKEND", "memory")
+    with pytest.raises(ValueError, match="requires a file or Redis"):
+        importlib.reload(config_module)
+    monkeypatch.delenv("CONDA_PRESTO_SOLVER_CACHE_HOTSET_PERSIST")
+    monkeypatch.delenv("CONDA_PRESTO_RESULT_CACHE_BACKEND")
+    importlib.reload(config_module)
+
+
+@pytest.mark.parametrize("backend", ["file", "redis"])
+def test_solver_hot_set_persistence_accepts_persistent_backend(monkeypatch, backend):
+    monkeypatch.setenv("CONDA_PRESTO_SOLVER_CACHE_HOTSET_PERSIST", "true")
+    monkeypatch.setenv("CONDA_PRESTO_RESULT_CACHE_BACKEND", backend)
+    reloaded = importlib.reload(config_module)
+    try:
+        assert reloaded.SOLVER_CACHE_HOTSET_PERSIST is True
+    finally:
+        monkeypatch.delenv("CONDA_PRESTO_SOLVER_CACHE_HOTSET_PERSIST")
+        monkeypatch.delenv("CONDA_PRESTO_RESULT_CACHE_BACKEND")
+        importlib.reload(config_module)

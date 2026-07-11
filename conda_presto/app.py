@@ -134,9 +134,12 @@ from .config import (
     RESULT_CACHE_REDIS_URL,
     RESULT_CACHE_SIZE,
     SOLVE_TIMEOUT_S,
+    SOLVER_CACHE_HOTSET_PERSIST,
+    SOLVER_CACHE_HOTSET_SIZE,
 )
 from .exceptions import SAFE_ERROR_TYPES, UnknownFormatError
 from .exporter import OutputFormat
+from .hotset import SolverHotSet
 from .inputs import ParsedInputFile
 from .preflight import PreflightResult
 from .resolve import (
@@ -1738,6 +1741,9 @@ async def solver_v1(
         )
     if isinstance(result.result, PrestoSolveError):
         return Response(result.result, status_code=HTTP_422_UNPROCESSABLE_ENTITY)
+    hot_set = getattr(request.app.state, "solver_hot_set", None)
+    if hot_set is not None and result.tracks_demand:
+        await hot_set.observe(data)
     return Response(result.result)
 
 
@@ -1750,6 +1756,15 @@ async def on_startup(app: Litestar) -> None:
         store_name=(
             RESULT_CACHE_STORE_NAME if RESULT_CACHE_BACKEND != "memory" else None
         ),
+    )
+    app.state.solver_hot_set = SolverHotSet(
+        max_size=SOLVER_CACHE_HOTSET_SIZE,
+        persist=SOLVER_CACHE_HOTSET_PERSIST,
+    )
+    await app.state.solver_hot_set.load(
+        app.stores.get(RESULT_CACHE_STORE_NAME)
+        if RESULT_CACHE_BACKEND != "memory"
+        else None
     )
     if PERSISTENT_WORKER:
         app.state.solve_worker = PersistentSolveWorker(
@@ -1782,6 +1797,13 @@ async def on_startup(app: Litestar) -> None:
 
 async def on_shutdown(app: Litestar) -> None:
     """Cleanly shut down the process pool on server teardown."""
+    hot_set = getattr(app.state, "solver_hot_set", None)
+    if hot_set is not None:
+        await hot_set.checkpoint(
+            app.stores.get(RESULT_CACHE_STORE_NAME)
+            if RESULT_CACHE_BACKEND != "memory"
+            else None
+        )
     worker = getattr(app.state, "solve_worker", None)
     if worker is not None:
         await anyio.to_thread.run_sync(worker.shutdown, abandon_on_cancel=True)

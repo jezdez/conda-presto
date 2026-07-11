@@ -364,6 +364,11 @@ class SolverServiceResult:
     result: PrestoSolveResponse | PrestoSolveError
     disposition: SolverCacheDisposition
 
+    @property
+    def tracks_demand(self) -> bool:
+        """Return whether this successful foreground result can be warmed."""
+        return self.disposition in {"cache-hit", "published", "already-current"}
+
 
 @dataclass
 class SolverResultService:
