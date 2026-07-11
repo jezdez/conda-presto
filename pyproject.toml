@@ -10,7 +10,7 @@ license = "BSD-3-Clause"
 requires-python = ">=3.13"
 dependencies = [
     # conda and conda-rattler-solver are supplied by the active conda environment.
-    "conda-broker>=0.1,<0.2",
+    "conda-broker>=0.1.1,<0.2",
     "msgspec>=0.19",
 ]
 dynamic = ["version"]
