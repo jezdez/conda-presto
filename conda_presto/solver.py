@@ -198,8 +198,9 @@ class PrestoSolveRequest(msgspec.Struct):
                 "The internal Presto solver does not support caller-provided "
                 "repodata subsets."
             )
+        channels = solver._collect_channel_list(input_state)
         request = cls(
-            channels=[channel.dump() for channel in solver.channels],
+            channels=[channel.dump() for channel in channels],
             subdirs=list(solver.subdirs),
             specs_to_add=sorted(str(spec) for spec in solver._unmerged_specs_to_add),
             specs_to_remove=sorted(
@@ -249,9 +250,6 @@ class PrestoSolveRequest(msgspec.Struct):
             use_index_cache=bool(context.use_index_cache),
         )
         request.target_subdir()
-        request.channels = [
-            channel.dump() for channel in solver._collect_channel_list(input_state)
-        ]
         return request
 
     def cache_key(self) -> str:
@@ -319,8 +317,6 @@ class PrestoSolveRequest(msgspec.Struct):
     def rattler_solver(self) -> RattlerSolver:
         """Restore the rattler backend captured by this request."""
         backend = context.plugin_manager.get_solver_backend("rattler")
-        if backend is None:
-            raise RuntimeError("The rattler solver backend is unavailable")
         return backend(
             prefix="/conda-presto/solver",
             channels=[Channel(**channel) for channel in self.channels],

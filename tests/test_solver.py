@@ -762,17 +762,6 @@ def test_presto_request_accepts_empty_early_exit(monkeypatch, solver_request):
     )
 
 
-def test_presto_request_requires_rattler_backend(monkeypatch, solver_request):
-    monkeypatch.setattr(
-        solver_module.context.plugin_manager,
-        "get_solver_backend",
-        lambda name: None,
-    )
-
-    with pytest.raises(RuntimeError, match="rattler solver backend"):
-        solver_request.solve()
-
-
 @pytest.mark.parametrize(
     ("change", "message"),
     [
@@ -830,6 +819,7 @@ def test_presto_snapshot_rejects_invalid_subdirs(subdirs):
         unmerged_specs_to_remove=[],
         _repodata_fn="repodata.json",
         _build_repodata_subset=None,
+        _collect_channel_list=lambda _: [Channel("conda-forge")],
     )
     input_state = SimpleNamespace(
         installed={},

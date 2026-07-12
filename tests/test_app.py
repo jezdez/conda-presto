@@ -310,7 +310,7 @@ async def test_solver_v1_returns_structured_conda_error(
 
     def solve(data, timeout):
         calls.append((data, timeout))
-        return error
+        return PrestoSolveOutcome(error, None, None)
 
     monkeypatch.setattr(app_module, "SOLVER_ENDPOINT", True)
     monkeypatch.setattr(

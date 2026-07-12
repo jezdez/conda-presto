@@ -134,7 +134,7 @@ class PersistentSolveWorker:
         self,
         request: PrestoSolveRequest,
         timeout_s: float,
-    ) -> PrestoSolveOutcome | PrestoSolveError:
+    ) -> PrestoSolveOutcome:
         """Run an internal solver request in the persistent worker."""
         return self.execute(("solver", request), timeout_s)
 
