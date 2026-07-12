@@ -157,31 +157,26 @@ curl -sS 'http://localhost:8000/repair?max_suggestions=3&max_attempts=10' \
   "diagnosis": {"kind": "solver_conflict", "summary": "..."},
   "suggestions": [
     {
-      "rank": 1,
       "changes": [{"from": "scipy==1.5", "to": "scipy", "strategy": "relax_exact_pin"}],
-      "verified": true,
-      "evidence": {"solve_attempts": 1, "platforms": ["linux-64"]}
+      "solve_attempts": 1,
+      "platforms": ["linux-64"]
     }
   ],
-  "partial": false,
   "completion_reason": "exhausted"
 }
 ```
 
 Candidates are evaluated in input-spec order. For a bounded range, dropping
-the upper bound is tried before dropping the lower bound. `rank` records the
-order in which candidates solved; it is not a quality score.
-`evidence.solve_attempts` counts candidate solves, excluding the initial solve,
-through that suggestion. `evidence.platforms` lists the platforms on which the
-suggestion solved.
+the upper bound is tried before dropping the lower bound. `solve_attempts`
+counts candidate solves, excluding the initial solve, through that suggestion.
+`platforms` lists where the suggestion solved.
 
-`partial` is true when the suggestion, attempt, or time limit ended the search
-before every candidate was evaluated. `completion_reason` is one of `feasible`,
+`completion_reason` is one of `feasible`,
 `exhausted`, `suggestion_limit`, `attempt_limit`, or `time_limit`. If the
 initial diagnostic solve times out, the endpoint returns HTTP 504 without a
 repair result. Once infeasibility is established, a candidate timeout returns
-HTTP 200 with `partial: true`, `completion_reason: "time_limit"`, and any
-suggestions that already solved.
+HTTP 200 with `completion_reason: "time_limit"` and any suggestions that
+already solved.
 
 ---
 

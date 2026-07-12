@@ -1307,7 +1307,6 @@ async def test_repair_post_returns_no_suggestions_for_a_feasible_request(
         "feasible": True,
         "diagnosis": None,
         "suggestions": [],
-        "partial": False,
         "completion_reason": "feasible",
     }
     assert len(calls) == 1
@@ -1350,7 +1349,6 @@ async def test_repair_post_verifies_an_exact_pin_relaxation_on_every_platform(
         },
         "suggestions": [
             {
-                "rank": 1,
                 "changes": [
                     {
                         "from": "scipy==1.5",
@@ -1358,14 +1356,10 @@ async def test_repair_post_verifies_an_exact_pin_relaxation_on_every_platform(
                         "strategy": "relax_exact_pin",
                     }
                 ],
-                "verified": True,
-                "evidence": {
-                    "solve_attempts": 1,
-                    "platforms": ["linux-64", "osx-arm64"],
-                },
+                "solve_attempts": 1,
+                "platforms": ["linux-64", "osx-arm64"],
             }
         ],
-        "partial": False,
         "completion_reason": "exhausted",
     }
 
@@ -1443,7 +1437,7 @@ async def test_repair_post_relaxes_one_side_of_a_bounded_spec(client, monkeypatc
             "strategy": "drop_upper_bound",
         }
     ]
-    assert suggestion["verified"] is True
+    assert suggestion["platforms"] == ["linux-64"]
 
 
 @pytest.mark.anyio
@@ -1477,7 +1471,6 @@ async def test_repair_post_keeps_verified_results_when_the_attempt_budget_ends(
     assert response.status_code == 200
     result = response.json()
     assert result["suggestions"][0]["changes"][0]["from"] == "first==1"
-    assert result["partial"] is True
     assert result["completion_reason"] == "attempt_limit"
 
 
@@ -1586,7 +1579,6 @@ async def test_repair_post_keeps_verified_results_when_a_candidate_times_out(
     assert response.status_code == 200
     result = response.json()
     assert len(result["suggestions"]) == 1
-    assert result["partial"] is True
     assert result["completion_reason"] == "time_limit"
 
 

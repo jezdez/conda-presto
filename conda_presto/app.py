@@ -79,6 +79,7 @@ import logging
 import multiprocessing
 import time
 from collections import OrderedDict
+from collections.abc import Iterator
 from dataclasses import dataclass, field, replace
 from importlib.metadata import version as pkg_version
 from pathlib import Path
@@ -467,20 +468,12 @@ class RepairChange(msgspec.Struct, rename={"from_": "from"}):
     strategy: str
 
 
-class RepairEvidence(msgspec.Struct):
-    """Solve details for a repair suggestion."""
-
-    solve_attempts: int
-    platforms: list[str]
-
-
 class RepairSuggestion(msgspec.Struct):
     """A candidate that solved on every requested platform."""
 
-    rank: int
     changes: list[RepairChange]
-    verified: bool
-    evidence: RepairEvidence
+    solve_attempts: int
+    platforms: list[str]
 
 
 class RepairDiagnosis(msgspec.Struct):
@@ -496,16 +489,7 @@ class RepairResult(msgspec.Struct):
     feasible: bool
     diagnosis: RepairDiagnosis | None
     suggestions: list[RepairSuggestion]
-    partial: bool
     completion_reason: str
-
-
-@dataclass
-class RepairCandidate:
-    """One change to an input spec list."""
-
-    specs: list[str]
-    change: RepairChange
 
 
 @dataclass
@@ -522,9 +506,8 @@ class RepairSearch:
     attempts: int = 0
     suggestions: list[RepairSuggestion] = field(default_factory=list)
 
-    def candidates(self) -> list[RepairCandidate]:
-        """Return deterministic single-spec relaxation candidates."""
-        candidates = []
+    def candidates(self) -> Iterator[tuple[list[str], RepairChange]]:
+        """Yield deterministic single-spec relaxation candidates."""
         seen = set()
         for position, spec in enumerate(self.match_specs):
             if spec.get_raw_value("url") or spec.get_raw_value("fn"):
@@ -550,17 +533,14 @@ class RepairSearch:
                 if tuple(candidate_specs) in seen:
                     continue
                 seen.add(tuple(candidate_specs))
-                candidates.append(
-                    RepairCandidate(
-                        specs=candidate_specs,
-                        change=RepairChange(
-                            from_=self.specs[position],
-                            to=candidate_specs[position],
-                            strategy=strategy,
-                        ),
-                    )
+                yield (
+                    candidate_specs,
+                    RepairChange(
+                        from_=self.specs[position],
+                        to=candidate_specs[position],
+                        strategy=strategy,
+                    ),
                 )
-        return candidates
 
     async def evaluate(
         self, request: Request, specs: list[str]
@@ -586,7 +566,6 @@ class RepairSearch:
     def result(
         self,
         diagnosis: RepairDiagnosis,
-        partial: bool,
         completion_reason: str,
     ) -> RepairResult:
         """Build the repair result from the completed search state."""
@@ -594,7 +573,6 @@ class RepairSearch:
             feasible=False,
             diagnosis=diagnosis,
             suggestions=self.suggestions,
-            partial=partial,
             completion_reason=completion_reason,
         )
 
@@ -613,7 +591,6 @@ class RepairSearch:
                 feasible=True,
                 diagnosis=None,
                 suggestions=[],
-                partial=False,
                 completion_reason="feasible",
             )
 
@@ -623,30 +600,26 @@ class RepairSearch:
                 result.error for result in original if result.error is not None
             ),
         )
-        for candidate in self.candidates():
+        for candidate_specs, change in self.candidates():
             if len(self.suggestions) == self.max_suggestions:
-                return self.result(diagnosis, True, "suggestion_limit")
+                return self.result(diagnosis, "suggestion_limit")
             if self.attempts == self.max_attempts:
-                return self.result(diagnosis, True, "attempt_limit")
+                return self.result(diagnosis, "attempt_limit")
             self.attempts += 1
-            results = await self.evaluate(request, candidate.specs)
+            results = await self.evaluate(request, candidate_specs)
             if isinstance(results, Response):
                 return results
             if results is None:
-                return self.result(diagnosis, True, "time_limit")
+                return self.result(diagnosis, "time_limit")
             if all(result.error is None for result in results):
                 self.suggestions.append(
                     RepairSuggestion(
-                        rank=len(self.suggestions) + 1,
-                        changes=[candidate.change],
-                        verified=True,
-                        evidence=RepairEvidence(
-                            solve_attempts=self.attempts,
-                            platforms=self.platforms,
-                        ),
+                        changes=[change],
+                        solve_attempts=self.attempts,
+                        platforms=self.platforms,
                     )
                 )
-        return self.result(diagnosis, False, "exhausted")
+        return self.result(diagnosis, "exhausted")
 
 
 class StoredResult(msgspec.Struct):

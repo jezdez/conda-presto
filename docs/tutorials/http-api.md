@@ -107,8 +107,8 @@ curl -sS "$CONDA_PRESTO_URL/repair?max_suggestions=3" \
 ```
 
 The endpoint initially relaxes exact pins and one side of simple bounded
-version ranges. A `partial` response includes the suggestions found before a
-server limit stopped the search.
+version ranges. `completion_reason` reports whether every candidate was tried
+or a server limit stopped the search.
 
 Compare two revisions with `/diff`. Its top-level `platforms` list applies to
 both inputs, and lockfile inputs are read directly when they already contain
