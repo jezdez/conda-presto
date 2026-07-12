@@ -51,7 +51,7 @@ Request limits (abuse/DoS protection):
         Max specs per request (default: ``200``).  Returns HTTP 400
         if exceeded.
     ``CONDA_PRESTO_MAX_REPAIR_SUGGESTIONS``
-        Max verified repair suggestions per request (default: ``5``).
+        Max returned repair suggestions per request (default: ``5``).
     ``CONDA_PRESTO_MAX_REPAIR_ATTEMPTS``
         Max repair candidates evaluated per request (default: ``20``).
     ``CONDA_PRESTO_MAX_REPAIR_TIME_BUDGET_MS``

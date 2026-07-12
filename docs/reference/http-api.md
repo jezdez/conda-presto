@@ -135,18 +135,16 @@ curl -sS http://localhost:8000/preflight \
 
 ### `POST /repair`
 
-Return bounded, verified single-spec relaxations for an infeasible inline
-solve. It accepts `specs`, `channels`, and `platforms`; it does not parse files
-or change channels. Every returned suggestion is solved across every requested
-platform.
+Return single-spec relaxations for an infeasible inline solve. It accepts
+`specs`, `channels`, and `platforms`; it does not parse files or change
+channels. Every returned suggestion solves on every requested platform.
 
 The initial strategies relax an exact `==` pin or drop one side of a simple
-bounded version range. Fuzzy equality such as `python=3.12` is not rewritten,
-nor are specs containing a package URL or filename because changing their
-version would invalidate the selected artifact. Candidate selection stops at
-the smallest of the request parameters and the server caps: `max_suggestions`,
-`max_attempts`, and `time_budget_ms`. The time budget is a wall-clock deadline
-that includes time waiting for solver capacity.
+bounded version range. Fuzzy equality such as `python=3.12` is not rewritten.
+Specs containing a package URL or filename are left unchanged. The
+`max_suggestions`, `max_attempts`, and `time_budget_ms` query parameters cannot
+exceed their corresponding server limits. The time budget includes time spent
+waiting for solver capacity.
 
 ```bash
 curl -sS 'http://localhost:8000/repair?max_suggestions=3&max_attempts=10' \
@@ -171,11 +169,11 @@ curl -sS 'http://localhost:8000/repair?max_suggestions=3&max_attempts=10' \
 ```
 
 Candidates are evaluated in input-spec order. For a bounded range, dropping
-the upper bound is tried before dropping the lower bound. `rank` is the
-one-based order in which candidates were verified; it is deterministic but is
-not a quality score. `evidence.solve_attempts` is the cumulative number of
-candidate solves, excluding the initial diagnostic solve, needed to reach that
-suggestion. `evidence.platforms` lists every platform on which it was verified.
+the upper bound is tried before dropping the lower bound. `rank` records the
+order in which candidates solved; it is not a quality score.
+`evidence.solve_attempts` counts candidate solves, excluding the initial solve,
+through that suggestion. `evidence.platforms` lists the platforms on which the
+suggestion solved.
 
 `partial` is true when the suggestion, attempt, or time limit ended the search
 before every candidate was evaluated. `completion_reason` is one of `feasible`,
@@ -183,7 +181,7 @@ before every candidate was evaluated. `completion_reason` is one of `feasible`,
 initial diagnostic solve times out, the endpoint returns HTTP 504 without a
 repair result. Once infeasibility is established, a candidate timeout returns
 HTTP 200 with `partial: true`, `completion_reason: "time_limit"`, and any
-suggestions already verified.
+suggestions that already solved.
 
 ---
 

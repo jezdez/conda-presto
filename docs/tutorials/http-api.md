@@ -97,18 +97,18 @@ curl -sS "$CONDA_PRESTO_URL/preflight" \
   --json '{"specs":["python=3.13","numpy"],"channels":["conda-forge"]}' | jq
 ```
 
-When a solve is infeasible, ask `/repair` for bounded suggestions rather than
-changing the input automatically. Suggestions only relax user-provided specs
-and are verified on every requested platform:
+When a solve is infeasible, ask `/repair` for single-spec changes rather than
+changing the input automatically. The endpoint tests every returned suggestion
+on every requested platform:
 
 ```bash
 curl -sS "$CONDA_PRESTO_URL/repair?max_suggestions=3" \
   --json '{"specs":["scipy==1.5"],"channels":["conda-forge"],"platforms":["linux-64"]}' | jq
 ```
 
-The initial repair strategies relax exact pins and one side of simple bounded
-version ranges. A `partial` response retains its verified suggestions but did
-not exhaust every candidate before its server-enforced budget ended.
+The endpoint initially relaxes exact pins and one side of simple bounded
+version ranges. A `partial` response includes the suggestions found before a
+server limit stopped the search.
 
 Compare two revisions with `/diff`. Its top-level `platforms` list applies to
 both inputs, and lockfile inputs are read directly when they already contain

@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- `POST /repair` for bounded, solver-verified single-spec relaxations of infeasible requests.
+- `POST /repair` suggests single-spec relaxations for infeasible requests and returns only suggestions that solve on every requested platform.
 
 ## [0.6.0] - 2026-07-10
 

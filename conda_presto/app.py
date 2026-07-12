@@ -5,7 +5,7 @@ Endpoints:
 - ``GET /resolve`` — resolve specs via query params
 - ``POST /resolve`` — resolve specs and/or file content via JSON body
 - ``POST /preflight`` — validate input locally without solving
-- ``POST /repair`` — suggest verified relaxations for infeasible specs
+- ``POST /repair`` — suggest relaxations for infeasible specs
 - ``POST /diff`` — compare two resolved inputs
 - ``POST /explain`` — show dependency chains for one resolved package
 - ``POST /transcode`` — convert one lockfile format to another
@@ -468,14 +468,14 @@ class RepairChange(msgspec.Struct, rename={"from_": "from"}):
 
 
 class RepairEvidence(msgspec.Struct):
-    """Verification details for a repair suggestion."""
+    """Solve details for a repair suggestion."""
 
     solve_attempts: int
     platforms: list[str]
 
 
 class RepairSuggestion(msgspec.Struct):
-    """A verified repair candidate."""
+    """A candidate that solved on every requested platform."""
 
     rank: int
     changes: list[RepairChange]
@@ -484,7 +484,7 @@ class RepairSuggestion(msgspec.Struct):
 
 
 class RepairDiagnosis(msgspec.Struct):
-    """A bounded summary of why the original request did not solve."""
+    """Solver error from the original request."""
 
     kind: str
     summary: str
@@ -502,7 +502,7 @@ class RepairResult(msgspec.Struct):
 
 @dataclass
 class RepairCandidate:
-    """One bounded change to an input spec list."""
+    """One change to an input spec list."""
 
     specs: list[str]
     change: RepairChange
@@ -510,7 +510,7 @@ class RepairCandidate:
 
 @dataclass
 class RepairSearch:
-    """Evaluate bounded, solver-verified repairs for one request."""
+    """Evaluate single-spec repair candidates within request limits."""
 
     specs: list[str]
     match_specs: list[MatchSpec]
@@ -1383,7 +1383,7 @@ async def preflight_post(
     responses={
         200: ResponseSpec(
             data_container=RepairResult,
-            description="Bounded, verified repair suggestions",
+            description="Single-spec repair suggestions",
         ),
         HTTP_400_BAD_REQUEST: ResponseSpec(
             data_container=ErrorResponse | ValidationErrorResponse,
@@ -1406,7 +1406,7 @@ async def repair_post(
     max_attempts: Annotated[int | None, QueryParameter(ge=1)] = None,
     time_budget_ms: Annotated[int | None, QueryParameter(ge=1)] = None,
 ) -> Response:
-    """Return verified single-spec relaxations for an infeasible solve."""
+    """Return relaxations that solve on every requested platform."""
     if not data.specs:
         return Response(
             ErrorResponse(error="Provide at least one spec"),

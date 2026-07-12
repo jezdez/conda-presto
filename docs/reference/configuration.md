@@ -169,7 +169,7 @@ requests:
 - `CONDA_PRESTO_MAX_SPECS` caps specs per request (default 200)
 - `CONDA_PRESTO_MAX_CHANNELS` caps channels per request (default 8)
 - `CONDA_PRESTO_MAX_PLATFORMS` caps platforms per request (default 8)
-- `CONDA_PRESTO_MAX_REPAIR_SUGGESTIONS` caps verified repair suggestions (default 5)
+- `CONDA_PRESTO_MAX_REPAIR_SUGGESTIONS` caps returned repair suggestions (default 5)
 - `CONDA_PRESTO_MAX_REPAIR_ATTEMPTS` caps repair candidates evaluated (default 20)
 - `CONDA_PRESTO_MAX_REPAIR_TIME_BUDGET_MS` caps repair search time (default 5000 ms)
 - `CONDA_PRESTO_SOLVE_TIMEOUT_S` caps solve duration (default 60s)
