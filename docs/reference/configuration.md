@@ -283,65 +283,22 @@ not merge candidate lists across service processes.
 
 ### Scheduled solver-cache refresh
 
-The broker child checks eligible cache-warming candidates every
-`CONDA_PRESTO_SOLVER_CACHE_WARM_INTERVAL_S` seconds (default 300). Set the
-interval to `0` to disable scheduled refresh. One cycle considers at most
-`CONDA_PRESTO_SOLVER_CACHE_WARM_BATCH_SIZE` requests (default 8), further
-bounded by the configured result-cache capacity. Refresh starts only when the
-private solver endpoint and persistent foreground worker are both enabled, so
-normal HTTP servers and the published Docker server remain unchanged. The
-interval is measured between cycle starts; a long cycle reduces the following
-wait instead of adding permanent polling drift.
+Scheduled refresh runs only in the broker child when the private solver endpoint
+and persistent worker are enabled. Normal HTTP servers and the Docker image do
+not run it.
 
-The first cycle starts 30 seconds after foreground readiness. One replay uses
-the configured solve timeout capped at 30 seconds, and a cycle starts no new
-work after its 60-second budget. Transient backoff starts at one polling
-interval and is capped at one hour. The broker child uses a 75-second shutdown
-grace period so a bounded call and process cleanup can finish.
+`CONDA_PRESTO_SOLVER_CACHE_WARM_INTERVAL_S`
+: Seconds between refresh cycles (default 300). Set to `0` to disable scheduled
+  refresh.
 
-Litestar owns the service through two ordered lifespan context managers: solver
-resources first and the warmer's AnyIO task group second. The resource lifespan
-enters the result store before starting its foreground worker. Shutdown runs in
-reverse, so scheduling stops, the current refresh finishes or times out, the
-dedicated worker stops, and changed candidate state is checkpointed. The
-resource lifespan then drains admitted store operations, stops the foreground
-worker, and closes the result store.
+`CONDA_PRESTO_SOLVER_CACHE_WARM_BATCH_SIZE`
+: Maximum cache-warming candidates checked per cycle (default 8), capped by the
+  result-cache entry limit.
 
-Each cycle first checks whether a candidate's stable cache slot already matches
-a fresh repodata snapshot. A true hit requires no worker. A missing or stale
-slot is replayed through one dedicated worker used only by that cycle. Its first
-operation is the exact request, including that request's channels, subdirs, and
-repodata mode; it does not run the generic default-channel startup warmup. The
-warmer never borrows the foreground limiter or worker. It starts no new replay
-while foreground work is active or waiting and stops the cycle after the
-current bounded replay if foreground work arrives.
-
-Background process and metadata calls use their own one-token AnyIO thread
-limiter. Persistent result-store operation admission and completion waits each
-use a two-second caller deadline. Reads and writes share one bounded, serialized
-queue. An admitted operation continues in order if its caller stops waiting,
-preventing an older delayed filesystem operation from overtaking newer state.
-Corrupt values are ignored until a later valid write overwrites them. A current
-memory entry is not treated as fully warm until required persistence succeeds;
-failures are retried with the workload's exponential backoff.
-
-This is regular polling, not push invalidation. Normal conda freshness policy
-decides when local JSON or sharded repodata must refresh. A request with
-`use_index_cache=True` suppresses JSON TTL refresh during replay exactly as it
-does on the foreground path. A deterministic solver failure is suppressed only
-while its recorded repodata snapshot is still fresh and unchanged. Once that
-snapshot is stale, the request is retried so normal metadata refresh can reveal
-a remote channel update. Transient failures use bounded exponential backoff and
-never affect foreground responses or `/health`.
-
-The warmer records aggregate in-process cycle statistics and logs one summary
-per cycle with the counters rendered in the message. Logs identify a workload
-only by a shortened fingerprint; replay
-requests, specs, installed records, channel URLs, and credentials are not
-logged, and the dedicated warm child suppresses exception tracebacks. There is
-no public metrics endpoint or external telemetry feed. The
-broker child also restores conda filesystem locking because the foreground and
-warming worker processes may access the same repodata cache concurrently.
+See [Presto solver backend](solver-backend.md) for the cache contract,
+[Performance](../explanation/performance.md) for lifecycle and freshness behavior,
+and [Broker-managed local service](../tutorials/broker-service.md) for the
+operational workflow.
 
 ### Concurrency tuning
 

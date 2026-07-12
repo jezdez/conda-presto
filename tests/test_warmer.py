@@ -16,7 +16,7 @@ from litestar import Litestar
 import conda_presto.app as app_module
 from conda_presto.app import (
     SOLVER_CACHE_WARM_INITIAL_DELAY_S,
-    ForegroundCapacityLimiter,
+    ForegroundCapacity,
     ResultCache,
     SolverCacheWarmer,
     SolverResultService,
@@ -174,7 +174,7 @@ def create_warmer():
         warm_candidates: SolverWarmCandidates,
         service: RecordingService,
         *,
-        limiter: ForegroundCapacityLimiter | None = None,
+        limiter: ForegroundCapacity | None = None,
         worker: RecordingWorker | None = None,
         interval_s: float = 300,
         batch_size: int = 8,
@@ -182,8 +182,7 @@ def create_warmer():
         warmer = SolverCacheWarmer(
             warm_candidates=warm_candidates,
             service=service,
-            limiter=limiter or ForegroundCapacityLimiter(1),
-            store=None,
+            limiter=limiter or ForegroundCapacity(anyio.CapacityLimiter(1)),
             interval_s=interval_s,
             batch_size=batch_size,
         )
@@ -209,71 +208,51 @@ def enable_cache_warming(monkeypatch):
 
 
 @pytest.mark.anyio
-async def test_foreground_limiter_tracks_active_arrivals():
-    limiter = ForegroundCapacityLimiter(1)
+async def test_foreground_capacity_tracks_active_arrivals():
+    capacity = ForegroundCapacity(anyio.CapacityLimiter(1))
 
-    assert limiter.idle_generation() == 0
+    assert capacity.idle_generation() == 0
 
+    limiter = capacity.arrive()
     await limiter.acquire()
 
-    assert limiter.generation == 1
+    assert capacity.generation == 1
     assert limiter.borrowed_tokens == 1
-    assert limiter.idle_generation() is None
+    assert capacity.idle_generation() is None
 
     limiter.release()
 
-    assert limiter.idle_generation() == 1
+    assert capacity.idle_generation() == 1
 
 
 @pytest.mark.anyio
-async def test_foreground_limiter_forwards_capacity_limiter_operations():
-    limiter = ForegroundCapacityLimiter(1)
-    assert limiter.total_tokens == 1
-    limiter.total_tokens = 2
-    assert limiter.available_tokens == 2
-
-    limiter.acquire_nowait()
-    limiter.release()
-
-    first_borrower = object()
-    limiter.acquire_on_behalf_of_nowait(first_borrower)
-    limiter.release_on_behalf_of(first_borrower)
-
-    second_borrower = object()
-    await limiter.acquire_on_behalf_of(second_borrower)
-    limiter.release_on_behalf_of(second_borrower)
-
-    assert limiter.generation == 3
-    assert limiter.borrowed_tokens == 0
-
-
-@pytest.mark.anyio
-async def test_foreground_limiter_tracks_waiting_arrivals():
-    limiter = ForegroundCapacityLimiter(1)
+async def test_foreground_capacity_tracks_waiting_arrivals():
+    capacity = ForegroundCapacity(anyio.CapacityLimiter(1))
+    limiter = capacity.limiter
     acquired = anyio.Event()
     release_waiter = anyio.Event()
 
     async def wait_for_token() -> None:
-        async with limiter:
+        async with capacity.arrive():
             acquired.set()
             await release_waiter.wait()
 
-    await limiter.acquire()
+    await capacity.arrive().acquire()
     async with anyio.create_task_group() as tasks:
         tasks.start_soon(wait_for_token)
         while limiter.statistics().tasks_waiting == 0:
             await anyio.lowlevel.checkpoint()
 
-        assert limiter.generation == 2
+        assert capacity.generation == 2
         assert limiter.statistics().tasks_waiting == 1
-        assert limiter.idle_generation() is None
+        assert capacity.idle_generation() is None
 
         limiter.release()
         await acquired.wait()
-        assert limiter.idle_generation() is None
+        assert capacity.idle_generation() is None
         release_waiter.set()
 
-    assert limiter.idle_generation() == 2
+    assert capacity.idle_generation() == 2
 
 
 @pytest.mark.anyio
@@ -299,14 +278,13 @@ async def test_solver_service_inspects_hits_misses_and_metadata_failures(
     )
 
     hit = await service.inspect(solver_request)
-    assert hit.cached is not None
-    assert hit.cached.disposition == "cache-hit"
+    assert hit.cached
     assert hit.current == fresh_repodata
 
     cache.entries.clear()
     cache.current_bytes = 0
     miss = await service.inspect(solver_request)
-    assert miss.cached is None
+    assert not miss.cached
     assert miss.current == fresh_repodata
 
     monkeypatch.setattr(
@@ -315,7 +293,7 @@ async def test_solver_service_inspects_hits_misses_and_metadata_failures(
         lambda _request: (_ for _ in ()).throw(RuntimeError),
     )
     failed = await service.inspect(solver_request)
-    assert failed.cached is None
+    assert not failed.cached
     assert failed.current is None
 
 
@@ -433,12 +411,10 @@ async def test_persistent_store_timeout_is_bounded_and_backed_off(
         warm_candidates=warm_candidates,
         service=SolverResultService(
             cache=cache,
-            store=store,
             thread_limiter=thread_limiter,
             require_persistent=True,
         ),
-        limiter=ForegroundCapacityLimiter(1),
-        store=None,
+        limiter=ForegroundCapacity(anyio.CapacityLimiter(1)),
         interval_s=10,
         batch_size=1,
         thread_limiter=thread_limiter,
@@ -505,13 +481,8 @@ async def test_warm_cycle_selection_is_bounded_by_batch_and_cache(
     for name in ("a", "b", "c"):
         request = msgspec.structs.replace(solver_request, specs_to_add=[name])
         record_candidate_request(warm_candidates, request)
-    cached = SolverServiceResult(
-        result=successful_result.result,
-        disposition="cache-hit",
-        metadata_used=fresh_repodata,
-    )
     service = RecordingService(
-        [SolverServiceProbe(cached=cached, current=fresh_repodata)] * expected,
+        [SolverServiceProbe(cached=True, current=fresh_repodata)] * expected,
         cache_size=cache_size,
     )
     warmer = create_warmer(warm_candidates, service, batch_size=batch_size)
@@ -526,15 +497,13 @@ async def test_warm_cycle_selection_is_bounded_by_batch_and_cache(
 async def test_fresh_cache_hit_does_not_create_worker(
     solver_request,
     fresh_repodata,
-    successful_result,
     record_candidate_request,
     create_warmer,
 ):
     warm_candidates = SolverWarmCandidates(max_size=32)
     record_candidate_request(warm_candidates, solver_request)
-    cached = replace(successful_result, disposition="cache-hit")
     service = RecordingService(
-        [SolverServiceProbe(cached=cached, current=fresh_repodata)]
+        [SolverServiceProbe(cached=True, current=fresh_repodata)]
     )
     warmer = create_warmer(warm_candidates, service)
 
@@ -561,9 +530,9 @@ async def test_missing_or_stale_cache_entry_is_replayed(
 ):
     current = replace(fresh_repodata, stale=stale)
     warm_candidates = SolverWarmCandidates(max_size=32)
-    fingerprint = record_candidate_request(warm_candidates, solver_request)
+    record_candidate_request(warm_candidates, solver_request)
     service = RecordingService(
-        [SolverServiceProbe(cached=None, current=current)],
+        [SolverServiceProbe(cached=False, current=current)],
         [successful_result],
     )
     worker = RecordingWorker()
@@ -584,7 +553,7 @@ async def test_missing_or_stale_cache_entry_is_replayed(
     assert worker.starts == 1
     assert worker.stops == 1
     assert warmer.active_worker is None
-    assert warm_candidates.entries[fingerprint].last_successful_warm is not None
+    assert warmer.stats.successful_warms == 1
 
 
 @pytest.mark.anyio
@@ -604,7 +573,7 @@ async def test_warmer_uses_service_with_one_worker_reused_and_cleaned_up(
     for request in requests:
         record_candidate_request(warm_candidates, request)
     service = RecordingService(
-        [SolverServiceProbe(cached=None, current=fresh_repodata)] * 2,
+        [SolverServiceProbe(cached=False, current=fresh_repodata)] * 2,
         [successful_result, successful_result],
     )
     worker = RecordingWorker()
@@ -641,7 +610,7 @@ async def test_warmer_uses_service_with_one_worker_reused_and_cleaned_up(
     assert len(service.resolve_calls) == 2
     assert {call[1] for call in service.resolve_calls} == {worker}
     assert warmer.limiter.generation == generation
-    assert warmer.limiter.borrowed_tokens == 0
+    assert warmer.limiter.limiter.borrowed_tokens == 0
 
 
 @pytest.mark.anyio
@@ -654,16 +623,16 @@ async def test_active_foreground_work_stops_cycle_before_cache_inspection(
     warm_candidates = SolverWarmCandidates(max_size=32)
     record_candidate_request(warm_candidates, solver_request)
     service = RecordingService(
-        [SolverServiceProbe(cached=None, current=fresh_repodata)]
+        [SolverServiceProbe(cached=False, current=fresh_repodata)]
     )
-    limiter = ForegroundCapacityLimiter(1)
+    limiter = ForegroundCapacity(anyio.CapacityLimiter(1))
     warmer = create_warmer(warm_candidates, service, limiter=limiter)
 
-    await limiter.acquire()
+    await limiter.arrive().acquire()
     try:
         await warmer.cycle()
     finally:
-        limiter.release()
+        limiter.limiter.release()
 
     assert service.inspect_calls == []
     assert warmer.stats.foreground_skips == 1
@@ -679,23 +648,23 @@ async def test_waiting_foreground_work_stops_cycle_before_cache_inspection(
     warm_candidates = SolverWarmCandidates(max_size=32)
     record_candidate_request(warm_candidates, solver_request)
     service = RecordingService(
-        [SolverServiceProbe(cached=None, current=fresh_repodata)]
+        [SolverServiceProbe(cached=False, current=fresh_repodata)]
     )
-    limiter = ForegroundCapacityLimiter(1)
+    limiter = ForegroundCapacity(anyio.CapacityLimiter(1))
     warmer = create_warmer(warm_candidates, service, limiter=limiter)
     waiter_acquired = anyio.Event()
 
     async def wait_for_token() -> None:
-        async with limiter:
+        async with limiter.arrive():
             waiter_acquired.set()
 
-    await limiter.acquire()
+    await limiter.arrive().acquire()
     async with anyio.create_task_group() as tasks:
         tasks.start_soon(wait_for_token)
-        while limiter.statistics().tasks_waiting == 0:
+        while limiter.limiter.statistics().tasks_waiting == 0:
             await anyio.lowlevel.checkpoint()
         await warmer.cycle()
-        limiter.release()
+        limiter.limiter.release()
         await waiter_acquired.wait()
 
     assert service.inspect_calls == []
@@ -717,17 +686,17 @@ async def test_foreground_arrival_during_solve_stops_further_work(
     warm_candidates = SolverWarmCandidates(max_size=32)
     for request in requests:
         record_candidate_request(warm_candidates, request)
-    limiter = ForegroundCapacityLimiter(1)
+    limiter = ForegroundCapacity(anyio.CapacityLimiter(1))
 
     class ArrivingService(RecordingService):
         async def resolve(self, request, worker, timeout_s):
             result = await super().resolve(request, worker, timeout_s)
-            await limiter.acquire()
-            limiter.release()
+            await limiter.arrive().acquire()
+            limiter.limiter.release()
             return result
 
     service = ArrivingService(
-        [SolverServiceProbe(cached=None, current=fresh_repodata)] * 2,
+        [SolverServiceProbe(cached=False, current=fresh_repodata)] * 2,
         [successful_result, successful_result],
     )
     worker = RecordingWorker()
@@ -761,18 +730,17 @@ async def test_foreground_arrival_during_cache_inspection_stops_cycle(
     warm_candidates = SolverWarmCandidates(max_size=32)
     for request in requests:
         record_candidate_request(warm_candidates, request)
-    limiter = ForegroundCapacityLimiter(1)
-    cached = replace(successful_result, disposition="cache-hit")
+    limiter = ForegroundCapacity(anyio.CapacityLimiter(1))
 
     class ArrivingInspectionService(RecordingService):
         async def inspect(self, request):
             probe = await super().inspect(request)
-            await limiter.acquire()
-            limiter.release()
+            await limiter.arrive().acquire()
+            limiter.limiter.release()
             return probe
 
     service = ArrivingInspectionService(
-        [SolverServiceProbe(cached=cached, current=fresh_repodata)] * 2
+        [SolverServiceProbe(cached=True, current=fresh_repodata)] * 2
     )
     warmer = create_warmer(warm_candidates, service, limiter=limiter)
 
@@ -809,7 +777,7 @@ async def test_foreground_arrival_during_inspection_outcomes_stops_cycle(
         fingerprint = record_candidate_request(warm_candidates, request)
         if inspection == "deterministic":
             warm_candidates.mark_deterministic_failure(fingerprint, fresh_repodata)
-    limiter = ForegroundCapacityLimiter(1)
+    limiter = ForegroundCapacity(anyio.CapacityLimiter(1))
     current = (
         RepodataSnapshot(
             (("file:///srv/channel/linux-64", "repodata.json", 10, 1),),
@@ -822,12 +790,12 @@ async def test_foreground_arrival_during_inspection_outcomes_stops_cycle(
     class ArrivingInspectionService(RecordingService):
         async def inspect(self, request):
             self.inspect_calls.append(request)
-            await limiter.acquire()
-            limiter.release()
+            await limiter.arrive().acquire()
+            limiter.limiter.release()
             if inspection == "timeout":
                 raise TimeoutError
             return SolverServiceProbe(
-                cached=None,
+                cached=False,
                 current=None if inspection == "metadata" else current,
                 persistence_failed=inspection == "persistence",
             )
@@ -848,7 +816,6 @@ async def test_cycle_budget_stops_before_next_candidate(
     monkeypatch,
     solver_request,
     fresh_repodata,
-    successful_result,
     record_candidate_request,
     create_warmer,
 ):
@@ -858,9 +825,8 @@ async def test_cycle_budget_stops_before_next_candidate(
             warm_candidates,
             msgspec.structs.replace(solver_request, specs_to_add=[name]),
         )
-    cached = replace(successful_result, disposition="cache-hit")
     service = RecordingService(
-        [SolverServiceProbe(cached=cached, current=fresh_repodata)] * 2
+        [SolverServiceProbe(cached=True, current=fresh_repodata)] * 2
     )
     clock = iter(
         [
@@ -901,7 +867,7 @@ async def test_cycle_does_not_start_worker_after_inspection_uses_budget(
     warm_candidates = SolverWarmCandidates(max_size=32)
     record_candidate_request(warm_candidates, solver_request)
     service = SlowInspectionService(
-        [SolverServiceProbe(cached=None, current=fresh_repodata)]
+        [SolverServiceProbe(cached=False, current=fresh_repodata)]
     )
     monkeypatch.setattr(
         app_module,
@@ -932,7 +898,7 @@ async def test_matching_deterministic_failure_is_suppressed_while_fresh(
     fingerprint = record_candidate_request(warm_candidates, solver_request)
     warm_candidates.mark_deterministic_failure(fingerprint, fresh_repodata)
     service = RecordingService(
-        [SolverServiceProbe(cached=None, current=fresh_repodata)]
+        [SolverServiceProbe(cached=False, current=fresh_repodata)]
     )
     warmer = create_warmer(warm_candidates, service)
 
@@ -964,7 +930,7 @@ async def test_deterministic_failure_is_retried_for_stale_or_changed_repodata(
         )
     )
     service = RecordingService(
-        [SolverServiceProbe(cached=None, current=current)],
+        [SolverServiceProbe(cached=False, current=current)],
         [successful_result],
     )
     warmer = create_warmer(
@@ -1001,8 +967,8 @@ async def test_current_deterministic_solver_error_sets_snapshot_marker(
     )
     service = RecordingService(
         [
-            SolverServiceProbe(cached=None, current=fresh_repodata),
-            SolverServiceProbe(cached=None, current=fresh_repodata),
+            SolverServiceProbe(cached=False, current=fresh_repodata),
+            SolverServiceProbe(cached=False, current=fresh_repodata),
         ],
         [result],
     )
@@ -1052,9 +1018,9 @@ async def test_new_foreground_success_wins_over_stale_warm_failure(
                 raise RuntimeError("worker failed")
             return deterministic_result
 
-    probes = [SolverServiceProbe(cached=None, current=fresh_repodata)]
+    probes = [SolverServiceProbe(cached=False, current=fresh_repodata)]
     if failure_kind == "deterministic":
-        probes.append(SolverServiceProbe(cached=None, current=fresh_repodata))
+        probes.append(SolverServiceProbe(cached=False, current=fresh_repodata))
     service = ConcurrentForegroundService(probes)
     warmer = create_warmer(
         warm_candidates,
@@ -1113,7 +1079,7 @@ async def test_metadata_failure_defers_workload_without_starting_worker(
     now = 1_000_000_100
     warm_candidates = SolverWarmCandidates(max_size=32)
     fingerprint = record_candidate_request(warm_candidates, solver_request)
-    service = RecordingService([SolverServiceProbe(cached=None, current=None)])
+    service = RecordingService([SolverServiceProbe(cached=False, current=None)])
     warmer = create_warmer(warm_candidates, service, interval_s=10)
     monkeypatch.setattr(
         app_module,
@@ -1161,7 +1127,7 @@ async def test_worker_timeout_or_death_defers_and_stops_cycle(
         ready=stage != "solve" or not isinstance(error, RuntimeError),
     )
     service = RecordingService(
-        [SolverServiceProbe(cached=None, current=fresh_repodata)],
+        [SolverServiceProbe(cached=False, current=fresh_repodata)],
         [error] if stage == "solve" else [],
     )
     warmer = create_warmer(warm_candidates, service, worker=worker)
@@ -1191,7 +1157,7 @@ async def test_rejected_publication_defers_workload(
     fingerprint = record_candidate_request(warm_candidates, solver_request)
     result = replace(successful_result, disposition=disposition)
     service = RecordingService(
-        [SolverServiceProbe(cached=None, current=fresh_repodata)],
+        [SolverServiceProbe(cached=False, current=fresh_repodata)],
         [result],
     )
     warmer = create_warmer(
@@ -1218,7 +1184,7 @@ async def test_file_source_is_discarded_without_replay(
         (("file:///srv/channel/linux-64", "repodata.json", 10, 1),),
         False,
     )
-    service = RecordingService([SolverServiceProbe(cached=None, current=local)])
+    service = RecordingService([SolverServiceProbe(cached=False, current=local)])
     warmer = create_warmer(warm_candidates, service)
 
     await warmer.cycle()
@@ -1315,18 +1281,16 @@ async def test_warmer_lifespan_waits_for_cleanup_before_checkpoint(monkeypatch):
     store = RecordingStore()
 
     class WarmCandidates:
-        async def load(self, loaded_store):
-            assert loaded_store is store
+        async def load(self):
             events.append("load")
 
-        async def checkpoint(self, checkpoint_store):
-            assert checkpoint_store is store
+        async def checkpoint(self):
             assert finished.is_set()
             events.append("checkpoint")
 
     class Warmer:
-        def __init__(self, **kwargs):
-            assert kwargs["store"] is store
+        def __init__(self, **_kwargs):
+            pass
 
         async def run(self, stop):
             events.append("scheduler-start")
@@ -1336,7 +1300,13 @@ async def test_warmer_lifespan_waits_for_cleanup_before_checkpoint(monkeypatch):
             finished.set()
 
     warm_candidates = WarmCandidates()
-    monkeypatch.setattr(app_module, "SolverWarmCandidates", lambda **_: warm_candidates)
+    warm_candidate_options = {}
+
+    def create_warm_candidates(**options):
+        warm_candidate_options.update(options)
+        return warm_candidates
+
+    monkeypatch.setattr(app_module, "SolverWarmCandidates", create_warm_candidates)
     monkeypatch.setattr(app_module, "SolverCacheWarmer", Warmer)
     monkeypatch.setattr(
         app_module,
@@ -1353,8 +1323,8 @@ async def test_warmer_lifespan_waits_for_cleanup_before_checkpoint(monkeypatch):
     monkeypatch.setattr(app_module, "RESULT_CACHE_BACKEND", "file")
     monkeypatch.setattr(
         ResultCache,
-        "stores_for_config",
-        classmethod(lambda _cls, *_args: {app_module.RESULT_CACHE_STORE_NAME: store}),
+        "store_for_config",
+        staticmethod(lambda *_args: store),
     )
     monkeypatch.setattr(app_module, "SOLVER_CACHE_WARM_INTERVAL_S", 300)
     monkeypatch.setattr(app_module, "SOLVER_CACHE_WARM_BATCH_SIZE", 8)
@@ -1376,6 +1346,10 @@ async def test_warmer_lifespan_waits_for_cleanup_before_checkpoint(monkeypatch):
 
     assert finished.is_set()
     assert app.state.solve_worker is foreground_worker
+    assert (
+        warm_candidate_options["store_operations"] is app.state.result_cache.store_operations
+    )
+    assert warm_candidate_options["store_operations"].store is store
     assert events == [
         "store-open",
         "foreground-worker-start",
@@ -1495,7 +1469,7 @@ async def test_cycle_cancellation_still_stops_dedicated_worker(
             await anyio.sleep_forever()
 
     service = CancelledService(
-        [SolverServiceProbe(cached=None, current=fresh_repodata)]
+        [SolverServiceProbe(cached=False, current=fresh_repodata)]
     )
     worker = RecordingWorker()
     warmer = create_warmer(warm_candidates, service, worker=worker)
@@ -1526,7 +1500,7 @@ async def test_incomplete_worker_cleanup_retains_handle(
     warm_candidates = SolverWarmCandidates(max_size=32)
     record_candidate_request(warm_candidates, solver_request)
     service = RecordingService(
-        [SolverServiceProbe(cached=None, current=fresh_repodata)],
+        [SolverServiceProbe(cached=False, current=fresh_repodata)],
         [successful_result],
     )
     worker = UnstoppableWorker()
@@ -1557,7 +1531,7 @@ async def test_logs_contain_only_aggregate_state_and_no_request_data(
     )
     warm_candidates = SolverWarmCandidates(max_size=32)
     record_candidate_request(warm_candidates, secret_request)
-    service = RecordingService([SolverServiceProbe(cached=None, current=None)])
+    service = RecordingService([SolverServiceProbe(cached=False, current=None)])
     warmer = create_warmer(warm_candidates, service)
 
     with caplog.at_level(logging.INFO, logger="conda_presto.app"):
