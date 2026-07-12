@@ -251,14 +251,8 @@ server image. Other Python environments require the `redis` optional dependency.
 
 The `/resolve` key includes the normalized specs, ordered channels, target
 platforms, output format, conda-presto and solver versions, and local repodata
-cache-file markers. A `/solver/v1` key hashes the serialized solver request
-fields and dependency versions. Those request fields include installed records,
-history, pins, virtual packages, channel definitions, operation modifiers, and
-solver settings. The stored value includes the repodata cache-file markers
-recorded by the worker after index collection. A cached response is bypassed
-when conda requires the current JSON or sharded-repodata source to refresh or
-its URL, source, size, or modification-time markers differ. A retained result
-after refresh replaces the existing entry for that request key.
+cache-file markers. See the [Presto solver reference](solver-backend.md) for the
+internal solver cache key and invalidation rules.
 
 ### Concurrency tuning
 

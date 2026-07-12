@@ -672,10 +672,7 @@ class StoredSolverResult(msgspec.Struct):
 
     @property
     def memory_size(self) -> int:
-        return len(msgspec.json.encode(self.response)) + sum(
-            len(url) + len(source) + 16
-            for url, source, _, _ in self.metadata_used.records
-        )
+        return len(msgspec.msgpack.encode(self))
 
     def matches(self, repodata: RepodataSnapshot) -> bool:
         """Return whether current repodata markers match this entry."""

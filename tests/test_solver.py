@@ -45,42 +45,29 @@ def package_record():
 
 
 @pytest.fixture()
-def solver_request(package_record):
-    return PrestoSolveRequest(
-        channels=[Channel("conda-forge").dump()],
-        subdirs=["linux-64", "noarch"],
-        specs_to_add=["zlib"],
-        specs_to_remove=[],
+def solver_request(make_presto_solver_request, package_record):
+    return make_presto_solver_request(
         installed=[package_record.dump()],
         history=["zlib"],
-        pinned=[],
-        virtual=[],
-        aggressive_updates=[],
         always_update=["zlib"],
-        update_modifier="UPDATE_SPECS",
-        deps_modifier="NOT_SET",
-        ignore_pinned=False,
-        force_remove=False,
-        prune=False,
-        command="install",
-        repodata_fn="repodata.json",
-        offline=False,
-        channel_priority="strict",
-        use_only_tar_bz2=False,
-        add_pip_as_python_dependency=True,
-        allow_cycles=True,
-        restore_free_channel=False,
-        repodata_use_shards=True,
-        use_index_cache=False,
     )
 
 
 @pytest.fixture()
-def solver_repodata():
-    return RepodataSnapshot(
-        (("https://conda.example/linux-64", "repodata.json", 10, 1),),
-        False,
+def broker_endpoint(monkeypatch):
+    endpoint = SimpleNamespace(
+        protocol="http",
+        url="http://127.0.0.1:8765/",
     )
+    broker = SimpleNamespace(
+        service=lambda name: SimpleNamespace(endpoint=lambda *, ready: endpoint)
+    )
+    monkeypatch.setattr(
+        solver_module,
+        "Broker",
+        SimpleNamespace(current=lambda: broker),
+    )
+    return endpoint
 
 
 @pytest.mark.parametrize(
@@ -193,12 +180,12 @@ def test_solver_cache_key_covers_effective_repodata_filename(
 
 
 def test_solver_cache_key_is_stable_across_repodata(
-    monkeypatch, solver_request, solver_repodata
+    monkeypatch, solver_request, fresh_repodata_snapshot
 ):
     monkeypatch.setattr(
         solver_module.RepodataSnapshot,
         "capture",
-        lambda *_args, **_kwargs: solver_repodata,
+        lambda *_args, **_kwargs: fresh_repodata_snapshot,
     )
     first = solver_request.cache_key()
     changed = RepodataSnapshot(
@@ -304,9 +291,7 @@ def test_solver_cache_key_covers_dependency_versions(
     assert solver_request.cache_key() != first
 
 
-def test_solver_uses_server_effective_repodata_fn(
-    monkeypatch, solver_request, solver_repodata
-):
+def test_solver_uses_server_effective_repodata_fn(monkeypatch, solver_request):
     captured = {}
     request = msgspec.structs.replace(
         solver_request,
@@ -500,7 +485,7 @@ def test_presto_error_roundtrip(error, expected_type):
 
 
 def test_presto_request_uses_rattler_backend(
-    monkeypatch, package_record, solver_request
+    monkeypatch, package_record, solver_request, fresh_repodata_snapshot
 ):
     calls = []
     order = []
@@ -561,14 +546,10 @@ def test_presto_request_uses_rattler_backend(
         lambda name: Backend() if name == "rattler" else None,
     )
     monkeypatch.setattr(solver_module, "SolverOutputState", OutputState)
-    repodata = RepodataSnapshot(
-        (("https://conda.example/linux-64", "repodata.json", 10, 1),),
-        False,
-    )
     monkeypatch.setattr(
         solver_module.RepodataSnapshot,
         "capture",
-        lambda *_args, **_kwargs: order.append("metadata") or repodata,
+        lambda *_args, **_kwargs: order.append("metadata") or fresh_repodata_snapshot,
     )
     request = msgspec.structs.replace(
         solver_request,
@@ -586,7 +567,7 @@ def test_presto_request_uses_rattler_backend(
 
     assert response.records[0]["name"] == "zlib"
     assert response.neutered == ["zlib"]
-    assert outcome.metadata_before == outcome.metadata_used == repodata
+    assert outcome.metadata_before == outcome.metadata_used == fresh_repodata_snapshot
     assert order == ["metadata", "index", "metadata", "sat"]
     assert [str(channel) for channel in calls[0]["channels"]] == [
         "https://conda.anaconda.org/conda-forge"
@@ -615,6 +596,7 @@ def test_presto_request_metadata_failure_does_not_fail_solve(
     monkeypatch,
     package_record,
     solver_request,
+    fresh_repodata_snapshot,
     failure_index,
 ):
     class Backend:
@@ -641,13 +623,11 @@ def test_presto_request_metadata_failure_does_not_fail_solve(
         def check_for_pin_conflicts(self, index):
             assert index == "index"
 
-    repodata = RepodataSnapshot(
-        (("https://conda.example/linux-64", "repodata.json", 10, 1),),
-        False,
-    )
     snapshots = iter(
         [
-            RuntimeError("metadata unavailable") if index == failure_index else repodata
+            RuntimeError("metadata unavailable")
+            if index == failure_index
+            else fresh_repodata_snapshot
             for index in range(2)
         ]
     )
@@ -676,6 +656,7 @@ def test_presto_request_metadata_failure_does_not_fail_solve(
 def test_presto_request_error_retains_worker_metadata(
     monkeypatch,
     solver_request,
+    fresh_repodata_snapshot,
 ):
     error = PackagesNotFoundError(["missing"], ["https://example.invalid"])
 
@@ -700,10 +681,6 @@ def test_presto_request_error_retains_worker_metadata(
         def check_for_pin_conflicts(self, index):
             assert index == "index"
 
-    repodata = RepodataSnapshot(
-        (("https://conda.example/linux-64", "repodata.json", 10, 1),),
-        False,
-    )
     monkeypatch.setattr(
         solver_module.context.plugin_manager,
         "get_solver_backend",
@@ -713,16 +690,18 @@ def test_presto_request_error_retains_worker_metadata(
     monkeypatch.setattr(
         solver_module.RepodataSnapshot,
         "capture",
-        lambda *_args, **_kwargs: repodata,
+        lambda *_args, **_kwargs: fresh_repodata_snapshot,
     )
 
     outcome = solver_request.solve()
 
     assert outcome.result.kind == "packages-not-found"
-    assert outcome.metadata_before == outcome.metadata_used == repodata
+    assert outcome.metadata_before == outcome.metadata_used == fresh_repodata_snapshot
 
 
-def test_presto_request_accepts_empty_early_exit(monkeypatch, solver_request):
+def test_presto_request_accepts_empty_early_exit(
+    monkeypatch, solver_request, fresh_repodata_snapshot
+):
     class Backend:
         def __call__(self, **kwargs):
             return SimpleNamespace(
@@ -743,14 +722,10 @@ def test_presto_request_accepts_empty_early_exit(monkeypatch, solver_request):
         "SolverOutputState",
         lambda **_: SimpleNamespace(early_exit=lambda: []),
     )
-    repodata = RepodataSnapshot(
-        (("https://conda.example/linux-64", "repodata.json", 10, 1),),
-        False,
-    )
     monkeypatch.setattr(
         solver_module.RepodataSnapshot,
         "capture",
-        lambda *_args, **_kwargs: repodata,
+        lambda *_args, **_kwargs: fresh_repodata_snapshot,
     )
 
     outcome = solver_request.solve()
@@ -891,17 +866,7 @@ def test_presto_request_capture_rejects_unsupported_state(
             PrestoSolveRequest.from_solver(solver, input_state)
 
 
-def test_client_posts_to_broker_loopback(monkeypatch, solver_request):
-    endpoint = SimpleNamespace(
-        host="127.0.0.1",
-        protocol="http",
-        url="http://127.0.0.1:8765/",
-    )
-    broker = SimpleNamespace(
-        service=lambda name: SimpleNamespace(
-            endpoint=lambda *, ready: endpoint if ready else None
-        )
-    )
+def test_client_posts_to_broker_loopback(monkeypatch, solver_request, broker_endpoint):
     calls = []
 
     class Response:
@@ -918,11 +883,6 @@ def test_client_posts_to_broker_loopback(monkeypatch, solver_request):
         calls.append((request, timeout))
         return Response()
 
-    monkeypatch.setattr(
-        solver_module,
-        "Broker",
-        SimpleNamespace(current=lambda: broker),
-    )
     monkeypatch.setattr(
         PrestoSolverClient,
         "opener",
@@ -950,26 +910,16 @@ def test_client_accepts_only_loopback_hosts(host, expected):
     assert PrestoSolverClient.is_loopback(host) is expected
 
 
-def test_client_rejects_non_loopback_broker_endpoint(monkeypatch, solver_request):
-    endpoint = SimpleNamespace(
-        host="127.0.0.1",
-        protocol="http",
-        url="http://192.0.2.1:8765/",
-    )
-    broker = SimpleNamespace(
-        service=lambda name: SimpleNamespace(endpoint=lambda *, ready: endpoint)
-    )
-    monkeypatch.setattr(
-        solver_module,
-        "Broker",
-        SimpleNamespace(current=lambda: broker),
-    )
+def test_client_rejects_non_loopback_broker_endpoint(solver_request, broker_endpoint):
+    broker_endpoint.url = "http://192.0.2.1:8765/"
 
     with pytest.raises(PrestoSolverError, match="ready loopback service"):
         PrestoSolverClient().solve(solver_request, "/tmp/prefix")
 
 
-def test_client_rejects_redirects_and_environment_proxies(monkeypatch, solver_request):
+def test_client_rejects_redirects_and_environment_proxies(
+    solver_request, broker_endpoint
+):
     requests = []
 
     class Handler(BaseHTTPRequestHandler):
@@ -989,18 +939,7 @@ def test_client_rejects_redirects_and_environment_proxies(monkeypatch, solver_re
     server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
     thread = Thread(target=server.serve_forever, daemon=True)
     thread.start()
-    endpoint = SimpleNamespace(
-        protocol="http",
-        url=f"http://127.0.0.1:{server.server_port}/",
-    )
-    broker = SimpleNamespace(
-        service=lambda name: SimpleNamespace(endpoint=lambda *, ready: endpoint)
-    )
-    monkeypatch.setattr(
-        solver_module,
-        "Broker",
-        SimpleNamespace(current=lambda: broker),
-    )
+    broker_endpoint.url = f"http://127.0.0.1:{server.server_port}/"
 
     try:
         with pytest.raises(PrestoSolverError, match="HTTP 307"):
@@ -1030,20 +969,9 @@ def test_client_rejects_redirects_and_environment_proxies(monkeypatch, solver_re
         ),
     ],
 )
-def test_client_restores_conda_http_error(monkeypatch, solver_request, error):
-    endpoint = SimpleNamespace(
-        host="127.0.0.1",
-        protocol="http",
-        url="http://127.0.0.1:8765/",
-    )
-    broker = SimpleNamespace(
-        service=lambda name: SimpleNamespace(endpoint=lambda *, ready: endpoint)
-    )
-    monkeypatch.setattr(
-        solver_module,
-        "Broker",
-        SimpleNamespace(current=lambda: broker),
-    )
+def test_client_restores_conda_http_error(
+    monkeypatch, solver_request, broker_endpoint, error
+):
     monkeypatch.setattr(
         PrestoSolverClient,
         "opener",
@@ -1066,19 +994,9 @@ def test_client_restores_conda_http_error(monkeypatch, solver_request, error):
         PrestoSolverClient().solve(solver_request, "/tmp/prefix")
 
 
-def test_client_surfaces_unstructured_service_http_error(monkeypatch, solver_request):
-    endpoint = SimpleNamespace(
-        protocol="http",
-        url="http://127.0.0.1:8765/",
-    )
-    broker = SimpleNamespace(
-        service=lambda name: SimpleNamespace(endpoint=lambda *, ready: endpoint)
-    )
-    monkeypatch.setattr(
-        solver_module,
-        "Broker",
-        SimpleNamespace(current=lambda: broker),
-    )
+def test_client_surfaces_unstructured_service_http_error(
+    monkeypatch, solver_request, broker_endpoint
+):
     monkeypatch.setattr(
         PrestoSolverClient,
         "opener",
@@ -1095,19 +1013,7 @@ def test_client_surfaces_unstructured_service_http_error(monkeypatch, solver_req
         PrestoSolverClient().solve(solver_request, "/tmp/prefix")
 
 
-def test_client_surfaces_transport_error(monkeypatch, solver_request):
-    endpoint = SimpleNamespace(
-        protocol="http",
-        url="http://127.0.0.1:8765/",
-    )
-    broker = SimpleNamespace(
-        service=lambda name: SimpleNamespace(endpoint=lambda *, ready: endpoint)
-    )
-    monkeypatch.setattr(
-        solver_module,
-        "Broker",
-        SimpleNamespace(current=lambda: broker),
-    )
+def test_client_surfaces_transport_error(monkeypatch, solver_request, broker_endpoint):
     monkeypatch.setattr(
         PrestoSolverClient,
         "opener",

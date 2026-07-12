@@ -6,7 +6,8 @@ import hashlib
 import ipaddress
 import json
 import logging
-from contextlib import ExitStack
+from collections.abc import Iterator
+from contextlib import ExitStack, contextmanager
 from importlib.metadata import version as pkg_version
 from types import MappingProxyType
 from typing import Any, Literal, NoReturn
@@ -277,28 +278,33 @@ class PrestoSolveRequest(msgspec.Struct):
 
     def repodata_snapshot(self) -> RepodataSnapshot:
         """Capture the server metadata that can affect this solve."""
-        target_subdir = self.target_subdir()
         with platform_lock:
-            with ExitStack() as overrides:
-                for key, value in (
-                    ("offline", self.offline),
-                    ("channel_priority", ChannelPriority(self.channel_priority)),
-                    ("_use_only_tar_bz2", self.use_only_tar_bz2),
-                    (
-                        "add_pip_as_python_dependency",
-                        self.add_pip_as_python_dependency,
-                    ),
-                    ("allow_cycles", self.allow_cycles),
-                    ("_restore_free_channel", self.restore_free_channel),
-                    ("repodata_use_shards", self.repodata_use_shards),
-                    ("use_index_cache", self.use_index_cache),
-                    ("_subdir", target_subdir),
-                ):
-                    overrides.enter_context(context._override(key, value))
+            with self.override_context():
                 solver = self.rattler_solver()
                 return self.capture_repodata(
                     solver._collect_channel_list(PrestoSolverInputState(self))
                 )
+
+    @contextmanager
+    def override_context(self) -> Iterator[None]:
+        """Apply the conda context captured by this request."""
+        with ExitStack() as overrides:
+            for key, value in (
+                ("offline", self.offline),
+                ("channel_priority", ChannelPriority(self.channel_priority)),
+                ("_use_only_tar_bz2", self.use_only_tar_bz2),
+                (
+                    "add_pip_as_python_dependency",
+                    self.add_pip_as_python_dependency,
+                ),
+                ("allow_cycles", self.allow_cycles),
+                ("_restore_free_channel", self.restore_free_channel),
+                ("repodata_use_shards", self.repodata_use_shards),
+                ("use_index_cache", self.use_index_cache),
+                ("_subdir", self.target_subdir()),
+            ):
+                overrides.enter_context(context._override(key, value))
+            yield
 
     def capture_repodata(self, channels: list[Channel]) -> RepodataSnapshot:
         """Capture repodata for an effective channel list under the caller's lock."""
@@ -347,7 +353,6 @@ class PrestoSolveRequest(msgspec.Struct):
 
     def solve(self) -> PrestoSolveOutcome:
         """Solve this captured state and report the repodata observed by the worker."""
-        target_subdir = self.target_subdir()
         if self.offline:
             raise PrestoSolverError(
                 "The internal Presto solver does not support offline mode."
@@ -357,22 +362,7 @@ class PrestoSolveRequest(msgspec.Struct):
                 "The internal Presto solver does not support --update-deps."
             )
         with platform_lock:
-            with ExitStack() as overrides:
-                for key, value in (
-                    ("offline", self.offline),
-                    ("channel_priority", ChannelPriority(self.channel_priority)),
-                    ("_use_only_tar_bz2", self.use_only_tar_bz2),
-                    (
-                        "add_pip_as_python_dependency",
-                        self.add_pip_as_python_dependency,
-                    ),
-                    ("allow_cycles", self.allow_cycles),
-                    ("_restore_free_channel", self.restore_free_channel),
-                    ("repodata_use_shards", self.repodata_use_shards),
-                    ("use_index_cache", self.use_index_cache),
-                    ("_subdir", target_subdir),
-                ):
-                    overrides.enter_context(context._override(key, value))
+            with self.override_context():
                 solver = self.rattler_solver()
                 input_state = PrestoSolverInputState(self)
                 output_state = SolverOutputState(solver_input_state=input_state)
