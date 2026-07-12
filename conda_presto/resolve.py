@@ -501,11 +501,7 @@ def build_index(
     channels: tuple[str, ...],
     platform: str,
 ) -> object:
-    """Return a fresh cached ``RattlerIndexHelper``, building if absent.
-
-    ``index_lock`` makes the check-then-build atomic, so only one
-    thread ever builds a given index — no thundering herd.
-    """
+    """Return the cached index, building or refreshing it under ``index_lock``."""
     key = (channels, platform)
     with index_lock:
         cached = index_cache.get(key)

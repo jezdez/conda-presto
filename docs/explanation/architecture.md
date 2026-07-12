@@ -59,8 +59,8 @@ that the local package metadata could not account for every edge.
 
 Solving is handled by `conda-rattler-solver`. For multi-platform requests,
 conda-presto dispatches each target platform through a persistent
-`ProcessPoolExecutor`. Each worker can retain its own warm repodata/index state
-across requests.
+`ProcessPoolExecutor`. Each worker retains loaded repodata and indexes across
+requests.
 
 Cross-platform solving relies on virtual package injection. When solving for a
 foreign target such as `linux-64` from macOS, conda-presto sets the target

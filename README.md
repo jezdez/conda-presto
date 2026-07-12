@@ -19,7 +19,7 @@ the result as native JSON or any conda exporter format
 - Review proposed environments with `/preflight`, `/diff`, and `/explain`
 - Content-addressed HTTP result cache with `/r/<sha256>` lookups and optional file or Redis backing
 - HTTP API with interactive docs (Scalar UI), compression, rate limiting
-- Optional conda-broker service for repeated local HTTP solves with a warmed worker
+- Optional broker-managed local service for repeated local HTTP solves
 - GitHub Action for CI pipelines (local CLI and hosted API modes)
 - Docker images for server and CLI deployment
 - Uses `conda-rattler-solver` for fast SAT solving
@@ -40,23 +40,16 @@ curl http://localhost:8000/health
 
 Pin a versioned image tag for deployments. See the [container configuration reference](https://jezdez.github.io/conda-presto/reference/configuration/) for server tuning and Redis result-cache setup.
 
-The server image retains its warmed solver worker across requests. It uses this
-directly; it does not start conda-broker inside the container.
+The server image runs HTTP solves through one persistent worker. The worker
+retains loaded repodata and indexes between requests. The container does not
+start conda-broker.
 
-## Run a warmed local service
+## Run a broker-managed local service
 
-Install conda-presto, then explicitly start the loopback service when repeated
-local API calls need to retain warm solve state:
-
-```bash
-conda broker start conda-presto.server
-conda broker wait conda-presto.server --timeout 180
-conda broker endpoint conda-presto.server
-```
-
-It never starts automatically or changes normal `conda presto` commands. See
-the [warmed local service tutorial](https://jezdez.github.io/conda-presto/tutorials/broker-service/)
-for installation and use.
+conda-presto registers a manual, loopback-only service with conda-broker. It
+does not start automatically or change normal `conda presto` commands. See the
+[broker-managed local service tutorial](https://jezdez.github.io/conda-presto/tutorials/broker-service/)
+to start the service and find its endpoint.
 
 ## Documentation
 

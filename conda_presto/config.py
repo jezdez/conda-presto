@@ -23,8 +23,9 @@ Server tuning:
     ``CONDA_PRESTO_PORT``
         Default port for ``--serve`` (default: ``8000``).
     ``CONDA_PRESTO_PERSISTENT_WORKER``
-        Run HTTP solves through one persistent, warmed worker process
-        (default: ``false``). Intended for the broker-managed local service.
+        Run HTTP solves through one worker that retains loaded repodata and
+        indexes between requests (default: ``false``). Used by the
+        broker-managed local service and Docker server image.
     ``CONDA_PRESTO_RESULT_CACHE_SIZE``
         Max number of solve responses retained by the in-process result
         cache (default: ``256``).

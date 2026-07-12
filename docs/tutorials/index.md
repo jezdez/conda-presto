@@ -21,7 +21,7 @@ Use the HTTP API to resolve environments programmatically.
 File uploads, JSON requests, output format conversion, and more.
 :::
 
-:::{grid-item-card} {octicon}`server` Warmed local service
+:::{grid-item-card} {octicon}`server` Broker-managed local service
 :link: broker-service
 :link-type: doc
 

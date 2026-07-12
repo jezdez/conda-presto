@@ -1,8 +1,9 @@
-# Run a warmed local service
+# Run a broker-managed local service
 
-Use conda-broker when repeated local HTTP requests benefit from one warmed
-conda-presto worker. The service is opt-in: ordinary `conda presto` commands
-continue to solve in their own process.
+Use conda-broker to run a persistent conda-presto HTTP service on a loopback
+port. Its worker retains loaded repodata and indexes between requests. The
+service is opt-in: ordinary `conda presto` commands continue to solve in their
+own process.
 
 ## Install the integration
 
@@ -17,7 +18,7 @@ conda-broker is installed with conda-presto.
 
 ## Start and wait for the service
 
-The service has a manual lifecycle. Start it, then wait for `/health` to
+The service starts only when requested. Start it, then wait for `/health` to
 report ready:
 
 ```bash
@@ -34,10 +35,10 @@ curl -X POST http://127.0.0.1:PORT/resolve \
   -d '{"specs": ["python=3.13"], "platforms": ["linux-64"]}'
 ```
 
-`wait` finishes only after the service's solver worker has warmed the configured
-channels and platforms. It runs on a broker-assigned loopback port and disables
-rate limiting only for that child process. The longer timeout allows for an
-initial repodata download on a cold cache.
+`wait` finishes only after the service's solver worker has loaded indexes for
+the configured channels and platforms. It runs on a broker-assigned loopback
+port and disables rate limiting only for that child process. The longer timeout
+allows for an initial repodata download when the cache is empty.
 
 ## Stop the service
 

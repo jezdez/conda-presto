@@ -45,7 +45,7 @@ Long-lived local service and conda solver integration.
 
 | Issue | Status | Summary |
 |---|:---:|---|
-| [Broker-managed local service](https://github.com/jezdez/conda-presto/issues/39) | {bdg-warning}`in progress` | User-scoped local HTTP service that preserves warm process state |
+| [Broker-managed local service](https://github.com/jezdez/conda-presto/issues/39) | {bdg-warning}`in progress` | User-scoped local HTTP service that retains loaded repodata and indexes between requests |
 | [Full conda solver backend](https://github.com/jezdez/conda-presto/issues/40) | {bdg-secondary}`proposed` | `conda --solver=presto` backed by a public-channel local or explicit remote service |
 ````
 
@@ -93,7 +93,8 @@ graph TD
 Diff and explain can use existing lockfile records when the requested platform
 is covered. Repair stays separate from explain because it may run repeated
 solver attempts under an explicit budget. The broker-managed local service and
-full solver backend build on warm process state plus public-channel cache keys.
+full solver backend use persistent worker processes and public-channel cache
+keys.
 
 ## Conventions
 

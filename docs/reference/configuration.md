@@ -16,10 +16,10 @@ The server image starts the HTTP API by default:
 docker run -p 8000:8000 ghcr.io/jezdez/conda-presto:latest
 ```
 
-The first startup can take longer while its persistent solver worker warms
-repodata and indexes. Subsequent requests reuse that worker directly. A timed
-out solve is isolated to the worker; the server reports unhealthy while a
-replacement warms, then resumes serving requests.
+The server starts one persistent solver worker. On startup, the worker loads
+repodata and indexes for the configured channels and platforms. Requests reuse
+that process. After a solve times out, the server reports unhealthy until a
+replacement worker has loaded its indexes.
 
 ### CLI image
 
@@ -202,27 +202,17 @@ export CONDA_PRESTO_PLATFORMS="linux-64,osx-arm64"
 ### Broker-managed local service
 
 conda-presto registers `conda-presto.server` with
-[conda-broker](https://jezdez.github.io/conda-broker/). The service is
-loopback-only, uses a broker-assigned port, and has a manual lifecycle:
+[conda-broker](https://jezdez.github.io/conda-broker/). The manual service binds
+to a broker-assigned loopback port. Its conda-presto server runs in
+persistent-worker mode, so one worker retains loaded repodata and indexes
+between requests. If the worker fails or times out, `/health` reports
+unavailable and conda-broker replaces the server process.
 
-```bash
-conda broker start conda-presto.server
-conda broker wait conda-presto.server --timeout 180
-conda broker endpoint conda-presto.server
-```
+The published Docker server image also enables persistent-worker mode, but it
+does not start conda-broker. The server replaces a failed worker itself.
 
-The endpoint command reports the API root; readiness probes `/health`
-separately. The broker child runs a single persistent solver worker so warmed
-repodata and indexes are actually retained between requests. If that worker
-fails or times out, `/health` reports unavailable and conda-broker replaces the
-server process.
-
-The published Docker server image uses the same persistent-worker mode directly.
-It does not start conda-broker inside the container, so the server replaces a
-failed worker itself.
-
-See the [warmed local service tutorial](../tutorials/broker-service.md) for
-installation and use.
+See the [broker-managed local service tutorial](../tutorials/broker-service.md)
+for the start, wait, and endpoint commands.
 
 ### Result cache
 

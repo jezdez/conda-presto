@@ -939,7 +939,7 @@ async def parse_input_for_request(
 
 
 class PersistentSolveWorker:
-    """Run HTTP solve work in one warmed process that can be replaced on timeout."""
+    """Run HTTP solves in one worker process and replace it after a timeout."""
 
     def __init__(
         self,
@@ -963,11 +963,11 @@ class PersistentSolveWorker:
 
     @property
     def ready(self) -> bool:
-        """Return whether the worker has completed its warmup."""
+        """Return whether the worker has loaded its configured indexes."""
         return self.is_ready and self.running
 
     def start(self) -> None:
-        """Start the worker and wait until its configured indexes are warm."""
+        """Start the worker and wait until it loads its configured indexes."""
         with self.operation_lock:
             if self.ready:
                 return
@@ -1076,7 +1076,7 @@ def persistent_solve_worker_entrypoint(
     warmup_channels: list[str],
     warmup_platforms: list[str],
 ) -> None:
-    """Serve sequential solve requests from a warmed worker process."""
+    """Serve sequential solve requests from a persistent worker process."""
     try:
         warmup_indexes(warmup_channels, warmup_platforms)
     except Exception:

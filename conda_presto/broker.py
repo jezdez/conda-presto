@@ -15,7 +15,7 @@ def conda_broker_services():
     """Expose the opt-in local conda-presto service."""
     yield CondaService(
         name="conda-presto.server",
-        summary="Warmed local conda-presto HTTP API",
+        summary="Broker-managed local conda-presto HTTP API",
         source="conda-presto",
         start_policy="manual",
         restart_policy="on-failure",
