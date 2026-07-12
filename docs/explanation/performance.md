@@ -99,29 +99,16 @@ upgrades. Cache reuse still includes dependency versions and requires the
 current repodata markers to match. Candidates are local by default. Persistence
 excludes requests with detected credentials.
 
-Regular warming does not predict future solves or pre-build a generic channel
-index. The first operation in its dedicated worker is the exact replay request,
-so request-specific channel order, subdirs, repodata mode, and
-`use_index_cache` behavior remain unchanged. Polling follows conda's local
-repodata TTL: a remote update can be observed after the local snapshot becomes
-stale, the next configured poll begins, and one bounded replay completes. A
-deterministic failure is held only while its matching snapshot is fresh; stale
-metadata permits another replay and refresh check.
+Scheduled refresh replays the recorded request with its channel order, subdirs,
+repodata mode, and `use_index_cache` setting. A remote repodata update can affect
+the cache after conda marks the local metadata stale and a later refresh cycle
+completes.
 
-Foreground isolation makes warm traffic opportunistic. A cycle does not start
-a replay while foreground work is active or queued, and foreground arrival
-during one bounded replay prevents the next candidate from starting. The
-running replay is allowed to finish or time out because terminating a process
-during shared repodata I/O would risk cache corruption. Conda filesystem locks
-remain enabled in the broker child to coordinate those separate processes.
-Warm worker and repodata calls use a dedicated one-token AnyIO thread limiter,
-so saturation of the server's default thread pool cannot put foreground work
-behind a warm call. Persistent operation admission and completion waits have
-bounded caller deadlines. Once admitted, reads and writes remain in one
-lifespan-owned FIFO even if that caller stops waiting, so an older delayed
-filesystem operation cannot overtake newer state. Corrupt values are ignored
-until a later valid write overwrites them. A failed warm publication is retried
-with backoff instead of being reported as warm.
+The refresh worker does not use the foreground worker or concurrency limiter.
+No replay starts while foreground work is active or waiting. Foreground work
+arriving during a replay prevents another candidate from starting; the current
+replay finishes or reaches its timeout. The broker child keeps conda filesystem
+locking enabled because both workers may access the same repodata cache.
 
 ## Multi-platform solving
 

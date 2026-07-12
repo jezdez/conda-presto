@@ -802,12 +802,7 @@ def watch_parent_process() -> None:
 
 
 def shutdown_process_pool() -> None:
-    """Shut down the process pool if it was started.
-
-    Idempotent; safe to call during Litestar lifespan shutdown.
-    Uses ``wait=False`` and ``cancel_futures=True`` so shutdown doesn't
-    block on in-flight solves during server teardown.
-    """
+    """Shut down the process pool without waiting for in-flight solves."""
     global process_pool
     with pool_lock:
         if process_pool is not None:

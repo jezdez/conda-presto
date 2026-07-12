@@ -24,12 +24,11 @@ from conda_presto.app import (
     SolverServiceResult,
     StoredSolverResult,
     health,
-    solver_cache_warmer_lifespan,
+    solver_cache_refresher_lifespan,
     solver_resources_lifespan,
     solver_v1,
 )
 from conda_presto.broker import conda_broker_services
-from conda_presto.warm_candidates import SolverWarmCandidates
 from conda_presto.resolve import RepodataSnapshot
 from conda_presto.solver import (
     PrestoSolveError,
@@ -38,6 +37,7 @@ from conda_presto.solver import (
     PrestoSolveResponse,
 )
 from conda_presto.storage import StoreOperationCoordinator
+from conda_presto.warm_candidates import SolverWarmCandidates
 
 
 class RecordingWorker:
@@ -74,8 +74,12 @@ class RecordingService:
         results: list[SolverServiceResult | Exception] | None = None,
         *,
         cache_size: int = 32,
+        persistent: bool = False,
     ) -> None:
-        self.cache = SimpleNamespace(max_size=cache_size)
+        self.cache = SimpleNamespace(
+            max_size=cache_size,
+            store_operations=object() if persistent else None,
+        )
         self.probes = probes
         self.results = results or []
         self.inspect_calls: list[PrestoSolveRequest] = []
@@ -461,15 +465,17 @@ async def test_warm_cycle_with_no_candidates_does_not_create_worker(
 
 @pytest.mark.anyio
 @pytest.mark.parametrize(
-    ("batch_size", "cache_size", "expected"),
+    ("batch_size", "cache_size", "persistent", "expected"),
     [
-        pytest.param(1, 3, 1, id="batch-bound"),
-        pytest.param(3, 1, 1, id="cache-bound"),
+        pytest.param(1, 3, False, 1, id="batch-bound"),
+        pytest.param(3, 1, False, 1, id="memory-cache-bound"),
+        pytest.param(3, 1, True, 3, id="persistent-cache-not-bound"),
     ],
 )
-async def test_warm_cycle_selection_is_bounded_by_batch_and_cache(
+async def test_refresh_cycle_selection_respects_storage_limits(
     batch_size,
     cache_size,
+    persistent,
     expected,
     solver_request,
     fresh_repodata,
@@ -484,6 +490,7 @@ async def test_warm_cycle_selection_is_bounded_by_batch_and_cache(
     service = RecordingService(
         [SolverServiceProbe(cached=True, current=fresh_repodata)] * expected,
         cache_size=cache_size,
+        persistent=persistent,
     )
     warmer = create_warmer(warm_candidates, service, batch_size=batch_size)
 
@@ -553,7 +560,7 @@ async def test_missing_or_stale_cache_entry_is_replayed(
     assert worker.starts == 1
     assert worker.stops == 1
     assert warmer.active_worker is None
-    assert warmer.stats.successful_warms == 1
+    assert warmer.stats.successful_refreshes == 1
 
 
 @pytest.mark.anyio
@@ -1070,7 +1077,7 @@ async def test_transient_failure_uses_exponential_backoff(
 
 
 @pytest.mark.anyio
-async def test_metadata_failure_defers_workload_without_starting_worker(
+async def test_metadata_failure_defers_candidate_without_starting_worker(
     monkeypatch,
     solver_request,
     record_candidate_request,
@@ -1145,7 +1152,7 @@ async def test_worker_timeout_or_death_defers_and_stops_cycle(
     "disposition",
     ["publication-rejected", "not-retained"],
 )
-async def test_rejected_publication_defers_workload(
+async def test_rejected_publication_defers_candidate(
     disposition,
     solver_request,
     fresh_repodata,
@@ -1329,12 +1336,12 @@ async def test_warmer_lifespan_waits_for_cleanup_before_checkpoint(monkeypatch):
     monkeypatch.setattr(app_module, "SOLVER_CACHE_WARM_INTERVAL_S", 300)
     monkeypatch.setattr(app_module, "SOLVER_CACHE_WARM_BATCH_SIZE", 8)
     monkeypatch.setattr(app_module, "SOLVER_CACHE_WARM_CANDIDATE_SIZE", 32)
-    monkeypatch.setattr(app_module, "RESULT_CACHE_SIZE", 256)
+    monkeypatch.setattr(app_module, "RESULT_CACHE_SIZE", 0)
     app = Litestar(
         route_handlers=[health],
         lifespan=[
             solver_resources_lifespan,
-            solver_cache_warmer_lifespan,
+            solver_cache_refresher_lifespan,
         ],
     )
 
@@ -1347,7 +1354,8 @@ async def test_warmer_lifespan_waits_for_cleanup_before_checkpoint(monkeypatch):
     assert finished.is_set()
     assert app.state.solve_worker is foreground_worker
     assert (
-        warm_candidate_options["store_operations"] is app.state.result_cache.store_operations
+        warm_candidate_options["store_operations"]
+        is app.state.result_cache.store_operations
     )
     assert warm_candidate_options["store_operations"].store is store
     assert events == [
@@ -1427,12 +1435,12 @@ async def test_broker_cycle_keeps_foreground_solver_ready(
     app = Litestar(route_handlers=[health, solver_v1])
 
     async with solver_resources_lifespan(app):
-        async with solver_cache_warmer_lifespan(app):
+        async with solver_cache_refresher_lifespan(app):
             foreground_worker = workers[0]
             app.state.solver_warm_candidates.record(solver_request)
             app.state.solver_warm_candidates.record(solver_request)
 
-            await app.state.solver_cache_warmer.cycle()
+            await app.state.solver_cache_refresher.cycle()
 
             request = SimpleNamespace(
                 app=app,
@@ -1543,18 +1551,18 @@ async def test_logs_contain_only_aggregate_state_and_no_request_data(
     assert fingerprint[:12] in caplog.text
     assert fingerprint not in caplog.text
     summary = next(
-        record.solver_cache_warm
+        record.solver_cache_refresh
         for record in caplog.records
-        if record.getMessage().startswith("Solver cache warm cycle ")
+        if record.getMessage().startswith("Solver cache refresh cycle ")
     )
     assert "cycles=1" in caplog.text
     assert set(summary) == {
         "selected",
-        "observations",
+        "recorded_requests",
         "cycles",
         "already_current",
         "attempts",
-        "successful_warms",
+        "successful_refreshes",
         "foreground_skips",
         "timeouts",
         "failures",

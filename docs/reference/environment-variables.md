@@ -84,7 +84,7 @@ in the conda-presto pixi workspace.
 These are configured in the `[tool.pixi.activation.env]` section of
 `pyproject.toml`. You can override any of them in your shell before
 running conda-presto. The conda-broker child overrides `CONDA_NO_LOCK=false`
-because its foreground and cache-warming worker processes can access the shared
+because its foreground and cache-refresh worker processes can access the shared
 repodata cache concurrently.
 
 ## See also

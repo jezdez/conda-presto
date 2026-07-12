@@ -201,9 +201,9 @@ export CONDA_PRESTO_CHANNELS="conda-forge,bioconda"
 export CONDA_PRESTO_PLATFORMS="linux-64,osx-arm64"
 ```
 
-This generic startup warmup belongs to the foreground worker. Regular solver
-cache warming uses exact previously observed requests instead; its dedicated
-worker does not pre-build the configured default channel/platform combinations.
+This generic startup warmup belongs to the foreground worker. Scheduled refresh
+replays recorded solver requests; its dedicated worker does not pre-build the
+configured default channel/platform combinations.
 
 ### Broker-managed local service
 
@@ -273,9 +273,10 @@ then its most recent request time, ranks higher. The displaced candidate keeps
 its accumulated count, and the highest-ranked observation fills a catalog slot
 when one becomes vacant.
 
-Candidates are process-local and are not served through HTTP or included in
-logs. Persistence is disabled by default because requests can contain installed
-package and channel state. To persist requests without detected credentials,
+Candidates are process-local and are not served through HTTP. Logs do not
+include recorded request contents. Persistence is disabled by default because
+requests can contain installed package and channel state. To persist requests
+without detected credentials,
 configure a file or Redis result-cache backend and set
 `CONDA_PRESTO_SOLVER_CACHE_WARM_CANDIDATE_PERSIST=true`. Requests with detected
 channel credentials or tokenized URLs remain memory-only. Redis deployments do
@@ -292,8 +293,8 @@ not run it.
   refresh.
 
 `CONDA_PRESTO_SOLVER_CACHE_WARM_BATCH_SIZE`
-: Maximum cache-warming candidates checked per cycle (default 8), capped by the
-  result-cache entry limit.
+: Maximum cache-warming candidates checked per cycle (default 8). For a
+  memory-only cache, this is capped by the in-process result-cache entry limit.
 
 See [Presto solver backend](solver-backend.md) for the cache contract,
 [Performance](../explanation/performance.md) for lifecycle and freshness behavior,
