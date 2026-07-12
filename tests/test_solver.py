@@ -24,6 +24,7 @@ from conda.models.match_spec import MatchSpec
 from conda.models.records import PackageRecord, PrefixRecord
 from conda_rattler_solver.exceptions import RattlerUnsatisfiableError
 from conda_rattler_solver.solver import RattlerSolver
+from conda_rattler_solver.state import SolverInputState
 
 import conda_presto.solver as solver_module
 from conda_presto.resolve import RepodataSnapshot
@@ -362,6 +363,38 @@ def test_presto_input_state_restores_serialized_client_state(solver_request):
     assert list(state.installed) == ["zlib"]
     assert list(state.history) == ["zlib"]
     assert list(state.always_update) == ["zlib"]
+
+
+def test_presto_request_preserves_local_virtual_package_overrides(
+    monkeypatch,
+    tmp_path,
+):
+    solver = PrestoSolver(
+        prefix=tmp_path,
+        channels=["conda-forge"],
+        subdirs=[context.subdir, "noarch"],
+        specs_to_add=["zlib"],
+        command="create",
+    )
+    requests = {}
+    for version in ("12.0", "13.0"):
+        monkeypatch.setenv("CONDA_OVERRIDE_CUDA", version)
+        input_state = SolverInputState(
+            prefix=tmp_path,
+            requested=solver.specs_to_add,
+            command="create",
+        )
+        request = PrestoSolveRequest.from_solver(solver, input_state)
+        requests[version] = request
+        restored = PrestoSolverInputState(request)
+        serialized = {record["name"]: record for record in request.virtual}
+
+        assert serialized["__cuda"]["version"] == version
+        assert {
+            name: record.dump() for name, record in restored.virtual.items()
+        } == serialized
+
+    assert requests["12.0"].cache_key() != requests["13.0"].cache_key()
 
 
 def test_presto_request_omits_prefix_file_inventory():
