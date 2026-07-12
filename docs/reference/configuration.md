@@ -224,7 +224,7 @@ a `conda --solver=presto` target.
 Successful `/resolve` responses and internal `/solver/v1` final states share an
 in-process LRU cache. `/resolve` responses use content-addressed entries and are
 returned with a `Location: /r/<sha256>` header. Solver responses use private
-stable `solver-v1:` slots and are not exposed through that endpoint. Configure
+`solver-v1:` entries and are not exposed through that endpoint. Configure
 the total number of retained responses with
 `CONDA_PRESTO_RESULT_CACHE_SIZE` (default 256) and the maximum bytes
 held in memory with `CONDA_PRESTO_RESULT_CACHE_MAX_MEMORY_MB`
@@ -251,13 +251,14 @@ server image. Other Python environments require the `redis` optional dependency.
 
 The `/resolve` key includes the normalized specs, ordered channels, target
 platforms, output format, conda-presto and solver versions, and local repodata
-cache file markers. A `/solver/v1` slot key instead contains the complete
-canonical solver-relevant state, credential scope, and dependency versions:
-installed records, history, pins, virtual packages, operation modifiers, and
-solver settings. Its value stores the exact worker-observed repodata snapshot.
-A cached response is bypassed when conda's effective policy requires its JSON
-or sharded-repodata source to refresh or the current snapshot differs. A safe
-refresh overwrites that stable slot after the worker and server snapshots agree.
+cache-file markers. A `/solver/v1` key hashes the serialized solver request
+fields and dependency versions. Those request fields include installed records,
+history, pins, virtual packages, channel definitions, operation modifiers, and
+solver settings. The stored value includes the repodata cache-file markers
+recorded by the worker after index collection. A cached response is bypassed
+when conda requires the current JSON or sharded-repodata source to refresh or
+its URL, source, size, or modification-time markers differ. A retained result
+after refresh replaces the existing entry for that request key.
 
 ### Concurrency tuning
 

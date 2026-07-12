@@ -44,7 +44,7 @@ Server, Docker, cache, and development settings.
 :link: solver-backend
 :link-type: doc
 
-Internal broker-backed `conda --solver=presto` contract and boundaries.
+Internal broker-backed `conda --solver=presto` interface and boundaries.
 :::
 
 ::::

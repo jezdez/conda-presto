@@ -62,13 +62,13 @@ SHARDED_REPODATA_SOURCE = "repodata_shards.msgpack.zst"
 
 @dataclass(frozen=True)
 class RepodataSnapshot:
-    """Repodata files and conda freshness state used by one solve."""
+    """Repodata cache-file markers and conda freshness state."""
 
     records: tuple[tuple[str, str, int | None, int | None], ...]
     stale: bool
 
     def is_cacheable_after(self, previous: RepodataSnapshot | None) -> bool:
-        """Return whether this post-solve snapshot identifies the solve input."""
+        """Return whether these markers can be used for result caching."""
         if self.stale or previous is None:
             return False
         # A transient shard fetch can fall back to JSON while leaving the old

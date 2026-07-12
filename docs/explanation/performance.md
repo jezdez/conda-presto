@@ -33,13 +33,13 @@ In-memory solver index cache
 Result cache
 : successful HTTP `/resolve` responses and internal `/solver/v1` final states
   share a bounded in-process LRU. Resolve responses use content-addressed keys;
-  solver final states use stable workload slots whose values carry the
-  worker-observed repodata snapshot. A hit skips solving and serialization;
-  solver hits also skip state-specific index construction. The LRU can be
-  backed by a persistent file or Redis store, which lets cached results survive
-  server restarts.
+  solver final states use keys derived from serialized request fields and
+  dependency versions. Each solver entry also records repodata cache-file
+  markers. A hit skips solving and serialization; solver hits also skip
+  state-specific index construction. The LRU can be backed by a persistent file
+  or Redis store, which lets cached results survive server restarts.
 
-## Cache key safety
+## Cache keys and repodata checks
 
 The result cache key is tied to the inputs that can change the response:
 normalized specs, ordered channels, target platforms, output format, relevant
@@ -47,17 +47,17 @@ dependency versions, and markers for conda's local `repodata.json` files. A
 request bypasses a stored result when conda's effective policy requires any
 corresponding repodata metadata to refresh. If refreshed package metadata
 changes, the next `/resolve` result uses a different key. Solver final-state
-slot keys additionally include the complete solver-relevant state: installed
-records, history, pins, virtual packages, operation modifiers, solver settings,
-credential scope, and dependency versions. They exclude the prefix path, file
-inventory, and repodata markers, allowing identical logical states at different
-paths to share one refreshable slot. The stored value carries the exact
-worker-observed repodata snapshot, and lookup requires a fresh exact match.
+keys hash the serialized request fields, including installed records, history,
+pins, virtual packages, operation modifiers, solver settings, and channel
+definitions, along with dependency versions. They exclude the prefix path, file
+inventory, and repodata markers, allowing the same request fields at different
+paths to use one entry. The stored value includes the URL, selected source, file
+size, modification time, and freshness state recorded for each repodata cache
+file. A lookup returns the entry only when conda considers the current files
+fresh and their markers match.
 
-That design keeps shared caching practical for public channels while avoiding
-reuse across channel metadata snapshots. Private channels and credentialed
-channel URLs should use an isolated deployment until the cache model grows an
-explicit private-channel policy.
+Private channels and credentialed channel URLs should use an isolated
+deployment until the cache model has an explicit private-channel policy.
 
 ## First solve vs. warm solve
 
@@ -69,15 +69,14 @@ the first user request to startup.
 
 The result cache adds a store lookup and freshness check on each HTTP solve
 request. On a solver miss, conda-presto captures metadata immediately before
-and after worker index collection, then verifies the current snapshot before
-atomically replacing the stable slot. That overhead scales with the number of
-channel/platform repodata files and is normally much smaller than solving.
+and after worker index collection, then compares the current cache-file markers
+before replacing the existing solver entry. The number of checks scales with
+the number of channel/platform repodata files.
 
-The final-state cache is intentionally narrower than `/resolve`: repeated
-dry-runs, retries, creates, and cloned prefix states can hit, while a completed
-transaction normally changes the installed state and therefore the next key.
-This preserves conda transaction correctness instead of reusing a result across
-different prefix histories or pins.
+The final-state cache has narrower reuse than `/resolve`: repeated dry-runs,
+retries, creates, and cloned prefix states can hit, while a completed transaction
+normally changes the installed records and therefore the next key. Requests
+with different prefix histories or pins also use different keys.
 
 ## Multi-platform solving
 

@@ -21,25 +21,22 @@ conda broker start conda-presto.server
 conda broker wait conda-presto.server
 ```
 
-There is intentionally no `CONDA_PRESTO_SOLVER_URL` setting and no remote
-endpoint mode.
+There is no `CONDA_PRESTO_SOLVER_URL` setting or remote endpoint mode.
 
 ## Solve semantics
 
 Only the conda `Solver.solve_final_state()` operation is delegated. The client
-captures minimal package-record data for the installed prefix, history, pins,
-virtual packages, requested specs, channel definitions, and the effective
-channel-priority, package-format, implicit Python `pip` dependency,
-dependency-cycle, free-channel, and repodata-shard settings. The index-cache
-setting is captured as well. The service reconstructs that state
-with private `conda-rattler-solver` APIs and forces its `rattler` backend. Known
-packages-not-found, unsatisfiable, and pin conflict errors are reconstructed in
-the client as their normal conda exception categories so conda's retry and
-error handling still applies.
+serializes installed package records, history, pins, virtual packages,
+requested specs, channel definitions, and the effective channel-priority,
+package-format, implicit Python `pip` dependency, dependency-cycle,
+free-channel, repodata-shard, and index-cache settings. The service reconstructs
+that state with private `conda-rattler-solver` APIs and forces its `rattler`
+backend. Packages-not-found, unsatisfiable, and pin conflict errors are
+reconstructed in the client as their conda exception categories so conda's
+retry and error handling still applies.
 
-The client still uses conda's normal `solve_for_diff()` and transaction code.
-Consequently, `--force-reinstall` affects local unlink/link selection exactly as
-it does for other backends.
+The client still uses conda's `solve_for_diff()` and transaction code.
+`--force-reinstall` is therefore handled by conda's local unlink/link selection.
 
 The backend rejects operations it cannot reproduce accurately:
 
@@ -62,23 +59,23 @@ on-disk repodata cache. Before constructing a state-specific rattler index, the
 its optional persistent file or Redis store, under a private `solver-v1:`
 namespace. A hit skips index construction and SAT solving.
 
-The stable slot key contains the complete canonical solver-relevant state,
-effective ordered channels and credential scope, target subdirs, solver
-settings, and conda-presto/conda/rattler versions. Prefix paths and file
-inventories are not included, so identical logical prefix states can share a
-result. Changed installed records, history, pins, virtual packages, requested
-specs, settings, or dependency versions select a different slot.
+The solver cache key hashes the serialized request fields, the effective
+repodata filename, the operation identifier, and the conda-presto, conda,
+conda-rattler-solver, and py-rattler versions. Prefix paths and file inventories
+are not included. Changed installed records, history, pins, virtual packages,
+requested specs, settings, channels, or dependency versions select a different
+entry.
 
-Each slot stores the successful response with the exact JSON or
-sharded-repodata snapshot observed by the worker after index collection. A hit
-requires a fresh current snapshot with the same records. A solve is published
-only when the worker's pre-index, used, and current snapshots prove which
-metadata produced it; a metadata change during the solve, an unavailable
-snapshot, or a transient JSON fallback that leaves an old shard marker
-unchanged returns the result without retaining it. Refreshing repodata
-atomically overwrites the same stable slot instead of creating one persistent
-entry per metadata generation. Missing repodata and local `file://` sources
-remain uncacheable. Errors and metadata-free early exits are not retained.
+Each entry stores the successful response and the repodata cache-file markers
+recorded by the worker after index collection: channel URL, selected JSON or
+sharded source, file size, modification time, and freshness state. A hit
+requires conda to consider the current cache files fresh and their markers to
+match the stored markers. A result is not retained when the markers before or
+after index collection are unavailable, the current markers differ, or a
+transient JSON fallback leaves an old shard marker unchanged. After a repodata
+refresh, a retained result replaces the entry under the same request key.
+Missing repodata and local `file://` sources remain uncacheable. Errors and
+metadata-free early exits are not retained.
 
 In-memory solver entries share `CONDA_PRESTO_RESULT_CACHE_SIZE` and
 `CONDA_PRESTO_RESULT_CACHE_MAX_MEMORY_MB` with `/resolve`. They can use the

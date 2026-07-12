@@ -270,7 +270,7 @@ def test_solver_cache_key_is_stable_across_repodata(
         ),
     ],
 )
-def test_solver_outcome_validates_worker_observed_repodata(
+def test_solver_outcome_validates_repodata_cache_file_markers(
     metadata_before,
     metadata_used,
     current,
@@ -371,7 +371,7 @@ def test_solver_snapshot_derives_effective_channels_on_server(
     ]
 
 
-def test_presto_input_state_restores_client_snapshot(solver_request):
+def test_presto_input_state_restores_serialized_client_state(solver_request):
     state = PrestoSolverInputState(solver_request)
 
     assert list(state.installed) == ["zlib"]
@@ -379,7 +379,7 @@ def test_presto_input_state_restores_client_snapshot(solver_request):
     assert list(state.always_update) == ["zlib"]
 
 
-def test_presto_request_minimizes_large_installed_prefix():
+def test_presto_request_omits_prefix_file_inventory():
     files = tuple(
         f"lib/python3.13/site-packages/example/file-{index}.py" for index in range(500)
     )
@@ -811,7 +811,7 @@ def test_presto_request_rejects_unsupported_state(solver_request, change, messag
         pytest.param(["noarch", "linux-64"], id="noarch-first"),
     ],
 )
-def test_presto_snapshot_rejects_invalid_subdirs(subdirs):
+def test_presto_request_capture_rejects_invalid_subdirs(subdirs):
     solver = SimpleNamespace(
         channels=[Channel("conda-forge")],
         subdirs=subdirs,
@@ -880,7 +880,7 @@ def test_presto_request_accepts_one_target_subdir(solver_request, subdirs):
         ),
     ],
 )
-def test_presto_snapshot_rejects_unsupported_state(
+def test_presto_request_capture_rejects_unsupported_state(
     offline, update_modifier, build_repodata_subset, message
 ):
     solver = SimpleNamespace(_build_repodata_subset=build_repodata_subset)

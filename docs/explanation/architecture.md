@@ -99,13 +99,13 @@ Result cache
 : successful HTTP `/resolve` responses and internal `/solver/v1` final states
   share a bounded in-process LRU backed optionally by Litestar file or Redis
   stores. Resolve entries use content-addressed `resolve-v1:` keys and public
-  `/r/<hash>` permalinks. Solver entries use private stable `solver-v1:` slots
-  with no public retrieval route. A solver slot key contains dependency
-  versions and the complete canonical solver-relevant state and operation
-  settings; its value contains the worker-observed JSON or sharded-repodata
-  snapshot. Cache reuse is bypassed when conda requires a metadata refresh or
-  the current snapshot differs, and a valid refresh atomically replaces the
-  existing slot.
+  `/r/<hash>` permalinks. Solver entries use private `solver-v1:` keys with no
+  public retrieval route. A solver key hashes serialized request fields and
+  dependency versions. Its value includes the repodata cache-file URL, source,
+  size, modification-time, and freshness markers recorded by the worker after
+  index collection. Cache reuse is bypassed when conda requires a metadata
+  refresh or the current markers differ. A retained result after refresh
+  replaces the existing entry for that request key.
 
 ## HTTP layer
 

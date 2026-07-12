@@ -851,7 +851,7 @@ async def test_solver_v1_uses_private_persistent_cache(
     "backend",
     [pytest.param("memory", id="memory"), pytest.param("file", id="file")],
 )
-async def test_solver_cache_overwrites_one_stable_persistent_slot(
+async def test_solver_cache_replaces_one_persistent_entry(
     monkeypatch,
     tmp_path,
     presto_solver_request,
@@ -910,7 +910,7 @@ async def test_solver_cache_overwrites_one_stable_persistent_slot(
 
 
 @pytest.mark.anyio
-async def test_solver_cache_late_publication_keeps_current_slot(
+async def test_solver_cache_keeps_matching_entry_during_publication(
     monkeypatch,
     presto_solver_request,
     presto_solver_outcome,

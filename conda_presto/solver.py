@@ -253,7 +253,7 @@ class PrestoSolveRequest(msgspec.Struct):
         return request
 
     def cache_key(self) -> str:
-        """Return the stable cache-slot key for this solver state."""
+        """Return the cache key for this request and dependency versions."""
         versions = {}
         for package in SOLVER_CACHE_DEPENDENCY_PACKAGES:
             try:
@@ -523,7 +523,7 @@ class PrestoSolverClient:
         request: PrestoSolveRequest,
         prefix: str,
     ) -> PrestoSolveResponse:
-        """Submit a state snapshot without starting or configuring a service."""
+        """Submit a serialized solver request without managing the service."""
         endpoint = Broker.current().service(self.service_name).endpoint(ready=True)
         parsed_url = urlparse(endpoint.url) if endpoint and endpoint.url else None
         if (

@@ -92,8 +92,8 @@ graph TD
 Diff and explain can use existing lockfile records when the requested platform
 is covered. Repair stays separate from explain because it may run repeated
 solver attempts under an explicit budget. The internal Presto solver backend
-uses the broker-managed local process and does not define a remote
-protocol. Its final-state entries share the configured cache storage and
+uses the broker-managed local process and does not define a remote protocol.
+Its final-state entries share the configured cache storage and
 in-memory bounds, but remain separate from public `/resolve` permalinks.
 
 ## Conventions

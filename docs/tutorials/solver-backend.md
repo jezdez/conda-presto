@@ -1,8 +1,8 @@
 # Use the Presto solver backend
 
-`conda --solver=presto` is an internal backend. It sends a private
-snapshot of the local solve state to conda-presto's persistent, loopback-only
-broker service, then lets conda create the transaction locally.
+`conda --solver=presto` is an internal backend. It sends serialized fields from
+the local solve request to conda-presto's persistent, loopback-only broker
+service, then lets conda create the transaction locally.
 
 It is useful for testing broker-backed create, install, update, and remove
 solves when the service is already part of the local workflow. It is not a
@@ -11,7 +11,7 @@ remote solver interface and is not enabled in the Docker image.
 ## Start the local service
 
 The solver never starts a service itself. Start it explicitly and wait for its
-warmed worker before selecting the backend:
+worker before selecting the backend:
 
 ```bash
 conda broker start conda-presto.server
@@ -27,11 +27,11 @@ use for this internal backend:
 conda create --dry-run --solver=presto -n demo -c conda-forge python=3.13
 ```
 
-The service receives minimal installed package records, history, pins, virtual
-packages, channel definitions, and the requested solver settings. It never
-receives the local prefix path or its file inventory. The result comes back as
-a final package state; conda still computes the local unlink/link transaction,
-including `--force-reinstall` behavior.
+The service receives installed package records, history, pins, virtual packages,
+channel definitions, and the requested solver settings. It never receives the
+local prefix path or its file inventory. The result comes back as a final
+package state; conda still computes the local unlink/link transaction, including
+`--force-reinstall` behavior.
 
 ## Stop the service
 
@@ -41,7 +41,7 @@ conda broker stop conda-presto.server
 
 ## Boundaries
 
-This is deliberately not a stable distributed-solver protocol:
+This is not a stable distributed-solver protocol:
 
 - It discovers only `conda-presto.server` through conda-broker and accepts only
   a ready loopback HTTP endpoint. There is no URL setting, remote mode, or
@@ -53,13 +53,14 @@ This is deliberately not a stable distributed-solver protocol:
   configuration or a remote Docker server.
 - Offline mode, `--update-deps`, and conda-build caller-provided indexes are
   rejected because the service cannot reproduce those inputs accurately.
-- Successful final states are cached by the complete solver-relevant state,
-  requested operation, solver configuration, dependency versions, and repodata
-  markers. Repeating the same operation against an unchanged logical state can
-  skip index construction and solving; a completed transaction normally changes
-  the next key. Prefix paths and file inventories are not transmitted or keyed.
+- Successful final states are cached by serialized solver request fields and
+  dependency versions. A hit also requires current repodata cache-file markers
+  to match those recorded by the worker. Repeating the same operation against
+  unchanged request fields can skip index construction and solving; a completed
+  transaction normally changes the installed records in the next key. Prefix
+  paths and file inventories are not transmitted or keyed.
 - Solver cache entries use the configured result-cache memory/file/Redis store
   under a private namespace. They are not available through `/r/<hash>`.
 
-For the exact integration contract, see the
+For interface details, see the
 [Presto solver reference](../reference/solver-backend.md).

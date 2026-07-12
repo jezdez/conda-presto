@@ -30,7 +30,7 @@ CLI and the HTTP server.
 | `CONDA_PRESTO_PORT` | `8000` | Default port for `--serve` / `--port`. |
 | `CONDA_PRESTO_PERSISTENT_WORKER` | `false` | Run HTTP solves in one worker that retains loaded repodata and indexes between requests. Set by the broker provider and the Docker server image. Normal servers should leave it disabled. |
 | `CONDA_PRESTO_SOLVER_ENDPOINT` | `false` | Enable the private broker-only solver-backend endpoint. Set only by the broker provider. Docker and normal servers leave it disabled. |
-| `CONDA_PRESTO_RESULT_CACHE_SIZE` | `256` | Maximum total content-addressed `/resolve` responses and stable private solver slots retained by the in-process result cache. |
+| `CONDA_PRESTO_RESULT_CACHE_SIZE` | `256` | Maximum total content-addressed `/resolve` responses and private solver cache entries retained by the in-process result cache. |
 | `CONDA_PRESTO_RESULT_CACHE_MAX_MEMORY_MB` | `64` | Maximum total payload megabytes retained by the in-process result cache. Set to `0` to disable the byte cap. |
 | `CONDA_PRESTO_RESULT_CACHE_BACKEND` | auto | Result cache backend: `memory`, `file`, or `redis`. Defaults to `redis` when `CONDA_PRESTO_RESULT_CACHE_REDIS_URL` is set, `file` when `CONDA_PRESTO_RESULT_CACHE_DIR` is set, otherwise `memory`. |
 | `CONDA_PRESTO_RESULT_CACHE_DIR` | unset | Directory for the `file` result cache backend. Public resolve and private solver entries use separate key namespaces. |

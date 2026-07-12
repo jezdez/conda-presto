@@ -664,7 +664,7 @@ class StoredResult(msgspec.Struct):
 
 
 class StoredSolverResult(msgspec.Struct):
-    """One stable solver slot and the repodata snapshot for its response."""
+    """A cached solver response and its repodata cache-file markers."""
 
     response: PrestoSolveResponse
     metadata_used: RepodataSnapshot
@@ -678,7 +678,7 @@ class StoredSolverResult(msgspec.Struct):
         )
 
     def matches(self, repodata: RepodataSnapshot) -> bool:
-        """Return whether this slot is current for *repodata*."""
+        """Return whether current repodata markers match this entry."""
         return not repodata.stale and self.metadata_used.records == repodata.records
 
 
@@ -752,7 +752,7 @@ class ResultCache:
 
     @staticmethod
     def solver_key(key: str) -> str:
-        """Return the private storage key for a stable solver-state slot."""
+        """Return the private storage key for a solver cache entry."""
         return f"{SOLVER_CACHE_STORE_PREFIX}{key}"
 
     @classmethod
@@ -926,7 +926,7 @@ class ResultCache:
         outcome: PrestoSolveOutcome,
         store: Store | None = None,
     ) -> tuple[StoredSolverResult | None, SolverCacheDisposition]:
-        """Publish a worker result or return the already-current stable slot."""
+        """Store a worker result unless the current entry already matches."""
         if isinstance(outcome.result, PrestoSolveError):
             return None, "solver-error"
         async with self.solver_publication_lock:
