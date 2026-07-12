@@ -35,6 +35,7 @@ class SolverWarmCandidate(msgspec.Struct):
             and max(0.0, now - self.last_requested) <= SOLVER_WARM_CANDIDATE_MAX_AGE_S
         )
 
+
 class StoredWarmCandidates(msgspec.Struct):
     """Versioned persistent cache-warming candidates."""
 
