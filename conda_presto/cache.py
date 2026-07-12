@@ -365,8 +365,8 @@ class SolverServiceResult:
     disposition: SolverCacheDisposition
 
     @property
-    def tracks_demand(self) -> bool:
-        """Return whether this successful foreground result can be warmed."""
+    def should_record_for_warming(self) -> bool:
+        """Return whether this result should be recorded for cache warming."""
         return self.disposition in {"cache-hit", "published", "already-current"}
 
 

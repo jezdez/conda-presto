@@ -134,12 +134,11 @@ from .config import (
     RESULT_CACHE_REDIS_URL,
     RESULT_CACHE_SIZE,
     SOLVE_TIMEOUT_S,
-    SOLVER_CACHE_HOTSET_PERSIST,
-    SOLVER_CACHE_HOTSET_SIZE,
+    SOLVER_CACHE_WARM_CANDIDATE_PERSIST,
+    SOLVER_CACHE_WARM_CANDIDATE_SIZE,
 )
 from .exceptions import SAFE_ERROR_TYPES, UnknownFormatError
 from .exporter import OutputFormat
-from .hotset import SolverHotSet
 from .inputs import ParsedInputFile
 from .preflight import PreflightResult
 from .resolve import (
@@ -158,6 +157,7 @@ from .solver import (
     PrestoSolverClient,
     PrestoSolveRequest,
 )
+from .warm_candidates import SolverWarmCandidates
 from .worker import PersistentSolveWorker
 
 log = logging.getLogger(__name__)
@@ -1741,9 +1741,9 @@ async def solver_v1(
         )
     if isinstance(result.result, PrestoSolveError):
         return Response(result.result, status_code=HTTP_422_UNPROCESSABLE_ENTITY)
-    hot_set = getattr(request.app.state, "solver_hot_set", None)
-    if hot_set is not None and result.tracks_demand:
-        hot_set.observe(data)
+    warm_candidates = getattr(request.app.state, "solver_warm_candidates", None)
+    if warm_candidates is not None and result.should_record_for_warming:
+        warm_candidates.record(data)
     return Response(result.result)
 
 
@@ -1757,11 +1757,11 @@ async def on_startup(app: Litestar) -> None:
             RESULT_CACHE_STORE_NAME if RESULT_CACHE_BACKEND != "memory" else None
         ),
     )
-    app.state.solver_hot_set = SolverHotSet(
-        max_size=SOLVER_CACHE_HOTSET_SIZE,
-        persist=SOLVER_CACHE_HOTSET_PERSIST,
+    app.state.solver_warm_candidates = SolverWarmCandidates(
+        max_size=SOLVER_CACHE_WARM_CANDIDATE_SIZE,
+        persist=SOLVER_CACHE_WARM_CANDIDATE_PERSIST,
     )
-    await app.state.solver_hot_set.load(
+    await app.state.solver_warm_candidates.load(
         app.stores.get(RESULT_CACHE_STORE_NAME)
         if RESULT_CACHE_BACKEND != "memory"
         else None
@@ -1797,9 +1797,9 @@ async def on_startup(app: Litestar) -> None:
 
 async def on_shutdown(app: Litestar) -> None:
     """Cleanly shut down the process pool on server teardown."""
-    hot_set = getattr(app.state, "solver_hot_set", None)
-    if hot_set is not None:
-        await hot_set.checkpoint(
+    warm_candidates = getattr(app.state, "solver_warm_candidates", None)
+    if warm_candidates is not None:
+        await warm_candidates.checkpoint(
             app.stores.get(RESULT_CACHE_STORE_NAME)
             if RESULT_CACHE_BACKEND != "memory"
             else None

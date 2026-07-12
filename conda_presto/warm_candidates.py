@@ -1,4 +1,4 @@
-"""Bounded local demand state for replayable solver requests."""
+"""Recorded solver requests eligible for cache warming."""
 
 from __future__ import annotations
 
@@ -16,23 +16,23 @@ from .solver import PrestoSolveRequest
 
 log = logging.getLogger(__name__)
 
-SOLVER_HOTSET_STORE_KEY = "solver-hotset-v1"
-SOLVER_HOTSET_MAX_BYTES = 16 * 1024 * 1024
-SOLVER_HOTSET_SCORE_HALF_LIFE_S = 24 * 60 * 60
-SOLVER_HOTSET_MAX_AGE_S = 7 * 24 * 60 * 60
-SOLVER_HOTSET_MIN_OBSERVATIONS = 2
-SOLVER_HOTSET_STORE_TIMEOUT_S = 2
+SOLVER_WARM_CANDIDATE_STORE_KEY = "solver-warm-candidates-v1"
+SOLVER_WARM_CANDIDATE_MAX_BYTES = 16 * 1024 * 1024
+SOLVER_WARM_CANDIDATE_SCORE_HALF_LIFE_S = 24 * 60 * 60
+SOLVER_WARM_CANDIDATE_MAX_AGE_S = 7 * 24 * 60 * 60
+SOLVER_WARM_CANDIDATE_MIN_REQUESTS = 2
+SOLVER_WARM_CANDIDATE_STORE_TIMEOUT_S = 2
 
 
-class SolverHotSetEntry(msgspec.Struct):
-    """One exact replayable workload and its local demand state."""
+class SolverWarmCandidate(msgspec.Struct):
+    """One recorded solver request and its warming state."""
 
     fingerprint: str
     request: PrestoSolveRequest
     request_size: int
     score: float
-    observations: int
-    last_seen: float
+    request_count: int
+    last_requested: float
     failed_repodata_records: (
         tuple[tuple[str, str, int | None, int | None], ...] | None
     ) = None
@@ -41,38 +41,38 @@ class SolverHotSetEntry(msgspec.Struct):
 
     def score_at(self, now: float) -> float:
         """Return this entry's exponentially decayed score at *now*."""
-        elapsed = max(0.0, now - self.last_seen)
-        return self.score * 2 ** (-elapsed / SOLVER_HOTSET_SCORE_HALF_LIFE_S)
+        elapsed = max(0.0, now - self.last_requested)
+        return self.score * 2 ** (-elapsed / SOLVER_WARM_CANDIDATE_SCORE_HALF_LIFE_S)
 
     def eligible(self, now: float) -> bool:
-        """Return whether this entry has enough recent demand for warming."""
+        """Return whether this request is eligible for warming."""
         return (
-            self.observations >= SOLVER_HOTSET_MIN_OBSERVATIONS
-            and max(0.0, now - self.last_seen) <= SOLVER_HOTSET_MAX_AGE_S
+            self.request_count >= SOLVER_WARM_CANDIDATE_MIN_REQUESTS
+            and max(0.0, now - self.last_requested) <= SOLVER_WARM_CANDIDATE_MAX_AGE_S
             and self.retry_at <= now
         )
 
 
-class SolverHotSetCatalog(msgspec.Struct):
-    """Versioned persistent representation of a solver hot set."""
+class StoredWarmCandidates(msgspec.Struct):
+    """Versioned persistent cache-warming candidates."""
 
-    entries: list[SolverHotSetEntry]
+    entries: list[SolverWarmCandidate]
     version: Literal[1] = 1
 
 
 @dataclass
-class SolverHotSet:
-    """Track, rank, and optionally persist exact successful solver requests."""
+class SolverWarmCandidates:
+    """Record successful solver requests for cache warming."""
 
     max_size: int
     persist: bool = False
-    max_bytes: int = SOLVER_HOTSET_MAX_BYTES
-    entries: dict[str, SolverHotSetEntry] = field(default_factory=dict)
+    max_bytes: int = SOLVER_WARM_CANDIDATE_MAX_BYTES
+    entries: dict[str, SolverWarmCandidate] = field(default_factory=dict)
     current_bytes: int = 0
     generation: int = 0
     persisted_generation: int = 0
 
-    def observe(
+    def record(
         self,
         request: PrestoSolveRequest,
         now: float | None = None,
@@ -81,7 +81,7 @@ class SolverHotSet:
         if self.max_size == 0:
             return False
         now = time.time() if now is None else now
-        fingerprint = request.workload_key()
+        fingerprint = request.warming_key()
         request_size = len(msgspec.msgpack.encode(request))
         if request_size > self.max_bytes:
             return False
@@ -92,19 +92,19 @@ class SolverHotSet:
             entry.request = request
             entry.request_size = request_size
             entry.score = entry.score_at(now) + 1.0
-            entry.observations += 1
-            entry.last_seen = now
+            entry.request_count += 1
+            entry.last_requested = now
             entry.failed_repodata_records = None
             entry.retry_at = 0.0
             entry.consecutive_transient_failures = 0
         else:
-            self.entries[fingerprint] = SolverHotSetEntry(
+            self.entries[fingerprint] = SolverWarmCandidate(
                 fingerprint=fingerprint,
                 request=request,
                 request_size=request_size,
                 score=1.0,
-                observations=1,
-                last_seen=now,
+                request_count=1,
+                last_requested=now,
             )
             self.current_bytes += request_size
         self.generation += 1
@@ -115,8 +115,8 @@ class SolverHotSet:
         self,
         limit: int,
         now: float | None = None,
-    ) -> tuple[SolverHotSetEntry, ...]:
-        """Return a deterministic snapshot of the hottest eligible entries."""
+    ) -> tuple[SolverWarmCandidate, ...]:
+        """Return eligible candidates in score order."""
         now = time.time() if now is None else now
         if self._prune(now):
             self.generation += 1
@@ -139,7 +139,7 @@ class SolverHotSet:
         fingerprint: str,
         repodata: RepodataSnapshot,
     ) -> None:
-        """Remember a solver error for one exact repodata snapshot."""
+        """Remember a solver error for one set of repodata markers."""
         if entry := self.entries.get(fingerprint):
             entry.failed_repodata_records = repodata.records
             entry.retry_at = 0.0
@@ -159,29 +159,29 @@ class SolverHotSet:
             self.generation += 1
 
     async def load(self, store: Store | None, now: float | None = None) -> None:
-        """Load a valid credential-free catalog without affecting readiness."""
+        """Load persisted candidates without affecting readiness."""
         if not self.persist or store is None:
             return
         try:
-            with anyio.move_on_after(SOLVER_HOTSET_STORE_TIMEOUT_S) as scope:
-                payload = await store.get(SOLVER_HOTSET_STORE_KEY)
+            with anyio.move_on_after(SOLVER_WARM_CANDIDATE_STORE_TIMEOUT_S) as scope:
+                payload = await store.get(SOLVER_WARM_CANDIDATE_STORE_KEY)
             if scope.cancel_called:
-                log.warning("Persistent solver hot-set read timed out")
+                log.warning("Cache-warming candidate read timed out")
                 return
         except Exception:
-            log.warning("Persistent solver hot-set read failed")
+            log.warning("Cache-warming candidate read failed")
             return
         if payload is None:
             return
         try:
-            catalog = msgspec.msgpack.decode(payload, type=SolverHotSetCatalog)
+            catalog = msgspec.msgpack.decode(payload, type=StoredWarmCandidates)
         except (msgspec.DecodeError, msgspec.ValidationError):
-            log.warning("Ignoring corrupt persistent solver hot set")
+            log.warning("Ignoring corrupt cache-warming candidates")
             try:
-                with anyio.move_on_after(SOLVER_HOTSET_STORE_TIMEOUT_S):
-                    await store.delete(SOLVER_HOTSET_STORE_KEY)
+                with anyio.move_on_after(SOLVER_WARM_CANDIDATE_STORE_TIMEOUT_S):
+                    await store.delete(SOLVER_WARM_CANDIDATE_STORE_KEY)
             except Exception:
-                log.warning("Persistent solver hot-set cleanup failed")
+                log.warning("Cache-warming candidate cleanup failed")
             return
 
         now = time.time() if now is None else now
@@ -190,11 +190,12 @@ class SolverHotSet:
         self.current_bytes = 0
         for entry in catalog.entries:
             request_size = len(msgspec.msgpack.encode(entry.request))
-            fingerprint = entry.request.workload_key()
+            fingerprint = entry.request.warming_key()
             if (
                 fingerprint != entry.fingerprint
-                or entry.request.contains_credentials()
-                or max(0.0, now - entry.last_seen) > SOLVER_HOTSET_MAX_AGE_S
+                or entry.request.has_detected_credentials()
+                or max(0.0, now - entry.last_requested)
+                > SOLVER_WARM_CANDIDATE_MAX_AGE_S
                 or request_size > self.max_bytes
             ):
                 filtered = True
@@ -217,7 +218,7 @@ class SolverHotSet:
         self.persisted_generation = 0
 
     async def checkpoint(self, store: Store | None, now: float | None = None) -> None:
-        """Persist one bounded credential-free catalog outside request handling."""
+        """Persist candidates without detected credentials."""
         if not self.persist or store is None:
             return
         now = time.time() if now is None else now
@@ -227,26 +228,26 @@ class SolverHotSet:
             return
         generation = self.generation
         payload = msgspec.msgpack.encode(
-            SolverHotSetCatalog(
+            StoredWarmCandidates(
                 entries=[
                     msgspec.structs.replace(entry)
                     for entry in self._ranked(now)
-                    if not entry.request.contains_credentials()
+                    if not entry.request.has_detected_credentials()
                 ]
             )
         )
         try:
-            with anyio.move_on_after(SOLVER_HOTSET_STORE_TIMEOUT_S) as scope:
+            with anyio.move_on_after(SOLVER_WARM_CANDIDATE_STORE_TIMEOUT_S) as scope:
                 await store.set(
-                    SOLVER_HOTSET_STORE_KEY,
+                    SOLVER_WARM_CANDIDATE_STORE_KEY,
                     payload,
-                    expires_in=SOLVER_HOTSET_MAX_AGE_S,
+                    expires_in=SOLVER_WARM_CANDIDATE_MAX_AGE_S,
                 )
             if scope.cancel_called:
-                log.warning("Persistent solver hot-set write timed out")
+                log.warning("Cache-warming candidate write timed out")
                 return
         except Exception:
-            log.warning("Persistent solver hot-set write failed")
+            log.warning("Cache-warming candidate write failed")
             return
         if self.generation == generation:
             self.persisted_generation = generation
@@ -255,7 +256,7 @@ class SolverHotSet:
         expired = [
             fingerprint
             for fingerprint, entry in self.entries.items()
-            if max(0.0, now - entry.last_seen) > SOLVER_HOTSET_MAX_AGE_S
+            if max(0.0, now - entry.last_requested) > SOLVER_WARM_CANDIDATE_MAX_AGE_S
         ]
         for fingerprint in expired:
             self.current_bytes -= self.entries.pop(fingerprint).request_size
@@ -266,12 +267,12 @@ class SolverHotSet:
             entry = self._ranked(now)[-1]
             self.current_bytes -= self.entries.pop(entry.fingerprint).request_size
 
-    def _ranked(self, now: float) -> list[SolverHotSetEntry]:
+    def _ranked(self, now: float) -> list[SolverWarmCandidate]:
         return sorted(
             self.entries.values(),
             key=lambda entry: self._rank_key(entry, now),
         )
 
     @staticmethod
-    def _rank_key(entry: SolverHotSetEntry, now: float) -> tuple[float, float, str]:
-        return (-entry.score_at(now), -entry.last_seen, entry.fingerprint)
+    def _rank_key(entry: SolverWarmCandidate, now: float) -> tuple[float, float, str]:
+        return (-entry.score_at(now), -entry.last_requested, entry.fingerprint)

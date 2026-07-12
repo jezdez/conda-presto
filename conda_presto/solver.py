@@ -40,7 +40,7 @@ from .resolve import RepodataSnapshot, platform_lock
 log = logging.getLogger(__name__)
 
 SOLVER_CACHE_ENVELOPE_VERSION = 3
-SOLVER_WORKLOAD_ENVELOPE_VERSION = 1
+SOLVER_WARMING_ENVELOPE_VERSION = 1
 SOLVER_CACHE_DEPENDENCY_PACKAGES = (
     "conda-presto",
     "conda",
@@ -277,10 +277,10 @@ class PrestoSolveRequest(msgspec.Struct, forbid_unknown_fields=True):
         ).encode()
         return hashlib.sha256(body).hexdigest()
 
-    def workload_key(self) -> str:
-        """Return the dependency- and metadata-marker-independent fingerprint."""
+    def warming_key(self) -> str:
+        """Return the key used to record this request for cache warming."""
         envelope = {
-            "version": SOLVER_WORKLOAD_ENVELOPE_VERSION,
+            "version": SOLVER_WARMING_ENVELOPE_VERSION,
             "operation": "solver/v1",
             "request": self.canonical_state(),
         }
@@ -291,8 +291,8 @@ class PrestoSolveRequest(msgspec.Struct, forbid_unknown_fields=True):
         ).encode()
         return hashlib.sha256(body).hexdigest()
 
-    def contains_credentials(self) -> bool:
-        """Return whether replaying this request requires stored credentials."""
+    def has_detected_credentials(self) -> bool:
+        """Return whether known credential patterns occur in this request."""
         pending = [self.canonical_state()]
         while pending:
             value = pending.pop()

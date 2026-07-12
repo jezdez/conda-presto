@@ -41,9 +41,9 @@ Result cache
   cached results survive server restarts.
 
 Cache-warming candidates
-: successful cacheable foreground solver requests are recorded and ranked for
-  later refresh. Background refreshes do not increase a candidate's request
-  count.
+: successful cacheable foreground solver requests are recorded locally. A
+  request becomes eligible for refresh after repeated use. Candidates are
+  ordered by a decaying request score; background refreshes do not change it.
 
 ## Cache keys and repodata checks
 
@@ -85,12 +85,11 @@ retries, creates, and cloned prefix states can hit, while a completed transactio
 normally changes the installed records and therefore the next key. Requests
 with different prefix histories or pins also use different keys.
 
-Hot-set identity intentionally omits dependency versions and current repodata
-markers so the same exact workload remains a warming candidate across metadata
-refreshes and compatible upgrades. Actual result reuse remains stricter: the
-stable cache slot includes dependency versions and its value must match a fresh
-worker-observed repodata snapshot. The hot set is local by default and filters
-credential-bearing requests from opt-in persistent checkpoints.
+Candidate identity omits dependency versions and current repodata markers so a
+recorded request can remain eligible after metadata refreshes and compatible
+upgrades. Cache reuse still includes dependency versions and requires the
+current repodata markers to match. Candidates are local by default; persistence
+excludes requests with detected credentials.
 
 ## Multi-platform solving
 

@@ -90,13 +90,13 @@ Measure hit rates against the commands and prefix states used by the deployment.
 Treat a configured file or Redis store as private because final states can
 contain package metadata from credentialed channels.
 
-The service separately tracks repeated successful foreground workloads as a
-bounded local hot set for cache warming. Its workload fingerprint includes the
-same complete replayable solver state but excludes dependency versions so demand
-can survive compatible upgrades. Background activity never increases demand.
-The catalog is private process state by default; opt-in persistence stores only
-requests whose complete serialized state is credential-free. It is never
-available through `/r`, OpenAPI, health responses, or request logs.
+The service records successful foreground requests as cache-warming candidates.
+Candidate identity includes the serialized request but omits dependency
+versions so recorded requests can remain eligible after compatible upgrades.
+Background requests are not recorded. Candidates remain process-local unless
+persistence is enabled, and requests with detected credentials are excluded
+from persistence. Candidates are not available through `/r`, OpenAPI, health
+responses, or request logs.
 
 ## Internal protocol
 

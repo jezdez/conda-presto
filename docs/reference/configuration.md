@@ -254,24 +254,22 @@ platforms, output format, conda-presto and solver versions, and local repodata
 cache-file markers. See the [Presto solver reference](solver-backend.md) for the
 internal solver cache key and invalidation rules.
 
-### Solver hot set
+### Cache-warming candidates
 
-Successful cacheable foreground `/solver/v1` requests also feed a bounded local
-hot set. It retains the complete replayable request, ranks repeated workloads
-with a 24-hour score half-life, requires two observations before a workload is
-eligible for warming, and drops workloads not observed for seven days. Set
-`CONDA_PRESTO_SOLVER_CACHE_HOTSET_SIZE=0` to disable tracking or change its
-default 32-entry bound. The encoded replay requests share a separate 16 MiB
-bound.
+Successful cacheable foreground `/solver/v1` requests are recorded as
+cache-warming candidates. Each record stores the serialized request, request
+count, and a score with a 24-hour half-life. A request becomes eligible after
+two uses and expires after seven days without another use. Set
+`CONDA_PRESTO_SOLVER_CACHE_WARM_CANDIDATE_SIZE=0` to disable recording or change
+the default 32-entry limit. Encoded requests share a separate 16 MiB limit.
 
-The hot set is process-local scheduling state, not telemetry, and it is not
-served through the HTTP API or included in logs. Persistence is disabled by
-default because exact replay requests can contain installed package and channel
-state. To retain credential-free workloads across restarts, configure a file or
-Redis result-cache backend and set
-`CONDA_PRESTO_SOLVER_CACHE_HOTSET_PERSIST=true`. Requests containing channel
-authentication, tokens, or credentialed URLs always remain memory-only. Shared
-Redis deployments do not merge hot sets across service processes.
+Candidates are process-local and are not served through HTTP or included in
+logs. Persistence is disabled by default because requests can contain installed
+package and channel state. To persist requests without detected credentials,
+configure a file or Redis result-cache backend and set
+`CONDA_PRESTO_SOLVER_CACHE_WARM_CANDIDATE_PERSIST=true`. Requests with detected
+channel credentials or tokenized URLs remain memory-only. Redis deployments do
+not merge candidate lists across service processes.
 
 ### Concurrency tuning
 

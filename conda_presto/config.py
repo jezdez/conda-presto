@@ -40,12 +40,12 @@ Server tuning:
         Optional directory for a persistent file-backed result cache.
     ``CONDA_PRESTO_RESULT_CACHE_REDIS_URL``
         Optional Redis URL for a Redis-backed result cache.
-    ``CONDA_PRESTO_SOLVER_CACHE_HOTSET_SIZE``
-        Max successful solver workloads retained for cache warming
-        (default: ``32``). Set to ``0`` to disable tracking.
-    ``CONDA_PRESTO_SOLVER_CACHE_HOTSET_PERSIST``
-        Persist credential-free solver workload state in a configured file or
-        Redis result store (default: ``false``).
+    ``CONDA_PRESTO_SOLVER_CACHE_WARM_CANDIDATE_SIZE``
+        Max successful solver requests retained for cache warming
+        (default: ``32``). Set to ``0`` to disable recording.
+    ``CONDA_PRESTO_SOLVER_CACHE_WARM_CANDIDATE_PERSIST``
+        Persist candidates without detected credentials in a configured file
+        or Redis result store (default: ``false``).
 
 Request limits (abuse/DoS protection):
     ``CONDA_PRESTO_SOLVE_TIMEOUT_S``
@@ -178,13 +178,19 @@ if RESULT_CACHE_BACKEND not in {"memory", "file", "redis"}:
     raise ValueError(
         f"Invalid value for CONDA_PRESTO_RESULT_CACHE_BACKEND: {RESULT_CACHE_BACKEND!r}"
     )
-SOLVER_CACHE_HOTSET_SIZE = env_int("CONDA_PRESTO_SOLVER_CACHE_HOTSET_SIZE", 32)
-if SOLVER_CACHE_HOTSET_SIZE < 0:
-    raise ValueError("CONDA_PRESTO_SOLVER_CACHE_HOTSET_SIZE must not be negative")
-SOLVER_CACHE_HOTSET_PERSIST = env_bool("CONDA_PRESTO_SOLVER_CACHE_HOTSET_PERSIST")
-if SOLVER_CACHE_HOTSET_PERSIST and RESULT_CACHE_BACKEND == "memory":
+SOLVER_CACHE_WARM_CANDIDATE_SIZE = env_int(
+    "CONDA_PRESTO_SOLVER_CACHE_WARM_CANDIDATE_SIZE", 32
+)
+if SOLVER_CACHE_WARM_CANDIDATE_SIZE < 0:
     raise ValueError(
-        "CONDA_PRESTO_SOLVER_CACHE_HOTSET_PERSIST requires a file or Redis "
+        "CONDA_PRESTO_SOLVER_CACHE_WARM_CANDIDATE_SIZE must not be negative"
+    )
+SOLVER_CACHE_WARM_CANDIDATE_PERSIST = env_bool(
+    "CONDA_PRESTO_SOLVER_CACHE_WARM_CANDIDATE_PERSIST"
+)
+if SOLVER_CACHE_WARM_CANDIDATE_PERSIST and RESULT_CACHE_BACKEND == "memory":
+    raise ValueError(
+        "CONDA_PRESTO_SOLVER_CACHE_WARM_CANDIDATE_PERSIST requires a file or Redis "
         "result cache backend"
     )
 
