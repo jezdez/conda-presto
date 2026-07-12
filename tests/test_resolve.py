@@ -497,6 +497,19 @@ def test_build_index_cache_respects_entry_limit(monkeypatch):
     ]
 
 
+@pytest.mark.parametrize(
+    ("url", "expected"),
+    [
+        pytest.param("file:///tmp/channel/linux-64", True, id="local"),
+        pytest.param("https://repo.example/linux-64", False, id="remote"),
+    ],
+)
+def test_repodata_snapshot_identifies_local_sources(url, expected):
+    snapshot = RepodataSnapshot(((url, "repodata.json", 10, 1),), False)
+
+    assert snapshot.has_local_sources is expected
+
+
 def test_repodata_snapshot_uses_conda_freshness(monkeypatch, tmp_path):
     cache_path = tmp_path / "repodata.json"
     cache_path.write_text("{}")

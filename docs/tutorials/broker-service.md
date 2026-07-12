@@ -46,6 +46,27 @@ not authenticate local operating-system users. See the
 [security and trust model](../explanation/security.md)
 before using private channels or a persistent result cache.
 
+## Tune regular cache warming
+
+Repeated successful `conda --solver=presto` workloads become eligible for
+request-specific cache warming. Configure the polling interval and cycle batch
+before starting the broker. conda-broker captures these variables when its
+daemon starts; restarting only `conda-presto.server` retains the daemon's old
+environment. If the broker is already running, stop it first:
+
+```bash
+conda broker stop
+export CONDA_PRESTO_SOLVER_CACHE_WARM_INTERVAL_S=300
+export CONDA_PRESTO_SOLVER_CACHE_WARM_BATCH_SIZE=8
+conda broker start conda-presto.server
+```
+
+Set the interval to `0` to disable regular warming. The service waits for idle
+foreground capacity, checks fresh cache entries before replaying anything, and
+uses one separate worker for the exact requests that need a refresh. It does
+not expose replay data or warming controls through HTTP. Docker deployments do
+not run this broker-only scheduler.
+
 ## Stop the service
 
 Stop the service when the local workflow is complete:

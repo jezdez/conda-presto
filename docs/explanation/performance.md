@@ -48,6 +48,11 @@ Cache-warming candidates
   including displaced candidates. An observation and the lowest-ranked candidate
   exchange places when the observation's count, then recency, ranks higher.
 
+Scheduled solver-cache refresh
+: the broker child periodically checks selected cache-warming candidates against
+  current repodata. A missing or stale entry can be recomputed in one separate
+  worker. Normal and Docker servers do not run this scheduler.
+
 ## Cache keys and repodata checks
 
 The result cache key is tied to the inputs that can change the response:
@@ -93,6 +98,30 @@ recorded request can remain eligible after metadata refreshes and compatible
 upgrades. Cache reuse still includes dependency versions and requires the
 current repodata markers to match. Candidates are local by default. Persistence
 excludes requests with detected credentials.
+
+Regular warming does not predict future solves or pre-build a generic channel
+index. The first operation in its dedicated worker is the exact replay request,
+so request-specific channel order, subdirs, repodata mode, and
+`use_index_cache` behavior remain unchanged. Polling follows conda's local
+repodata TTL: a remote update can be observed after the local snapshot becomes
+stale, the next configured poll begins, and one bounded replay completes. A
+deterministic failure is held only while its matching snapshot is fresh; stale
+metadata permits another replay and refresh check.
+
+Foreground isolation makes warm traffic opportunistic. A cycle does not start
+a replay while foreground work is active or queued, and foreground arrival
+during one bounded replay prevents the next candidate from starting. The
+running replay is allowed to finish or time out because terminating a process
+during shared repodata I/O would risk cache corruption. Conda filesystem locks
+remain enabled in the broker child to coordinate those separate processes.
+Warm worker and repodata calls use a dedicated one-token AnyIO thread limiter,
+so saturation of the server's default thread pool cannot put foreground work
+behind a warm call. Persistent operation admission and completion waits have
+bounded caller deadlines. Once admitted, reads and writes remain in one
+lifespan-owned FIFO even if that caller stops waiting, so an older delayed
+filesystem operation cannot overtake newer state. Corrupt values are ignored
+until a later valid write overwrites them. A failed warm publication is retried
+with backoff instead of being reported as warm.
 
 ## Multi-platform solving
 

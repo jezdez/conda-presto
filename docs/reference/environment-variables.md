@@ -37,6 +37,8 @@ CLI and the HTTP server.
 | `CONDA_PRESTO_RESULT_CACHE_REDIS_NAMESPACE` | `conda-presto` | Redis key namespace for result cache entries. |
 | `CONDA_PRESTO_SOLVER_CACHE_WARM_CANDIDATE_SIZE` | `32` | Maximum cache-warming candidates retained for `/solver/v1`. Up to the same number of observations awaiting admission are retained. Set to `0` to disable recording. |
 | `CONDA_PRESTO_SOLVER_CACHE_WARM_CANDIDATE_PERSIST` | `false` | Persist candidates without detected credentials in a configured file or Redis result store. Requires a persistent result-cache backend. |
+| `CONDA_PRESTO_SOLVER_CACHE_WARM_INTERVAL_S` | `300` | Seconds between solver-cache refresh cycles. Set to `0` to disable scheduled refresh. |
+| `CONDA_PRESTO_SOLVER_CACHE_WARM_BATCH_SIZE` | `8` | Maximum cache-warming candidates considered in one refresh cycle. |
 | `CONDA_PRESTO_RATE_LIMIT` | `300` | Maximum requests per minute per client IP. Set to `0` to disable. Behind a reverse proxy, start uvicorn with `--forwarded-allow-ips` so the rate-limit key is the real client IP, not the proxy. |
 | `CONDA_PRESTO_CORS_ORIGINS` | disabled | Comma-separated allowed CORS origins. |
 | `CONDA_PRESTO_LOG_LEVEL` | `INFO` | Application log level (`DEBUG`, `INFO`, `WARNING`, `ERROR`). |
@@ -81,7 +83,9 @@ in the conda-presto pixi workspace.
 
 These are configured in the `[tool.pixi.activation.env]` section of
 `pyproject.toml`. You can override any of them in your shell before
-running conda-presto.
+running conda-presto. The conda-broker child overrides `CONDA_NO_LOCK=false`
+because its foreground and cache-warming worker processes can access the shared
+repodata cache concurrently.
 
 ## See also
 

@@ -67,6 +67,11 @@ class RepodataSnapshot:
     records: tuple[tuple[str, str, int | None, int | None], ...]
     stale: bool
 
+    @property
+    def has_local_sources(self) -> bool:
+        """Return whether this snapshot includes an uncacheable local channel."""
+        return any(url.startswith("file://") for url, *_ in self.records)
+
     def is_cacheable_after(self, previous: RepodataSnapshot | None) -> bool:
         """Return whether these markers can be used for result caching."""
         if self.stale or previous is None:

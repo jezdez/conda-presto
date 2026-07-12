@@ -102,13 +102,47 @@ outside the candidate catalog. An observation and the lowest-ranked candidate
 exchange places when the observation's request count, then recency, ranks
 higher, without discarding either request's accumulated count.
 
+The broker child polls eligible workloads every five minutes by default. A
+cycle checks the stable slot and repodata snapshot first, then starts a separate
+worker only if an exact request needs replay. That worker's first operation is
+the selected request; it does not run generic startup prewarming for the
+configured default channels and platforms. It is reused sequentially within
+the bounded cycle and stopped afterward. The first cycle waits 30 seconds;
+replays are capped at 30 seconds, cycles stop starting work after 60 seconds,
+transient backoff tops out at one hour, and broker shutdown allows 75 seconds.
+
+The warmer does not use the foreground worker or limiter. It starts no replay
+while foreground work is active or waiting, and foreground activity arriving
+during one bounded replay prevents another candidate from starting. Litestar
+lifespan context managers own solver resources first and the AnyIO scheduler
+task group second. The resource lifespan enters the store before its foreground
+worker, so shutdown stops the warmer, checkpoints its state, drains admitted
+store operations, and then releases the foreground worker and store. Background
+process and repodata calls also use a dedicated AnyIO thread limiter rather
+than the server's default thread pool.
+
+Repodata invalidation remains conda-driven polling. A stale snapshot triggers
+the normal request-specific metadata path; `use_index_cache=True` suppresses
+JSON TTL refresh exactly as it does for the foreground solve. Deterministic
+solver errors are skipped only while their matching snapshot remains fresh.
+When it becomes stale, replay is allowed so a remote repodata update can be
+observed. Persistent operation admission and completion waits have bounded
+caller deadlines. Admitted reads and writes remain serialized even if a caller
+stops waiting, so delayed filesystem operations cannot regress newer state.
+Corrupt values are ignored until a later valid write overwrites them. Failed
+warm publications use the same workload backoff as other transient failures.
+Background failures never change foreground responses or readiness. Cycle logs
+render aggregate counters and use shortened workload fingerprints for
+warnings, not replay state, specs, installed records, channel URLs,
+credentials, or child exception tracebacks.
+
 ## Internal protocol
 
 The broker child enables `POST /solver/v1` through its
 `CONDA_BROKER_SERVICE_NAME` identity. It must identify the
 `conda-presto.server` broker child. The handler is absent from the public OpenAPI
 contract and requires the broker's persistent worker. The Docker server does not
-enable it. Request and response logging excludes this route so channel
+enable it or run scheduled solver-cache refresh. Request and response logging excludes this route so channel
 credentials and installed-prefix state are not written to broker logs.
 
 `/solver/v1` is a private implementation detail, not an HTTP API to integrate

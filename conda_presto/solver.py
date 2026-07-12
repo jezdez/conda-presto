@@ -131,11 +131,10 @@ class PrestoSolveOutcome(msgspec.Struct):
     metadata_before: RepodataSnapshot | None
     metadata_used: RepodataSnapshot | None
 
-    def is_cacheable_with(self, current: RepodataSnapshot) -> bool:
-        """Return whether the response can be published for *current* metadata."""
+    def metadata_is_current(self, current: RepodataSnapshot) -> bool:
+        """Return whether the observed metadata unambiguously matches *current*."""
         if (
-            isinstance(self.result, PrestoSolveError)
-            or self.metadata_before is None
+            self.metadata_before is None
             or self.metadata_used is None
             or current.stale
             or current.records != self.metadata_used.records
@@ -146,6 +145,12 @@ class PrestoSolveOutcome(msgspec.Struct):
         return self.metadata_before.stale or (
             self.metadata_before.records == self.metadata_used.records
         )
+
+    def is_cacheable_with(self, current: RepodataSnapshot) -> bool:
+        """Return whether the response can be published for *current* metadata."""
+        if isinstance(self.result, PrestoSolveError):
+            return False
+        return self.metadata_is_current(current)
 
 
 class PrestoSolveRequest(msgspec.Struct, forbid_unknown_fields=True):

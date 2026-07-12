@@ -16,6 +16,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Add internal `conda --solver=presto`, fixed to the rattler backend and served through the broker-managed loopback service.
 - Cache successful `/solver/v1` final states by serialized solver request fields and dependency versions, with repodata cache-file markers recorded by the worker.
 - Record successful cacheable foreground `/solver/v1` requests as cache-warming candidates.
+- Check recorded solver requests and refresh missing or stale cache entries when no foreground solve is active or waiting.
 
 ### Fixed
 

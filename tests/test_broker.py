@@ -36,11 +36,13 @@ def test_broker_service_exposes_root_and_health_check():
     assert service.health_check.start_period_s == 120
     assert service.process is not None
     assert service.process.argv[-1] == "--serve"
+    assert service.process.grace_period_s == 75
     assert service.process.env == {
         "CONDA_PRESTO_HOST": "127.0.0.1",
         "CONDA_PRESTO_CONCURRENCY": "1",
         "CONDA_PRESTO_RATE_LIMIT": "0",
         "CONDA_PRESTO_PERSISTENT_WORKER": "1",
+        "CONDA_NO_LOCK": "false",
     }
 
 

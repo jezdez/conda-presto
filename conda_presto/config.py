@@ -47,6 +47,11 @@ Server tuning:
     ``CONDA_PRESTO_SOLVER_CACHE_WARM_CANDIDATE_PERSIST``
         Persist candidates without detected credentials in a configured file
         or Redis result store (default: ``false``).
+    ``CONDA_PRESTO_SOLVER_CACHE_WARM_INTERVAL_S``
+        Seconds between solver-cache refresh cycles (default: ``300``).
+        Set to ``0`` to disable scheduled refresh.
+    ``CONDA_PRESTO_SOLVER_CACHE_WARM_BATCH_SIZE``
+        Max candidates considered in one refresh cycle (default: ``8``).
 
 Request limits (abuse/DoS protection):
     ``CONDA_PRESTO_SOLVE_TIMEOUT_S``
@@ -194,6 +199,18 @@ if SOLVER_CACHE_WARM_CANDIDATE_PERSIST and RESULT_CACHE_BACKEND == "memory":
         "CONDA_PRESTO_SOLVER_CACHE_WARM_CANDIDATE_PERSIST requires a file or Redis "
         "result cache backend"
     )
+SOLVER_CACHE_WARM_INTERVAL_S = env_int(
+    "CONDA_PRESTO_SOLVER_CACHE_WARM_INTERVAL_S",
+    300,
+)
+if SOLVER_CACHE_WARM_INTERVAL_S < 0:
+    raise ValueError("CONDA_PRESTO_SOLVER_CACHE_WARM_INTERVAL_S must not be negative")
+SOLVER_CACHE_WARM_BATCH_SIZE = env_int(
+    "CONDA_PRESTO_SOLVER_CACHE_WARM_BATCH_SIZE",
+    8,
+)
+if SOLVER_CACHE_WARM_BATCH_SIZE < 1:
+    raise ValueError("CONDA_PRESTO_SOLVER_CACHE_WARM_BATCH_SIZE must be positive")
 
 RATE_LIMIT = env_int("CONDA_PRESTO_RATE_LIMIT", 300)
 CORS_ORIGINS = env_list("CONDA_PRESTO_CORS_ORIGINS", "")
