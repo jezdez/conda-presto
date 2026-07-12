@@ -258,10 +258,10 @@ internal solver cache key and invalidation rules.
 
 Successful cacheable foreground `/solver/v1` requests are recorded as
 cache-warming candidates. Each record stores the serialized request, request
-count, and a score with a 24-hour half-life. A request becomes eligible after
-two uses and expires after seven days without another use. Set
+count, and most recent request time. A request becomes eligible after two uses
+and expires after seven days without another use. Set
 `CONDA_PRESTO_SOLVER_CACHE_WARM_CANDIDATE_SIZE=0` to disable recording or change
-the default 32-entry limit. Encoded requests share a separate 16 MiB limit.
+the default 32-entry limit.
 
 Candidates are process-local and are not served through HTTP or included in
 logs. Persistence is disabled by default because requests can contain installed

@@ -12,11 +12,9 @@ from litestar.stores.redis import RedisStore
 
 import conda_presto.solver as solver_module
 import conda_presto.warm_candidates as warm_candidates_module
-from conda_presto.resolve import RepodataSnapshot
 from conda_presto.solver import PrestoSolveRequest
 from conda_presto.warm_candidates import (
     SOLVER_WARM_CANDIDATE_MAX_AGE_S,
-    SOLVER_WARM_CANDIDATE_SCORE_HALF_LIFE_S,
     SOLVER_WARM_CANDIDATE_STORE_KEY,
     SolverWarmCandidates,
     StoredWarmCandidates,
@@ -295,19 +293,6 @@ def test_warm_candidates_requires_two_requests(solver_request):
     assert candidates[0].last_requested == 20
 
 
-def test_warm_candidates_decays_scores_with_24_hour_half_life(solver_request):
-    warm_candidates = SolverWarmCandidates(max_size=32)
-
-    warm_candidates.record(solver_request, now=0)
-    warm_candidates.record(solver_request, now=SOLVER_WARM_CANDIDATE_SCORE_HALF_LIFE_S)
-
-    entry = next(iter(warm_candidates.entries.values()))
-    assert entry.score == pytest.approx(1.5)
-    assert entry.score_at(2 * SOLVER_WARM_CANDIDATE_SCORE_HALF_LIFE_S) == pytest.approx(
-        0.75
-    )
-
-
 def test_warm_candidates_expires_entries_after_seven_days(solver_request):
     warm_candidates = SolverWarmCandidates(max_size=32)
     warm_candidates.record(solver_request, now=0)
@@ -320,10 +305,9 @@ def test_warm_candidates_expires_entries_after_seven_days(solver_request):
 
     assert candidates == ()
     assert warm_candidates.entries == {}
-    assert warm_candidates.current_bytes == 0
 
 
-def test_warm_candidates_ranks_by_score_then_recency(solver_request):
+def test_warm_candidates_ranks_by_request_count_then_recency(solver_request):
     warm_candidates = SolverWarmCandidates(max_size=32)
     older = msgspec.structs.replace(solver_request, specs_to_add=["older"])
     newer = msgspec.structs.replace(solver_request, specs_to_add=["newer"])
@@ -383,81 +367,11 @@ def test_warm_candidates_evicts_lowest_ranked_entry_at_count_limit(solver_reques
     }
 
 
-def test_warm_candidates_evicts_lowest_ranked_entry_at_byte_limit(solver_request):
-    first = msgspec.structs.replace(solver_request, specs_to_add=["aa"])
-    second = msgspec.structs.replace(solver_request, specs_to_add=["bb"])
-    request_size = len(msgspec.msgpack.encode(first))
-    assert len(msgspec.msgpack.encode(second)) == request_size
-    warm_candidates = SolverWarmCandidates(max_size=32, max_bytes=request_size)
-
-    warm_candidates.record(first, now=1)
-    warm_candidates.record(second, now=2)
-
-    assert list(warm_candidates.entries) == [second.warming_key()]
-    assert warm_candidates.current_bytes == request_size
-
-
-def test_warm_candidates_skips_request_larger_than_byte_limit(solver_request):
-    request_size = len(msgspec.msgpack.encode(solver_request))
-    warm_candidates = SolverWarmCandidates(max_size=32, max_bytes=request_size - 1)
-
-    assert not warm_candidates.record(solver_request, now=1)
-    assert warm_candidates.entries == {}
-    assert warm_candidates.generation == 0
-
-
 def test_zero_size_disables_recording(solver_request):
     warm_candidates = SolverWarmCandidates(max_size=0)
 
     assert not warm_candidates.record(solver_request, now=1)
     assert warm_candidates.entries == {}
-
-
-def test_warm_and_failure_markers_do_not_increase_request_count(
-    solver_request,
-):
-    warm_candidates = SolverWarmCandidates(max_size=32)
-    warm_candidates.record(solver_request, now=1)
-    warm_candidates.record(solver_request, now=2)
-    fingerprint = solver_request.warming_key()
-    entry = warm_candidates.entries[fingerprint]
-    recorded = (entry.score, entry.request_count, entry.last_requested)
-
-    warm_candidates.mark_transient_failure(fingerprint, retry_at=100)
-    assert warm_candidates.candidates(limit=1, now=99) == ()
-    assert entry.retry_at == 100
-    assert entry.consecutive_transient_failures == 1
-    assert entry.failed_repodata_records is None
-
-    repodata = RepodataSnapshot(
-        (("https://repo.example/linux-64", "repodata.json", 10, 1),),
-        False,
-    )
-    warm_candidates.mark_deterministic_failure(fingerprint, repodata)
-    assert entry.failed_repodata_records == repodata.records
-    assert entry.retry_at == 0
-    assert entry.consecutive_transient_failures == 0
-
-    warm_candidates.mark_warm(fingerprint)
-    assert entry.failed_repodata_records is None
-    assert entry.retry_at == 0
-    assert entry.consecutive_transient_failures == 0
-    assert (entry.score, entry.request_count, entry.last_requested) == recorded
-
-
-def test_foreground_success_clears_failure_markers(solver_request):
-    warm_candidates = SolverWarmCandidates(max_size=32)
-    warm_candidates.record(solver_request, now=1)
-    fingerprint = solver_request.warming_key()
-    warm_candidates.mark_transient_failure(fingerprint, retry_at=100)
-
-    warm_candidates.record(solver_request, now=2)
-
-    entry = warm_candidates.entries[fingerprint]
-    assert entry.request_count == 2
-    assert entry.failed_repodata_records is None
-    assert entry.retry_at == 0
-    assert entry.consecutive_transient_failures == 0
 
 
 @pytest.mark.anyio
@@ -477,7 +391,6 @@ async def test_persistent_warm_candidates_round_trip(
     assert list(restored.entries) == [fingerprint]
     assert restored.entries[fingerprint].request == solver_request
     assert restored.entries[fingerprint].request_count == 2
-    assert restored.current_bytes == len(msgspec.msgpack.encode(solver_request))
     assert len(restored.candidates(limit=1, now=30)) == 1
 
 
@@ -531,7 +444,6 @@ async def test_load_filters_expired_entries(solver_request):
     await restored.load(store, now=SOLVER_WARM_CANDIDATE_MAX_AGE_S + 1)
 
     assert restored.entries == {}
-    assert restored.current_bytes == 0
     assert restored.generation == 1
 
 
@@ -642,5 +554,4 @@ async def test_load_rejects_entry_with_detected_credentials(solver_request):
     await restored.load(store, now=1)
 
     assert restored.entries == {}
-    assert restored.current_bytes == 0
     assert restored.generation == 1

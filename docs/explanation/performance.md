@@ -43,7 +43,8 @@ Result cache
 Cache-warming candidates
 : successful cacheable foreground solver requests are recorded locally. A
   request becomes eligible for refresh after repeated use. Candidates are
-  ordered by a decaying request score; background refreshes do not change it.
+  ordered by request count and recency; background refreshes do not change
+  either value.
 
 ## Cache keys and repodata checks
 
