@@ -12,7 +12,6 @@ from litestar.stores.redis import RedisStore
 
 import conda_presto.solver as solver_module
 import conda_presto.warm_candidates as warm_candidates_module
-from conda_presto.solver import PrestoSolveRequest
 from conda_presto.warm_candidates import (
     SOLVER_WARM_CANDIDATE_MAX_AGE_S,
     SOLVER_WARM_CANDIDATE_STORE_KEY,
@@ -22,12 +21,8 @@ from conda_presto.warm_candidates import (
 
 
 @pytest.fixture()
-def solver_request():
-    return PrestoSolveRequest(
-        channels=[Channel("conda-forge").dump()],
-        subdirs=["linux-64", "noarch"],
-        specs_to_add=["zlib"],
-        specs_to_remove=[],
+def solver_request(make_presto_solver_request):
+    return make_presto_solver_request(
         installed=[
             {
                 "name": "python",
@@ -46,21 +41,6 @@ def solver_request():
         virtual=[{"name": "__linux", "version": "6.12", "build": "0"}],
         aggressive_updates=["openssl"],
         always_update=["ca-certificates"],
-        update_modifier="UPDATE_SPECS",
-        deps_modifier="NOT_SET",
-        ignore_pinned=False,
-        force_remove=False,
-        prune=False,
-        command="install",
-        repodata_fn="repodata.json",
-        offline=False,
-        channel_priority="strict",
-        use_only_tar_bz2=False,
-        add_pip_as_python_dependency=True,
-        allow_cycles=True,
-        restore_free_channel=False,
-        repodata_use_shards=True,
-        use_index_cache=False,
     )
 
 
