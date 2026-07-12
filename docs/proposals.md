@@ -47,7 +47,7 @@ Long-lived local service and conda solver integration.
 |---|:---:|---|
 | [Broker-managed local service](https://github.com/jezdez/conda-presto/issues/39) | {bdg-warning}`in progress` | User-scoped local HTTP service that retains loaded repodata and indexes between requests |
 | [Internal conda solver backend](https://github.com/jezdez/conda-presto/issues/40) | {bdg-warning}`in progress` | Broker-only loopback delegation and caching of final-state solves through private rattler APIs |
-| [Solver requests for cache warming](https://github.com/jezdez/conda-presto/issues/77) | {bdg-warning}`in progress` | Record successful foreground requests for scheduled cache refreshes |
+| [Solver requests for cache warming](https://github.com/jezdez/conda-presto/issues/77) | {bdg-warning}`in progress` | Record successful cacheable foreground requests for scheduled cache refreshes |
 | [Refresh cached solver results](https://github.com/jezdez/conda-presto/issues/78) | {bdg-secondary}`proposed` | Refresh stale cached results when no foreground solve is waiting |
 ````
 

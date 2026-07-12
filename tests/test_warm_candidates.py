@@ -151,7 +151,7 @@ def persistent_store(request, tmp_path):
         ),
     ],
 )
-def test_warming_key_covers_replayable_state(solver_request, change):
+def test_warming_key_covers_request_fields(solver_request, change):
     changed = msgspec.structs.replace(solver_request, **change)
 
     assert changed.warming_key() != solver_request.warming_key()

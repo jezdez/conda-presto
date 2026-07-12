@@ -90,7 +90,8 @@ Measure hit rates against the commands and prefix states used by the deployment.
 Treat a configured file or Redis store as private because final states can
 contain package metadata from credentialed channels.
 
-The service records successful foreground requests as cache-warming candidates.
+The service records successful cacheable foreground `/solver/v1` requests as
+cache-warming candidates.
 Candidate identity includes the serialized request but omits dependency
 versions so recorded requests can remain eligible after compatible upgrades.
 Background requests are not recorded. Candidates remain process-local unless
