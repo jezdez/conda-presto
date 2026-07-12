@@ -32,9 +32,7 @@ class SolverHotSetEntry(msgspec.Struct):
     request_size: int
     score: float
     observations: int
-    first_seen: float
     last_seen: float
-    last_successful_warm: float | None = None
     failed_repodata_records: (
         tuple[tuple[str, str, int | None, int | None], ...] | None
     ) = None
@@ -73,9 +71,8 @@ class SolverHotSet:
     current_bytes: int = 0
     generation: int = 0
     persisted_generation: int = 0
-    lock: anyio.Lock = field(default_factory=anyio.Lock)
 
-    async def observe(
+    def observe(
         self,
         request: PrestoSolveRequest,
         now: float | None = None,
@@ -89,85 +86,77 @@ class SolverHotSet:
         if request_size > self.max_bytes:
             return False
 
-        async with self.lock:
-            self._prune(now)
-            if entry := self.entries.get(fingerprint):
-                self.current_bytes += request_size - entry.request_size
-                entry.request = request
-                entry.request_size = request_size
-                entry.score = entry.score_at(now) + 1.0
-                entry.observations += 1
-                entry.last_seen = now
-                entry.failed_repodata_records = None
-                entry.retry_at = 0.0
-                entry.consecutive_transient_failures = 0
-            else:
-                self.entries[fingerprint] = SolverHotSetEntry(
-                    fingerprint=fingerprint,
-                    request=request,
-                    request_size=request_size,
-                    score=1.0,
-                    observations=1,
-                    first_seen=now,
-                    last_seen=now,
-                )
-                self.current_bytes += request_size
-            self.generation += 1
-            self._enforce_limits(now)
-            return fingerprint in self.entries
+        self._prune(now)
+        if entry := self.entries.get(fingerprint):
+            self.current_bytes += request_size - entry.request_size
+            entry.request = request
+            entry.request_size = request_size
+            entry.score = entry.score_at(now) + 1.0
+            entry.observations += 1
+            entry.last_seen = now
+            entry.failed_repodata_records = None
+            entry.retry_at = 0.0
+            entry.consecutive_transient_failures = 0
+        else:
+            self.entries[fingerprint] = SolverHotSetEntry(
+                fingerprint=fingerprint,
+                request=request,
+                request_size=request_size,
+                score=1.0,
+                observations=1,
+                last_seen=now,
+            )
+            self.current_bytes += request_size
+        self.generation += 1
+        self._enforce_limits(now)
+        return fingerprint in self.entries
 
-    async def candidates(
+    def candidates(
         self,
         limit: int,
         now: float | None = None,
     ) -> tuple[SolverHotSetEntry, ...]:
         """Return a deterministic snapshot of the hottest eligible entries."""
         now = time.time() if now is None else now
-        async with self.lock:
-            if self._prune(now):
-                self.generation += 1
-            return tuple(
-                msgspec.structs.replace(entry)
-                for entry in self._ranked(now)
-                if entry.eligible(now)
-            )[:limit]
+        if self._prune(now):
+            self.generation += 1
+        return tuple(
+            msgspec.structs.replace(entry)
+            for entry in self._ranked(now)
+            if entry.eligible(now)
+        )[:limit]
 
-    async def mark_warm(self, fingerprint: str, now: float | None = None) -> None:
-        """Record a successful background refresh without increasing demand."""
-        now = time.time() if now is None else now
-        async with self.lock:
-            if entry := self.entries.get(fingerprint):
-                entry.last_successful_warm = now
-                entry.failed_repodata_records = None
-                entry.retry_at = 0.0
-                entry.consecutive_transient_failures = 0
-                self.generation += 1
+    def mark_warm(self, fingerprint: str) -> None:
+        """Clear failure backoff after a successful background refresh."""
+        if entry := self.entries.get(fingerprint):
+            entry.failed_repodata_records = None
+            entry.retry_at = 0.0
+            entry.consecutive_transient_failures = 0
+            self.generation += 1
 
-    async def mark_deterministic_failure(
+    def mark_deterministic_failure(
         self,
         fingerprint: str,
         repodata: RepodataSnapshot,
     ) -> None:
         """Remember a solver error for one exact repodata snapshot."""
-        async with self.lock:
-            if entry := self.entries.get(fingerprint):
-                entry.failed_repodata_records = repodata.records
-                entry.retry_at = 0.0
-                entry.consecutive_transient_failures = 0
-                self.generation += 1
+        if entry := self.entries.get(fingerprint):
+            entry.failed_repodata_records = repodata.records
+            entry.retry_at = 0.0
+            entry.consecutive_transient_failures = 0
+            self.generation += 1
 
-    async def mark_transient_failure(
+    def mark_transient_failure(
         self,
         fingerprint: str,
         retry_at: float,
     ) -> None:
         """Delay another warm attempt after one transient failure."""
-        async with self.lock:
-            if entry := self.entries.get(fingerprint):
-                entry.failed_repodata_records = None
-                entry.retry_at = retry_at
-                entry.consecutive_transient_failures += 1
-                self.generation += 1
+        if entry := self.entries.get(fingerprint):
+            entry.failed_repodata_records = None
+            entry.retry_at = retry_at
+            entry.consecutive_transient_failures += 1
+            self.generation += 1
 
     async def load(self, store: Store | None, now: float | None = None) -> None:
         """Load a valid credential-free catalog without affecting readiness."""
@@ -197,57 +186,55 @@ class SolverHotSet:
 
         now = time.time() if now is None else now
         filtered = False
-        async with self.lock:
-            self.entries.clear()
-            self.current_bytes = 0
-            for entry in catalog.entries:
-                request_size = len(msgspec.msgpack.encode(entry.request))
-                fingerprint = entry.request.workload_key()
-                if (
-                    fingerprint != entry.fingerprint
-                    or entry.request.contains_credentials()
-                    or max(0.0, now - entry.last_seen) > SOLVER_HOTSET_MAX_AGE_S
-                    or request_size > self.max_bytes
-                ):
-                    filtered = True
-                    continue
-                entry.request_size = request_size
-                existing = self.entries.get(fingerprint)
-                if existing is not None and self._rank_key(existing, now) <= (
-                    self._rank_key(entry, now)
-                ):
-                    filtered = True
-                    continue
-                if existing is not None:
-                    self.current_bytes -= existing.request_size
-                self.entries[fingerprint] = entry
-                self.current_bytes += request_size
-            before = (len(self.entries), self.current_bytes)
-            self._enforce_limits(now)
-            filtered = filtered or before != (len(self.entries), self.current_bytes)
-            self.generation = 1 if filtered else 0
-            self.persisted_generation = 0
+        self.entries.clear()
+        self.current_bytes = 0
+        for entry in catalog.entries:
+            request_size = len(msgspec.msgpack.encode(entry.request))
+            fingerprint = entry.request.workload_key()
+            if (
+                fingerprint != entry.fingerprint
+                or entry.request.contains_credentials()
+                or max(0.0, now - entry.last_seen) > SOLVER_HOTSET_MAX_AGE_S
+                or request_size > self.max_bytes
+            ):
+                filtered = True
+                continue
+            entry.request_size = request_size
+            existing = self.entries.get(fingerprint)
+            if existing is not None and self._rank_key(existing, now) <= (
+                self._rank_key(entry, now)
+            ):
+                filtered = True
+                continue
+            if existing is not None:
+                self.current_bytes -= existing.request_size
+            self.entries[fingerprint] = entry
+            self.current_bytes += request_size
+        before = (len(self.entries), self.current_bytes)
+        self._enforce_limits(now)
+        filtered = filtered or before != (len(self.entries), self.current_bytes)
+        self.generation = 1 if filtered else 0
+        self.persisted_generation = 0
 
     async def checkpoint(self, store: Store | None, now: float | None = None) -> None:
         """Persist one bounded credential-free catalog outside request handling."""
         if not self.persist or store is None:
             return
         now = time.time() if now is None else now
-        async with self.lock:
-            if self._prune(now):
-                self.generation += 1
-            if self.generation == self.persisted_generation:
-                return
-            generation = self.generation
-            payload = msgspec.msgpack.encode(
-                SolverHotSetCatalog(
-                    entries=[
-                        msgspec.structs.replace(entry)
-                        for entry in self._ranked(now)
-                        if not entry.request.contains_credentials()
-                    ]
-                )
+        if self._prune(now):
+            self.generation += 1
+        if self.generation == self.persisted_generation:
+            return
+        generation = self.generation
+        payload = msgspec.msgpack.encode(
+            SolverHotSetCatalog(
+                entries=[
+                    msgspec.structs.replace(entry)
+                    for entry in self._ranked(now)
+                    if not entry.request.contains_credentials()
+                ]
             )
+        )
         try:
             with anyio.move_on_after(SOLVER_HOTSET_STORE_TIMEOUT_S) as scope:
                 await store.set(
@@ -261,9 +248,8 @@ class SolverHotSet:
         except Exception:
             log.warning("Persistent solver hot-set write failed")
             return
-        async with self.lock:
-            if self.generation == generation:
-                self.persisted_generation = generation
+        if self.generation == generation:
+            self.persisted_generation = generation
 
     def _prune(self, now: float) -> bool:
         expired = [

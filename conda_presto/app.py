@@ -1743,7 +1743,7 @@ async def solver_v1(
         return Response(result.result, status_code=HTTP_422_UNPROCESSABLE_ENTITY)
     hot_set = getattr(request.app.state, "solver_hot_set", None)
     if hot_set is not None and result.tracks_demand:
-        await hot_set.observe(data)
+        hot_set.observe(data)
     return Response(result.result)
 
 

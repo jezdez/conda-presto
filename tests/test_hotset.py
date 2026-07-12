@@ -282,40 +282,36 @@ def test_public_request_is_credential_free(solver_request):
     assert not solver_request.contains_credentials()
 
 
-@pytest.mark.anyio
-async def test_hot_set_requires_two_observations(solver_request):
+def test_hot_set_requires_two_observations(solver_request):
     hot_set = SolverHotSet(max_size=32)
 
-    assert await hot_set.observe(solver_request, now=10)
-    assert await hot_set.candidates(limit=8, now=10) == ()
-    assert await hot_set.observe(solver_request, now=20)
+    assert hot_set.observe(solver_request, now=10)
+    assert hot_set.candidates(limit=8, now=10) == ()
+    assert hot_set.observe(solver_request, now=20)
 
-    candidates = await hot_set.candidates(limit=8, now=20)
+    candidates = hot_set.candidates(limit=8, now=20)
     assert len(candidates) == 1
     assert candidates[0].observations == 2
-    assert candidates[0].first_seen == 10
     assert candidates[0].last_seen == 20
 
 
-@pytest.mark.anyio
-async def test_hot_set_decays_scores_with_24_hour_half_life(solver_request):
+def test_hot_set_decays_scores_with_24_hour_half_life(solver_request):
     hot_set = SolverHotSet(max_size=32)
 
-    await hot_set.observe(solver_request, now=0)
-    await hot_set.observe(solver_request, now=SOLVER_HOTSET_SCORE_HALF_LIFE_S)
+    hot_set.observe(solver_request, now=0)
+    hot_set.observe(solver_request, now=SOLVER_HOTSET_SCORE_HALF_LIFE_S)
 
     entry = next(iter(hot_set.entries.values()))
     assert entry.score == pytest.approx(1.5)
     assert entry.score_at(2 * SOLVER_HOTSET_SCORE_HALF_LIFE_S) == pytest.approx(0.75)
 
 
-@pytest.mark.anyio
-async def test_hot_set_expires_entries_after_seven_days(solver_request):
+def test_hot_set_expires_entries_after_seven_days(solver_request):
     hot_set = SolverHotSet(max_size=32)
-    await hot_set.observe(solver_request, now=0)
-    await hot_set.observe(solver_request, now=1)
+    hot_set.observe(solver_request, now=0)
+    hot_set.observe(solver_request, now=1)
 
-    candidates = await hot_set.candidates(
+    candidates = hot_set.candidates(
         limit=8,
         now=SOLVER_HOTSET_MAX_AGE_S + 2,
     )
@@ -325,20 +321,19 @@ async def test_hot_set_expires_entries_after_seven_days(solver_request):
     assert hot_set.current_bytes == 0
 
 
-@pytest.mark.anyio
-async def test_hot_set_ranks_by_score_then_recency(solver_request):
+def test_hot_set_ranks_by_score_then_recency(solver_request):
     hot_set = SolverHotSet(max_size=32)
     older = msgspec.structs.replace(solver_request, specs_to_add=["older"])
     newer = msgspec.structs.replace(solver_request, specs_to_add=["newer"])
     hottest = msgspec.structs.replace(solver_request, specs_to_add=["hottest"])
     for request in (older, newer, hottest):
-        await hot_set.observe(request, now=10)
-        await hot_set.observe(request, now=10)
-    await hot_set.observe(hottest, now=10)
-    await hot_set.observe(hottest, now=10)
-    await hot_set.observe(newer, now=20)
+        hot_set.observe(request, now=10)
+        hot_set.observe(request, now=10)
+    hot_set.observe(hottest, now=10)
+    hot_set.observe(hottest, now=10)
+    hot_set.observe(newer, now=20)
 
-    candidates = await hot_set.candidates(limit=3, now=20)
+    candidates = hot_set.candidates(limit=3, now=20)
 
     assert [candidate.fingerprint for candidate in candidates] == [
         hottest.workload_key(),
@@ -347,34 +342,32 @@ async def test_hot_set_ranks_by_score_then_recency(solver_request):
     ]
 
 
-@pytest.mark.anyio
-async def test_hot_set_uses_fingerprint_as_final_ranking_tie_breaker(solver_request):
+def test_hot_set_uses_fingerprint_as_final_ranking_tie_breaker(solver_request):
     hot_set = SolverHotSet(max_size=32)
     requests = [
         msgspec.structs.replace(solver_request, specs_to_add=[name])
         for name in ("alpha", "bravo")
     ]
     for request in requests:
-        await hot_set.observe(request, now=10)
-        await hot_set.observe(request, now=10)
+        hot_set.observe(request, now=10)
+        hot_set.observe(request, now=10)
 
-    candidates = await hot_set.candidates(limit=2, now=10)
+    candidates = hot_set.candidates(limit=2, now=10)
 
     assert [candidate.fingerprint for candidate in candidates] == sorted(
         request.workload_key() for request in requests
     )
 
 
-@pytest.mark.anyio
-async def test_hot_set_evicts_lowest_ranked_entry_at_count_limit(solver_request):
+def test_hot_set_evicts_lowest_ranked_entry_at_count_limit(solver_request):
     hot_set = SolverHotSet(max_size=2)
     hottest = msgspec.structs.replace(solver_request, specs_to_add=["hottest"])
     oldest = msgspec.structs.replace(solver_request, specs_to_add=["oldest"])
     newest = msgspec.structs.replace(solver_request, specs_to_add=["newest"])
-    await hot_set.observe(hottest, now=0)
-    await hot_set.observe(hottest, now=0)
-    await hot_set.observe(oldest, now=1)
-    await hot_set.observe(newest, now=2)
+    hot_set.observe(hottest, now=0)
+    hot_set.observe(hottest, now=0)
+    hot_set.observe(oldest, now=1)
+    hot_set.observe(newest, now=2)
 
     assert set(hot_set.entries) == {
         hottest.workload_key(),
@@ -382,74 +375,48 @@ async def test_hot_set_evicts_lowest_ranked_entry_at_count_limit(solver_request)
     }
 
 
-@pytest.mark.anyio
-async def test_hot_set_evicts_lowest_ranked_entry_at_byte_limit(solver_request):
+def test_hot_set_evicts_lowest_ranked_entry_at_byte_limit(solver_request):
     first = msgspec.structs.replace(solver_request, specs_to_add=["aa"])
     second = msgspec.structs.replace(solver_request, specs_to_add=["bb"])
     request_size = len(msgspec.msgpack.encode(first))
     assert len(msgspec.msgpack.encode(second)) == request_size
     hot_set = SolverHotSet(max_size=32, max_bytes=request_size)
 
-    await hot_set.observe(first, now=1)
-    await hot_set.observe(second, now=2)
+    hot_set.observe(first, now=1)
+    hot_set.observe(second, now=2)
 
     assert list(hot_set.entries) == [second.workload_key()]
     assert hot_set.current_bytes == request_size
 
 
-@pytest.mark.anyio
-async def test_hot_set_skips_request_larger_than_byte_limit(solver_request):
+def test_hot_set_skips_request_larger_than_byte_limit(solver_request):
     request_size = len(msgspec.msgpack.encode(solver_request))
     hot_set = SolverHotSet(max_size=32, max_bytes=request_size - 1)
 
-    assert not await hot_set.observe(solver_request, now=1)
+    assert not hot_set.observe(solver_request, now=1)
     assert hot_set.entries == {}
     assert hot_set.generation == 0
 
 
-@pytest.mark.anyio
-async def test_zero_size_disables_observation(solver_request):
+def test_zero_size_disables_observation(solver_request):
     hot_set = SolverHotSet(max_size=0)
 
-    assert not await hot_set.observe(solver_request, now=1)
+    assert not hot_set.observe(solver_request, now=1)
     assert hot_set.entries == {}
 
 
-@pytest.mark.anyio
-async def test_concurrent_observation_and_candidate_snapshots(solver_request):
-    hot_set = SolverHotSet(max_size=32)
-    snapshots = []
-
-    async def observe(index):
-        await hot_set.observe(solver_request, now=float(index))
-
-    async def snapshot(index):
-        snapshots.append(await hot_set.candidates(limit=1, now=float(index)))
-
-    async with anyio.create_task_group() as tasks:
-        for index in range(50):
-            tasks.start_soon(observe, index)
-            tasks.start_soon(snapshot, index)
-
-    entry = hot_set.entries[solver_request.workload_key()]
-    assert entry.observations == 50
-    assert len(snapshots) == 50
-    assert all(len(items) <= 1 for items in snapshots)
-
-
-@pytest.mark.anyio
-async def test_warm_and_failure_markers_do_not_increase_demand(
+def test_warm_and_failure_markers_do_not_increase_demand(
     solver_request,
 ):
     hot_set = SolverHotSet(max_size=32)
-    await hot_set.observe(solver_request, now=1)
-    await hot_set.observe(solver_request, now=2)
+    hot_set.observe(solver_request, now=1)
+    hot_set.observe(solver_request, now=2)
     fingerprint = solver_request.workload_key()
     entry = hot_set.entries[fingerprint]
     demand = (entry.score, entry.observations, entry.last_seen)
 
-    await hot_set.mark_transient_failure(fingerprint, retry_at=100)
-    assert await hot_set.candidates(limit=1, now=99) == ()
+    hot_set.mark_transient_failure(fingerprint, retry_at=100)
+    assert hot_set.candidates(limit=1, now=99) == ()
     assert entry.retry_at == 100
     assert entry.consecutive_transient_failures == 1
     assert entry.failed_repodata_records is None
@@ -458,27 +425,25 @@ async def test_warm_and_failure_markers_do_not_increase_demand(
         (("https://repo.example/linux-64", "repodata.json", 10, 1),),
         False,
     )
-    await hot_set.mark_deterministic_failure(fingerprint, repodata)
+    hot_set.mark_deterministic_failure(fingerprint, repodata)
     assert entry.failed_repodata_records == repodata.records
     assert entry.retry_at == 0
     assert entry.consecutive_transient_failures == 0
 
-    await hot_set.mark_warm(fingerprint, now=200)
-    assert entry.last_successful_warm == 200
+    hot_set.mark_warm(fingerprint)
     assert entry.failed_repodata_records is None
     assert entry.retry_at == 0
     assert entry.consecutive_transient_failures == 0
     assert (entry.score, entry.observations, entry.last_seen) == demand
 
 
-@pytest.mark.anyio
-async def test_foreground_success_clears_failure_markers(solver_request):
+def test_foreground_success_clears_failure_markers(solver_request):
     hot_set = SolverHotSet(max_size=32)
-    await hot_set.observe(solver_request, now=1)
+    hot_set.observe(solver_request, now=1)
     fingerprint = solver_request.workload_key()
-    await hot_set.mark_transient_failure(fingerprint, retry_at=100)
+    hot_set.mark_transient_failure(fingerprint, retry_at=100)
 
-    await hot_set.observe(solver_request, now=2)
+    hot_set.observe(solver_request, now=2)
 
     entry = hot_set.entries[fingerprint]
     assert entry.observations == 2
@@ -493,8 +458,8 @@ async def test_persistent_hot_set_round_trip(
     solver_request,
 ):
     source = SolverHotSet(max_size=32, persist=True)
-    await source.observe(solver_request, now=10)
-    await source.observe(solver_request, now=20)
+    source.observe(solver_request, now=10)
+    source.observe(solver_request, now=20)
 
     await source.checkpoint(persistent_store, now=20)
     restored = SolverHotSet(max_size=32, persist=True)
@@ -505,14 +470,14 @@ async def test_persistent_hot_set_round_trip(
     assert restored.entries[fingerprint].request == solver_request
     assert restored.entries[fingerprint].observations == 2
     assert restored.current_bytes == len(msgspec.msgpack.encode(solver_request))
-    assert len(await restored.candidates(limit=1, now=30)) == 1
+    assert len(restored.candidates(limit=1, now=30)) == 1
 
 
 @pytest.mark.anyio
 async def test_persistence_is_opt_in(solver_request):
     store = MemoryStore()
     source = SolverHotSet(max_size=32)
-    await source.observe(solver_request, now=1)
+    source.observe(solver_request, now=1)
     await source.checkpoint(store, now=1)
     assert await store.get(SOLVER_HOTSET_STORE_KEY) is None
 
@@ -551,7 +516,7 @@ async def test_load_discards_corrupt_or_incompatible_catalog(payload):
 async def test_load_filters_expired_entries(solver_request):
     store = MemoryStore()
     source = SolverHotSet(max_size=32, persist=True)
-    await source.observe(solver_request, now=0)
+    source.observe(solver_request, now=0)
     await source.checkpoint(store, now=0)
     restored = SolverHotSet(max_size=32, persist=True)
 
@@ -572,7 +537,7 @@ async def test_load_enforces_local_count_limit(solver_request):
     ]
     for observations, request in enumerate(requests, start=1):
         for _ in range(observations):
-            await source.observe(request, now=10)
+            source.observe(request, now=10)
     await source.checkpoint(store, now=10)
     restored = SolverHotSet(max_size=1, persist=True)
 
@@ -594,7 +559,7 @@ async def test_store_failures_are_best_effort(solver_request):
             raise OSError("delete failed")
 
     hot_set = SolverHotSet(max_size=32, persist=True)
-    await hot_set.observe(solver_request, now=1)
+    hot_set.observe(solver_request, now=1)
 
     await hot_set.load(FailingStore(), now=1)
     await hot_set.checkpoint(FailingStore(), now=1)
@@ -615,7 +580,7 @@ async def test_store_timeouts_are_best_effort(monkeypatch, solver_request, opera
 
     monkeypatch.setattr(hotset_module, "SOLVER_HOTSET_STORE_TIMEOUT_S", 0)
     hot_set = SolverHotSet(max_size=32, persist=True)
-    await hot_set.observe(solver_request, now=1)
+    hot_set.observe(solver_request, now=1)
 
     await getattr(hot_set, operation)(SlowStore(), now=1)
 
@@ -630,15 +595,15 @@ async def test_credential_bearing_entries_remain_memory_only(solver_request):
         channels=[{**Channel("conda-forge").dump(), "token": "secret"}],
     )
     hot_set = SolverHotSet(max_size=32, persist=True)
-    await hot_set.observe(request, now=1)
-    await hot_set.observe(request, now=2)
+    hot_set.observe(request, now=1)
+    hot_set.observe(request, now=2)
     store = MemoryStore()
 
     await hot_set.checkpoint(store, now=2)
 
     fingerprint = request.workload_key()
     assert fingerprint in hot_set.entries
-    assert len(await hot_set.candidates(limit=1, now=2)) == 1
+    assert len(hot_set.candidates(limit=1, now=2)) == 1
     payload = await store.get(SOLVER_HOTSET_STORE_KEY)
     catalog = msgspec.msgpack.decode(payload, type=SolverHotSetCatalog)
     assert catalog.entries == []
@@ -656,7 +621,7 @@ async def test_load_rejects_persisted_credential_bearing_entry(solver_request):
         ],
     )
     source = SolverHotSet(max_size=32)
-    await source.observe(request, now=1)
+    source.observe(request, now=1)
     payload = msgspec.msgpack.encode(
         SolverHotSetCatalog(entries=list(source.entries.values()))
     )
