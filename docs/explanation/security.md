@@ -1,12 +1,18 @@
 # Security and trust model
 
-conda-presto is intentionally solve-only. It reads environment inputs, resolves
-package metadata, and emits results. It does not create prefixes, link package
-files, run activation scripts, or install packages.
+The `conda presto` command and HTTP API are intentionally solve-only. They read
+environment inputs, resolve package metadata, and emit results without creating
+prefixes, linking package files, running activation scripts, or installing
+packages.
 
-That keeps the shipped trust boundary narrow: conda-presto can answer "what
-would this solve to?" but a downstream installer is still responsible for
-deciding whether that result is trusted enough to install.
+The optional internal `conda --solver=presto` plugin delegates only final-state
+solving to the broker service. A normal conda command without `--dry-run` can
+then download packages and mutate its prefix through conda's local transaction
+code. The service never executes that transaction.
+
+This keeps the service trust boundary narrow: it can answer "what would this
+solve to?", while conda or another downstream installer remains responsible for
+deciding whether and how to install the result.
 
 ## Current controls
 
@@ -79,8 +85,8 @@ service:
 ## Future trust work
 
 Signed solve provenance, attestation serving, policy evaluation, and CEP-aligned
-predicate design are tracked as roadmap issues. Those features should extend
-the current dry-run boundary by making solved results verifiable by downstream
-tools instead of inventing a separate installation path.
+predicate design are tracked as roadmap issues. Those features should make
+solved results verifiable by downstream tools instead of inventing a separate
+installation path.
 
 See the [roadmap](../proposals.md) for the current issue links.

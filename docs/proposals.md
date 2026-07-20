@@ -46,7 +46,7 @@ Long-lived local service and conda solver integration.
 | Issue | Status | Summary |
 |---|:---:|---|
 | [Broker-managed local service](https://github.com/jezdez/conda-presto/issues/39) | {bdg-warning}`in progress` | User-scoped local HTTP service that retains loaded repodata and indexes between requests |
-| [Full conda solver backend](https://github.com/jezdez/conda-presto/issues/40) | {bdg-secondary}`proposed` | `conda --solver=presto` backed by a public-channel local or explicit remote service |
+| [Internal conda solver backend](https://github.com/jezdez/conda-presto/issues/40) | {bdg-warning}`in progress` | Broker-only loopback delegation and caching of final-state solves through private rattler APIs |
 ````
 
 ````{tab-item} Trust
@@ -74,8 +74,7 @@ graph TD
     T --> E["explain\n(shipped)"]
     P["result cache + permalink\n(shipped)"] --> PV["provenance fields"]
     P --> B["broker-managed local service"]
-    B --> FS["full conda solver backend"]
-    P --> FS
+    B --> FS["internal Presto solver backend"]
     PF --> RPR
     E --> RPR
     PV --> A["signed provenance"]
@@ -92,9 +91,10 @@ graph TD
 
 Diff and explain can use existing lockfile records when the requested platform
 is covered. Repair stays separate from explain because it may run repeated
-solver attempts under an explicit budget. The broker-managed local service and
-full solver backend use persistent worker processes and public-channel cache
-keys.
+solver attempts under an explicit budget. The internal Presto solver backend
+uses the broker-managed local process and does not define a remote protocol.
+Its final-state entries share the configured cache storage and
+in-memory bounds, but remain separate from public `/resolve` permalinks.
 
 ## Conventions
 

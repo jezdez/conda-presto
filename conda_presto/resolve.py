@@ -57,19 +57,39 @@ context_configured = False
 
 index_lock = threading.Lock()
 
+SHARDED_REPODATA_SOURCE = "repodata_shards.msgpack.zst"
+
 
 @dataclass(frozen=True)
 class RepodataSnapshot:
-    """Repodata files and conda freshness state used by one solve."""
+    """Repodata cache-file markers and conda freshness state."""
 
-    records: tuple[tuple[str, int | None, int | None], ...]
+    records: tuple[tuple[str, str, int | None, int | None], ...]
     stale: bool
+
+    def is_cacheable_after(self, previous: RepodataSnapshot | None) -> bool:
+        """Return whether these markers can be used for result caching."""
+        if self.stale or previous is None:
+            return False
+        # A transient shard fetch can fall back to JSON while leaving the old
+        # shard file and its newly refreshed cache state in place.
+        return not (
+            previous.stale
+            and any(
+                record[1] == SHARDED_REPODATA_SOURCE and record in self.records
+                for record in previous.records
+            )
+        )
 
     @classmethod
     def capture(
         cls,
-        channels: tuple[str, ...] | list[str],
+        channels: tuple[str | Channel, ...] | list[str | Channel],
         platforms: list[str],
+        *,
+        repodata_fn: str = "repodata.json",
+        use_shards: bool = False,
+        use_index_cache: bool = False,
     ) -> RepodataSnapshot:
         """Capture cache files and whether conda would refresh any of them."""
         records = []
@@ -92,21 +112,45 @@ class RepodataSnapshot:
                 ):
                     if public_url not in selected_urls or channel.auth or channel.token:
                         selected_urls[public_url] = credentialed_url
+        repositories = []
         for public_url, credentialed_url in selected_urls.items():
-            subdir_data = SubdirData(
-                Channel.from_url(credentialed_url),
-                repodata_fn="repodata.json",
-            )
-            cache = subdir_data.repo_cache
-            cache.load_state()
+            cache = None
+            sharded = False
+            if use_shards:
+                cache = SubdirData(
+                    Channel.from_url(credentialed_url),
+                    repodata_fn="repodata.json",
+                ).repo_cache
+                cache.load_state(binary=cache.cache_path_shards.exists())
+                sharded = cache.state.should_check_format("shards")
+            repositories.append((public_url, credentialed_url, sharded, cache))
+
+        any_sharded = any(repository[2] for repository in repositories)
+        for public_url, credentialed_url, sharded, cache in repositories:
+            if any_sharded:
+                source = SHARDED_REPODATA_SOURCE if sharded else "repodata.json"
+                if not sharded:
+                    cache.load_state(binary=False)
+            else:
+                source = repodata_fn
+                cache = SubdirData(
+                    Channel.from_url(credentialed_url),
+                    repodata_fn=repodata_fn,
+                ).repo_cache
+                cache.load_state(binary=False)
+            cache_path = cache.cache_path_shards if sharded else cache.cache_path_json
             try:
-                stat = cache.cache_path_json.stat()
+                stat = cache_path.stat()
             except FileNotFoundError:
-                records.append((public_url, None, None))
+                records.append((public_url, source, None, None))
                 stale = True
             else:
-                records.append((public_url, stat.st_size, stat.st_mtime_ns))
-                stale = stale or public_url.startswith("file://") or cache.stale()
+                records.append((public_url, source, stat.st_size, stat.st_mtime_ns))
+                stale = (
+                    stale
+                    or public_url.startswith("file://")
+                    or (cache.stale() and (sharded or not use_index_cache))
+                )
         return cls(records=tuple(records), stale=stale)
 
 

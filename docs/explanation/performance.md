@@ -30,25 +30,36 @@ In-memory solver index cache
   Reuse follows conda's repodata freshness policy. When repodata expires or a
   cache file changes, the existing index reloads those channels before solving.
 
-Content-addressed result cache
-: successful HTTP `/resolve` responses are stored by a SHA-256 key. A cache hit
-  skips solving and exporting entirely and returns the stored body. The in-memory
-  LRU can be backed by a persistent file or Redis store, which lets cached
-  results survive server restarts.
+Result cache
+: successful HTTP `/resolve` responses and internal `/solver/v1` final states
+  share a bounded in-process LRU. Resolve responses use content-addressed keys.
+  Solver final states use keys derived from serialized request fields and
+  dependency versions. Each solver entry also records repodata cache-file
+  markers. A solver hit skips state-specific index construction and SAT solving,
+  but the cached response is still encoded by the service and decoded by the
+  client. The LRU can be backed by a persistent file or Redis store, which lets
+  cached results survive server restarts.
 
-## Cache key safety
+## Cache keys and repodata checks
 
 The result cache key is tied to the inputs that can change the response:
 normalized specs, ordered channels, target platforms, output format, relevant
 dependency versions, and markers for conda's local `repodata.json` files. A
-request bypasses a stored result when conda considers any corresponding
-repodata cache stale. If refreshed package metadata changes, the next result
-uses a different key.
+request bypasses a stored result when conda's effective policy requires any
+corresponding repodata metadata to refresh. If refreshed package metadata
+changes, the next `/resolve` result uses a different key. Solver final-state
+keys hash solve-affecting request fields, including installed records, history,
+pins, virtual packages, operation modifiers, solver settings, and channel
+definitions, along with dependency versions. They exclude the prefix path, file
+inventory, local repodata TTL, and repodata markers, allowing the same
+solve-affecting request fields at different paths or TTLs to use one entry. The
+stored value includes the URL, selected source, file size, modification time,
+and freshness state recorded for each repodata cache file. A lookup returns the
+entry only when conda considers the current files fresh under the caller's TTL
+and their markers match.
 
-That design keeps shared caching practical for public channels while avoiding
-reuse across channel metadata snapshots. Private channels and credentialed
-channel URLs should use an isolated deployment until the cache model grows an
-explicit private-channel policy.
+Private channels and credentialed channel URLs should use an isolated
+deployment until the cache model has an explicit private-channel policy.
 
 ## First solve vs. warm solve
 
@@ -58,11 +69,16 @@ index. Server startup can pre-warm expected channel/platform combinations using
 `CONDA_PRESTO_CHANNELS` and `CONDA_PRESTO_PLATFORMS`, shifting that cost from
 the first user request to startup.
 
-The result cache adds one freshness check and store lookup on each HTTP solve
-request. On a miss or expired repodata, conda-presto recomputes the key after
-the solve so the result uses the metadata markers loaded by the solver. That
-overhead scales with the number of channel/platform repodata files and is
-normally much smaller than solving.
+The result cache adds a store lookup and freshness check on each HTTP solve
+request. On a solver miss, conda-presto captures metadata immediately before
+and after worker index collection, then compares the current cache-file markers
+before replacing the existing solver entry. The number of checks scales with
+the number of channel/platform repodata files.
+
+The final-state cache has narrower reuse than `/resolve`: repeated dry-runs,
+retries, creates, and cloned prefix states can hit, while a completed transaction
+normally changes the installed records and therefore the next key. Requests
+with different prefix histories or pins also use different keys.
 
 ## Multi-platform solving
 

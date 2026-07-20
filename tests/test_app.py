@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import threading
 import time
 from types import SimpleNamespace
 
@@ -9,18 +10,17 @@ import anyio
 import msgspec
 import pytest
 import yaml
+from conda.exceptions import PackagesNotFoundError
 from conda.models.environment import Environment
 from conda.plugins.types import EnvironmentFormat
 from httpx import ASGITransport, AsyncClient
 from litestar import Litestar
 from litestar.openapi import OpenAPIConfig
-from litestar.stores.file import FileStore
 from litestar.stores.memory import MemoryStore
-from litestar.stores.redis import RedisStore
 
 import conda_presto.app as app_module
+import conda_presto.cache as cache_module
 from conda_presto.app import (
-    ResultCache,
     build_cors_config,
     diff_post,
     explain_post,
@@ -35,11 +35,20 @@ from conda_presto.app import (
     resolve_get,
     resolve_post,
     result_get,
+    solver_v1,
     transcode_post,
     version,
 )
+from conda_presto.cache import ResultCache
 from conda_presto.inputs import ParsedInputFile
 from conda_presto.resolve import RepodataSnapshot, ResolvedPackage, SolveResult
+from conda_presto.solver import (
+    PrestoSolveError,
+    PrestoSolveOutcome,
+    PrestoSolverClient,
+    PrestoSolveRequest,
+    PrestoSolveResponse,
+)
 
 
 @pytest.fixture()
@@ -59,6 +68,7 @@ def test_app():
             version,
             parse,
             health,
+            solver_v1,
         ],
         openapi_config=OpenAPIConfig(
             title="conda-presto",
@@ -77,6 +87,11 @@ async def client(test_app):
     transport = ASGITransport(app=test_app)
     async with AsyncClient(transport=transport, base_url="http://test") as c:
         yield c
+
+
+@pytest.fixture()
+def enabled_solver_endpoint(monkeypatch):
+    monkeypatch.setenv("CONDA_BROKER_SERVICE_NAME", PrestoSolverClient.service_name)
 
 
 @pytest.fixture()
@@ -138,8 +153,626 @@ async def test_health_is_unavailable_when_persistent_worker_stops(client, test_a
     assert recoveries == ["recover"]
 
 
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    "service_name",
+    [
+        pytest.param(None, id="normal-or-docker-server"),
+        pytest.param("other.server", id="different-broker-service"),
+    ],
+)
+async def test_solver_v1_requires_broker_service_identity(
+    client,
+    test_app,
+    monkeypatch,
+    presto_solver_request,
+    service_name,
+):
+    if service_name is None:
+        monkeypatch.delenv("CONDA_BROKER_SERVICE_NAME", raising=False)
+    else:
+        monkeypatch.setenv("CONDA_BROKER_SERVICE_NAME", service_name)
+    test_app.state.solve_worker = SimpleNamespace(
+        solve_final_state=lambda *_: pytest.fail("solver must remain unavailable")
+    )
+
+    response = await client.post(
+        "/solver/v1",
+        content=msgspec.json.encode(presto_solver_request),
+        headers={"content-type": "application/json"},
+    )
+
+    assert response.status_code == 404
+
+
+@pytest.mark.anyio
+async def test_solver_v1_rejects_before_parsing_the_request_body(client):
+    response = await client.post(
+        "/solver/v1",
+        content=b"{",
+        headers={"content-type": "application/json"},
+    )
+
+    assert response.status_code == 404
+
+
+@pytest.mark.anyio
+async def test_solver_v1_rejects_unknown_request_fields(
+    client,
+    test_app,
+    presto_solver_request,
+    enabled_solver_endpoint,
+):
+    test_app.state.solve_worker = SimpleNamespace(
+        solve_final_state=lambda *_: pytest.fail("invalid request reached the solver")
+    )
+    body = msgspec.to_builtins(presto_solver_request)
+    body["future_solver_setting"] = True
+
+    response = await client.post("/solver/v1", json=body)
+
+    assert response.status_code == 400
+    assert response.json()["extra"] == [
+        {
+            "message": "Object contains unknown field `future_solver_setting`",
+            "key": "data",
+            "source": "body",
+        }
+    ]
+
+
+@pytest.mark.anyio
+async def test_solver_v1_caches_successful_final_state(
+    client,
+    test_app,
+    monkeypatch,
+    presto_solver_request,
+    presto_solver_outcome,
+    fresh_repodata_snapshot,
+    enabled_solver_endpoint,
+):
+    calls = []
+
+    def solve(data, timeout):
+        calls.append((data, timeout))
+        return presto_solver_outcome(
+            PrestoSolveResponse(records=[], neutered=[]),
+            fresh_repodata_snapshot,
+        )
+
+    monkeypatch.setattr(
+        PrestoSolveRequest,
+        "repodata_snapshot",
+        lambda _: fresh_repodata_snapshot,
+    )
+    test_app.state.solve_worker = SimpleNamespace(solve_final_state=solve)
+    test_app.state.solver_limiter = anyio.CapacityLimiter(1)
+
+    first = await client.post(
+        "/solver/v1",
+        content=msgspec.json.encode(presto_solver_request),
+        headers={"content-type": "application/json"},
+    )
+    second = await client.post(
+        "/solver/v1",
+        content=msgspec.json.encode(presto_solver_request),
+        headers={"content-type": "application/json"},
+    )
+
+    assert first.status_code == second.status_code == 200
+    assert first.content == second.content
+    assert first.json() == {"records": [], "neutered": []}
+    assert "location" not in second.headers
+    assert [data for data, _ in calls] == [presto_solver_request]
+    assert calls[0][1] > time.monotonic()
+
+
+@pytest.mark.anyio
+async def test_solver_v1_cache_hit_bypasses_solver_capacity(
+    client,
+    test_app,
+    monkeypatch,
+    presto_solver_request,
+    fresh_repodata_snapshot,
+    enabled_solver_endpoint,
+):
+    key = ResultCache.solver_key(presto_solver_request.cache_key())
+    test_app.state.result_cache.remember_memory(
+        key,
+        cache_module.StoredSolverResult(
+            response=PrestoSolveResponse(records=[], neutered=[]),
+            metadata_used=fresh_repodata_snapshot,
+        ),
+    )
+    monkeypatch.setattr(
+        PrestoSolveRequest,
+        "repodata_snapshot",
+        lambda _: fresh_repodata_snapshot,
+    )
+    test_app.state.solve_worker = SimpleNamespace(
+        solve_final_state=lambda *_: pytest.fail("cache hit must not solve")
+    )
+    limiter = anyio.CapacityLimiter(1)
+    test_app.state.solver_limiter = limiter
+
+    await limiter.acquire()
+    try:
+        with anyio.fail_after(0.1):
+            response = await client.post(
+                "/solver/v1",
+                content=msgspec.json.encode(presto_solver_request),
+                headers={"content-type": "application/json"},
+            )
+    finally:
+        limiter.release()
+
+    assert response.status_code == 200
+    assert response.json() == {"records": [], "neutered": []}
+
+
+@pytest.mark.anyio
+async def test_solver_v1_timeout_does_not_wait_for_cache_hit_snapshot(
+    client,
+    test_app,
+    monkeypatch,
+    presto_solver_request,
+    fresh_repodata_snapshot,
+    enabled_solver_endpoint,
+):
+    started = threading.Event()
+    release = threading.Event()
+    key = ResultCache.solver_key(presto_solver_request.cache_key())
+    test_app.state.result_cache.remember_memory(
+        key,
+        cache_module.StoredSolverResult(
+            response=PrestoSolveResponse(records=[], neutered=[]),
+            metadata_used=fresh_repodata_snapshot,
+        ),
+    )
+
+    def snapshot(_):
+        started.set()
+        release.wait(1)
+        return fresh_repodata_snapshot
+
+    monkeypatch.setattr(app_module, "SOLVE_TIMEOUT_S", 0.02)
+    monkeypatch.setattr(PrestoSolveRequest, "repodata_snapshot", snapshot)
+    test_app.state.solve_worker = SimpleNamespace(
+        solve_final_state=lambda *_: pytest.fail("cache hit must not solve")
+    )
+
+    before = time.monotonic()
+    try:
+        response = await client.post(
+            "/solver/v1",
+            content=msgspec.json.encode(presto_solver_request),
+            headers={"content-type": "application/json"},
+        )
+        elapsed = time.monotonic() - before
+    finally:
+        release.set()
+
+    assert started.is_set()
+    assert response.status_code == 504
+    assert elapsed < 0.5
+
+
+@pytest.mark.anyio
+async def test_solver_v1_timeout_includes_capacity_queue(
+    client,
+    test_app,
+    monkeypatch,
+    presto_solver_request,
+    fresh_repodata_snapshot,
+    enabled_solver_endpoint,
+):
+    calls = []
+    occupied = anyio.Event()
+    release = anyio.Event()
+    monkeypatch.setattr(app_module, "SOLVE_TIMEOUT_S", 0.05)
+    monkeypatch.setattr(
+        PrestoSolveRequest,
+        "repodata_snapshot",
+        lambda _: fresh_repodata_snapshot,
+    )
+    test_app.state.solve_worker = SimpleNamespace(
+        solve_final_state=lambda *_: calls.append("solve")
+    )
+    test_app.state.solver_limiter = anyio.CapacityLimiter(1)
+
+    async def occupy_limiter():
+        async with test_app.state.solver_limiter:
+            occupied.set()
+            await release.wait()
+
+    async with anyio.create_task_group() as tasks:
+        tasks.start_soon(occupy_limiter)
+        await occupied.wait()
+        response = await client.post(
+            "/solver/v1",
+            content=msgspec.json.encode(presto_solver_request),
+            headers={"content-type": "application/json"},
+        )
+        release.set()
+
+    assert response.status_code == 504
+    assert calls == []
+
+
+@pytest.mark.anyio
+async def test_solver_v1_timeout_does_not_wait_for_worker_cleanup(
+    client,
+    test_app,
+    monkeypatch,
+    presto_solver_request,
+    fresh_repodata_snapshot,
+    enabled_solver_endpoint,
+):
+    started = threading.Event()
+    release = threading.Event()
+
+    def solve(*_):
+        started.set()
+        release.wait(1)
+        raise TimeoutError
+
+    monkeypatch.setattr(app_module, "SOLVE_TIMEOUT_S", 0.02)
+    monkeypatch.setattr(
+        PrestoSolveRequest,
+        "repodata_snapshot",
+        lambda _: fresh_repodata_snapshot,
+    )
+    test_app.state.solve_worker = SimpleNamespace(solve_final_state=solve)
+    test_app.state.solver_limiter = anyio.CapacityLimiter(1)
+
+    before = time.monotonic()
+    response = await client.post(
+        "/solver/v1",
+        content=msgspec.json.encode(presto_solver_request),
+        headers={"content-type": "application/json"},
+    )
+    elapsed = time.monotonic() - before
+    release.set()
+
+    assert started.is_set()
+    assert response.status_code == 504
+    assert elapsed < 0.5
+
+
+@pytest.mark.anyio
+async def test_solver_v1_timeout_does_not_wait_for_publication_snapshot(
+    client,
+    test_app,
+    monkeypatch,
+    presto_solver_request,
+    presto_solver_outcome,
+    fresh_repodata_snapshot,
+    enabled_solver_endpoint,
+):
+    started = threading.Event()
+    release = threading.Event()
+
+    def snapshot(_):
+        started.set()
+        release.wait(1)
+        return fresh_repodata_snapshot
+
+    monkeypatch.setattr(app_module, "SOLVE_TIMEOUT_S", 0.02)
+    monkeypatch.setattr(PrestoSolveRequest, "repodata_snapshot", snapshot)
+    test_app.state.solve_worker = SimpleNamespace(
+        solve_final_state=lambda *_: presto_solver_outcome(
+            PrestoSolveResponse(records=[], neutered=[]),
+            fresh_repodata_snapshot,
+        )
+    )
+    test_app.state.solver_limiter = anyio.CapacityLimiter(1)
+
+    before = time.monotonic()
+    try:
+        response = await client.post(
+            "/solver/v1",
+            content=msgspec.json.encode(presto_solver_request),
+            headers={"content-type": "application/json"},
+        )
+        elapsed = time.monotonic() - before
+    finally:
+        release.set()
+
+    assert started.is_set()
+    assert response.status_code == 504
+    assert elapsed < 0.5
+
+
+@pytest.mark.anyio
+async def test_solver_v1_coalesces_concurrent_cache_misses(
+    client,
+    test_app,
+    monkeypatch,
+    presto_solver_request,
+    presto_solver_outcome,
+    fresh_repodata_snapshot,
+    enabled_solver_endpoint,
+):
+    calls = []
+    responses = []
+    solve_started = threading.Event()
+    release_solve = threading.Event()
+
+    def solve(data, timeout):
+        calls.append((data, timeout))
+        solve_started.set()
+        if not release_solve.wait(2):
+            pytest.fail("concurrent request did not reach the solver limiter")
+        return presto_solver_outcome(
+            PrestoSolveResponse(records=[], neutered=[]),
+            fresh_repodata_snapshot,
+        )
+
+    async def post_solve():
+        responses.append(
+            await client.post(
+                "/solver/v1",
+                content=msgspec.json.encode(presto_solver_request),
+                headers={"content-type": "application/json"},
+            )
+        )
+
+    monkeypatch.setattr(
+        PrestoSolveRequest,
+        "repodata_snapshot",
+        lambda _: fresh_repodata_snapshot,
+    )
+    test_app.state.solve_worker = SimpleNamespace(solve_final_state=solve)
+    test_app.state.solver_limiter = anyio.CapacityLimiter(1)
+
+    try:
+        async with anyio.create_task_group() as tasks:
+            tasks.start_soon(post_solve)
+            with anyio.fail_after(1):
+                while not solve_started.is_set():
+                    await anyio.lowlevel.checkpoint()
+            tasks.start_soon(post_solve)
+            with anyio.fail_after(1):
+                while test_app.state.solver_limiter.statistics().tasks_waiting == 0:
+                    await anyio.lowlevel.checkpoint()
+            release_solve.set()
+    finally:
+        release_solve.set()
+
+    assert [response.status_code for response in responses] == [200, 200]
+    assert [data for data, _ in calls] == [presto_solver_request]
+
+
+@pytest.mark.anyio
+async def test_solver_v1_returns_structured_conda_error(
+    client,
+    test_app,
+    monkeypatch,
+    presto_solver_request,
+    fresh_repodata_snapshot,
+    enabled_solver_endpoint,
+):
+    calls = []
+    error = PrestoSolveError.from_exception(
+        PackagesNotFoundError(["missing"], ["https://example.invalid"])
+    )
+
+    def solve(data, timeout):
+        calls.append((data, timeout))
+        return PrestoSolveOutcome(error, None, None)
+
+    monkeypatch.setattr(
+        PrestoSolveRequest,
+        "repodata_snapshot",
+        lambda _: fresh_repodata_snapshot,
+    )
+    test_app.state.solve_worker = SimpleNamespace(solve_final_state=solve)
+    test_app.state.solver_limiter = anyio.CapacityLimiter(1)
+
+    responses = [
+        await client.post(
+            "/solver/v1",
+            content=msgspec.json.encode(presto_solver_request),
+            headers={"content-type": "application/json"},
+        )
+        for _ in range(2)
+    ]
+
+    assert [response.status_code for response in responses] == [422, 422]
+    assert responses[0].json()["kind"] == "packages-not-found"
+    assert responses[0].json()["packages"] == ["missing"]
+    assert [data for data, _ in calls] == [presto_solver_request] * 2
+
+
+@pytest.mark.anyio
+async def test_solver_v1_bypasses_stale_cached_state(
+    client,
+    test_app,
+    monkeypatch,
+    presto_solver_request,
+    presto_solver_outcome,
+    enabled_solver_endpoint,
+):
+    stale = RepodataSnapshot(
+        (("https://conda.example/linux-64", "repodata.json", 10, 1),),
+        True,
+    )
+    refreshed = RepodataSnapshot(
+        (("https://conda.example/linux-64", "repodata.json", 20, 2),),
+        False,
+    )
+    stale_key = ResultCache.solver_key(presto_solver_request.cache_key())
+    test_app.state.result_cache.remember_memory(
+        stale_key,
+        cache_module.StoredSolverResult(
+            response=PrestoSolveResponse(records=[], neutered=[]),
+            metadata_used=RepodataSnapshot(stale.records, False),
+        ),
+    )
+    snapshots = iter([stale, refreshed])
+    calls = []
+
+    def solve(data, timeout):
+        calls.append((data, timeout))
+        return presto_solver_outcome(
+            PrestoSolveResponse(records=[{"name": "zlib"}], neutered=[]),
+            stale,
+            refreshed,
+        )
+
+    monkeypatch.setattr(
+        PrestoSolveRequest,
+        "repodata_snapshot",
+        lambda _: next(snapshots),
+    )
+    test_app.state.solve_worker = SimpleNamespace(solve_final_state=solve)
+    test_app.state.solver_limiter = anyio.CapacityLimiter(1)
+
+    response = await client.post(
+        "/solver/v1",
+        content=msgspec.json.encode(presto_solver_request),
+        headers={"content-type": "application/json"},
+    )
+
+    refreshed_key = ResultCache.solver_key(presto_solver_request.cache_key())
+    assert response.status_code == 200
+    assert response.json()["records"] == [{"name": "zlib"}]
+    assert [data for data, _ in calls] == [presto_solver_request]
+    assert refreshed_key in test_app.state.result_cache.entries
+
+
+@pytest.mark.anyio
+async def test_solver_v1_does_not_cache_transient_shard_fallback(
+    client,
+    test_app,
+    monkeypatch,
+    presto_solver_request,
+    presto_solver_outcome,
+    enabled_solver_endpoint,
+):
+    records = (
+        (
+            "https://conda.example/linux-64",
+            "repodata_shards.msgpack.zst",
+            10,
+            1,
+        ),
+    )
+    snapshots = iter(
+        [
+            RepodataSnapshot(records, True),
+            RepodataSnapshot(records, False),
+        ]
+    )
+
+    monkeypatch.setattr(
+        PrestoSolveRequest,
+        "repodata_snapshot",
+        lambda _: next(snapshots),
+    )
+    test_app.state.solve_worker = SimpleNamespace(
+        solve_final_state=lambda *_: presto_solver_outcome(
+            PrestoSolveResponse(
+                records=[{"name": "zlib"}],
+                neutered=[],
+            ),
+            RepodataSnapshot(records, True),
+            RepodataSnapshot(records, False),
+        )
+    )
+    test_app.state.solver_limiter = anyio.CapacityLimiter(1)
+
+    response = await client.post(
+        "/solver/v1",
+        content=msgspec.json.encode(presto_solver_request),
+        headers={"content-type": "application/json"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["records"] == [{"name": "zlib"}]
+    assert not test_app.state.result_cache.entries
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("failure_index", "expected_cached"),
+    [
+        pytest.param(0, True, id="pre-solve"),
+        pytest.param(2, False, id="post-solve"),
+    ],
+)
+async def test_solver_v1_returns_success_when_cache_snapshot_fails(
+    client,
+    test_app,
+    monkeypatch,
+    presto_solver_request,
+    presto_solver_outcome,
+    fresh_repodata_snapshot,
+    failure_index,
+    expected_cached,
+    enabled_solver_endpoint,
+):
+    previous = RepodataSnapshot(
+        (("https://conda.example/linux-64", "repodata.json", 5, 0),),
+        False,
+    )
+    key = ResultCache.solver_key(presto_solver_request.cache_key())
+    test_app.state.result_cache.remember_memory(
+        key,
+        cache_module.StoredSolverResult(
+            response=PrestoSolveResponse(records=[], neutered=[]),
+            metadata_used=previous,
+        ),
+    )
+    snapshots = iter(
+        [
+            RuntimeError("cache state unavailable")
+            if index == failure_index
+            else fresh_repodata_snapshot
+            for index in range(3)
+        ]
+    )
+
+    def snapshot(_):
+        result = next(snapshots)
+        if isinstance(result, Exception):
+            raise result
+        return result
+
+    monkeypatch.setattr(PrestoSolveRequest, "repodata_snapshot", snapshot)
+    test_app.state.solve_worker = SimpleNamespace(
+        solve_final_state=lambda *_: presto_solver_outcome(
+            PrestoSolveResponse(
+                records=[{"name": "zlib"}],
+                neutered=[],
+            ),
+            fresh_repodata_snapshot,
+        )
+    )
+    test_app.state.solver_limiter = anyio.CapacityLimiter(1)
+
+    response = await client.post(
+        "/solver/v1",
+        content=msgspec.json.encode(presto_solver_request),
+        headers={"content-type": "application/json"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["records"] == [{"name": "zlib"}]
+    stored = test_app.state.result_cache.entries[key]
+    assert stored.metadata_used == (
+        fresh_repodata_snapshot if expected_cached else previous
+    )
+
+
 def test_build_cors_config_disabled_without_origins():
     assert build_cors_config([]) is None
+
+
+def test_solver_v1_is_excluded_from_request_logging():
+    logging_config = app_module.middleware[0].kwargs["config"]
+
+    assert logging_config.exclude == r"^/solver/v1$"
 
 
 def test_build_cors_config_enabled_for_explicit_origins():
@@ -263,7 +896,7 @@ async def test_resolve_post_returns_content_addressed_location(client, monkeypat
     assert calls == 1
     assert first.headers["location"].startswith("/r/")
     assert second.headers["location"] == first.headers["location"]
-    assert first.headers["cache-control"] == app_module.RESULT_CACHE_CONTROL
+    assert first.headers["cache-control"] == cache_module.RESULT_CACHE_CONTROL
     assert second.json() == [{"platform": "linux-64", "packages": [], "error": None}]
 
 
@@ -290,7 +923,7 @@ async def test_result_permalink_returns_stored_body_and_media_type(client, monke
     assert cached.status_code == 200
     assert cached.content == resolved.content
     assert cached.headers["content-type"].startswith("application/json")
-    assert cached.headers["cache-control"] == app_module.RESULT_CACHE_CONTROL
+    assert cached.headers["cache-control"] == cache_module.RESULT_CACHE_CONTROL
 
 
 @pytest.mark.anyio
@@ -337,12 +970,12 @@ async def test_result_cache_evicts_oldest_result(client, test_app, monkeypatch):
 async def test_result_cache_uses_litestar_store_layer(monkeypatch):
     app = Litestar(
         route_handlers=[resolve_post, result_get],
-        stores={app_module.RESULT_CACHE_STORE_NAME: MemoryStore()},
+        stores={cache_module.RESULT_CACHE_STORE_NAME: MemoryStore()},
     )
     app.state.solver_limiter = None
     app.state.result_cache = ResultCache(
         max_size=256,
-        store_name=app_module.RESULT_CACHE_STORE_NAME,
+        store_name=cache_module.RESULT_CACHE_STORE_NAME,
     )
     calls = 0
 
@@ -367,7 +1000,7 @@ async def test_result_cache_uses_litestar_store_layer(monkeypatch):
         )
         app.state.result_cache = ResultCache(
             max_size=256,
-            store_name=app_module.RESULT_CACHE_STORE_NAME,
+            store_name=cache_module.RESULT_CACHE_STORE_NAME,
         )
         second = await store_client.post(
             "/resolve",
@@ -385,107 +1018,75 @@ async def test_result_cache_uses_litestar_store_layer(monkeypatch):
     assert cached.content == first.content
 
 
-def test_result_cache_stores_for_config_registers_file_store(tmp_path):
-    stores = ResultCache.stores_for_config(
-        "file",
-        str(tmp_path),
-        None,
-        "conda-presto",
-    )
-
-    assert isinstance(stores[app_module.RESULT_CACHE_STORE_NAME], FileStore)
-
-
-def test_result_cache_stores_for_config_registers_redis_store():
-    stores = ResultCache.stores_for_config(
-        "redis",
-        None,
-        "redis://localhost:6379/0",
-        "conda-presto-test",
-    )
-
-    assert isinstance(stores[app_module.RESULT_CACHE_STORE_NAME], RedisStore)
-
-
-@pytest.mark.parametrize(
-    "backend, error",
-    [
-        pytest.param("file", "CONDA_PRESTO_RESULT_CACHE_DIR", id="file-dir"),
-        pytest.param("sqlite", "Unsupported result cache backend", id="unknown"),
-    ],
-)
-def test_result_cache_stores_for_config_rejects_invalid_config(backend, error):
-    with pytest.raises(ValueError, match=error):
-        ResultCache.stores_for_config(backend, None, None, "conda-presto")
-
-
-@pytest.mark.parametrize(
-    "max_bytes, writes, expected_retained, expected_keys, expected_bytes",
-    [
-        pytest.param(
-            30,
-            (("first", 20), ("second", 20)),
-            (True, True),
-            ["second"],
-            30,
-            id="evict-oldest-by-bytes",
-        ),
-        pytest.param(
-            100,
-            (("same", 10), ("same", 20)),
-            (True, True),
-            ["same"],
-            30,
-            id="replace-existing-accounting",
-        ),
-        pytest.param(
-            10,
-            (("oversized", 20),),
-            (False,),
-            [],
-            0,
-            id="skip-oversized",
-        ),
-        pytest.param(
-            20,
-            (("same", 5), ("same", 20)),
-            (True, False),
-            [],
-            0,
-            id="drop-existing-oversized-replacement",
-        ),
-    ],
-)
-def test_result_cache_memory_limit(
-    max_bytes,
-    writes,
-    expected_retained,
-    expected_keys,
-    expected_bytes,
-):
-    cache = ResultCache(max_size=10, max_bytes=max_bytes)
-
-    retained = tuple(
-        cache.remember_memory(
-            key,
-            app_module.StoredResult(b"x" * body_size, "text/plain"),
-        )
-        for key, body_size in writes
-    )
-
-    assert retained == expected_retained
-    assert list(cache.entries) == expected_keys
-    assert cache.current_bytes == expected_bytes
-
-
 @pytest.mark.anyio
-async def test_result_cache_remember_omits_permalink_when_memory_rejects_result():
-    cache = ResultCache(max_size=10, max_bytes=10)
+async def test_solver_v1_uses_private_persistent_cache(
+    monkeypatch,
+    presto_solver_request,
+    presto_solver_outcome,
+    fresh_repodata_snapshot,
+    enabled_solver_endpoint,
+):
+    app = Litestar(
+        route_handlers=[solver_v1, result_get],
+        stores={cache_module.RESULT_CACHE_STORE_NAME: MemoryStore()},
+    )
+    app.state.solver_limiter = anyio.CapacityLimiter(1)
+    app.state.result_cache = ResultCache(
+        max_size=256,
+        store_name=cache_module.RESULT_CACHE_STORE_NAME,
+    )
+    calls = []
 
-    response = await cache.remember("oversized", b"x" * 20, "text/plain")
+    def solve(data, timeout):
+        calls.append((data, timeout))
+        return presto_solver_outcome(
+            PrestoSolveResponse(records=[], neutered=[]),
+            fresh_repodata_snapshot,
+        )
 
-    assert "Location" not in response.headers
-    assert not cache.entries
+    monkeypatch.setattr(
+        PrestoSolveRequest,
+        "repodata_snapshot",
+        lambda _: fresh_repodata_snapshot,
+    )
+    app.state.solve_worker = SimpleNamespace(solve_final_state=solve)
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app),
+        base_url="http://test",
+    ) as store_client:
+        first = await store_client.post(
+            "/solver/v1",
+            content=msgspec.json.encode(presto_solver_request),
+            headers={"content-type": "application/json"},
+        )
+        app.state.result_cache = ResultCache(
+            max_size=256,
+            store_name=cache_module.RESULT_CACHE_STORE_NAME,
+        )
+        second = await store_client.post(
+            "/solver/v1",
+            content=msgspec.json.encode(presto_solver_request),
+            headers={"content-type": "application/json"},
+        )
+        public = await store_client.get(f"/r/{presto_solver_request.cache_key()}")
+        digest = presto_solver_request.cache_key()
+        store = app.stores.get(cache_module.RESULT_CACHE_STORE_NAME)
+        private_entry = await store.get(ResultCache.solver_key(digest))
+        public_entry = await store.get(ResultCache.resolve_key(digest))
+
+    assert [data for data, _ in calls] == [presto_solver_request]
+    assert first.content == second.content
+    assert "location" not in second.headers
+    assert public.status_code == 404
+    assert private_entry is not None
+    assert public_entry is None
+    stored = msgspec.msgpack.decode(
+        private_entry,
+        type=cache_module.StoredSolverResult,
+    )
+    assert stored.response == PrestoSolveResponse(records=[], neutered=[])
+    assert stored.metadata_used == fresh_repodata_snapshot
 
 
 @pytest.mark.anyio
@@ -521,8 +1122,21 @@ async def test_spec_order_canonicalization_reuses_cached_result(client, monkeypa
 
 
 @pytest.mark.anyio
-async def test_stale_repodata_bypasses_cached_result(client, test_app, monkeypatch):
-    records = (("https://conda.example/linux-64", 10, 1),)
+@pytest.mark.parametrize(
+    ("source", "expected_location"),
+    [
+        pytest.param("repodata.json", True, id="json"),
+        pytest.param(
+            "repodata_shards.msgpack.zst",
+            False,
+            id="transient-shard-fallback",
+        ),
+    ],
+)
+async def test_stale_repodata_bypasses_cached_result(
+    client, test_app, monkeypatch, source, expected_location
+):
+    records = (("https://conda.example/linux-64", source, 10, 1),)
     stale = RepodataSnapshot(records, True)
     fresh = RepodataSnapshot(records, False)
     key = ResultCache.key_for(
@@ -533,8 +1147,8 @@ async def test_stale_repodata_bypasses_cached_result(client, test_app, monkeypat
         stale,
     )
     test_app.state.result_cache.remember_memory(
-        key,
-        app_module.StoredResult(b'[{"stale":true}]', "application/json"),
+        ResultCache.resolve_key(key),
+        cache_module.StoredResult(b'[{"stale":true}]', "application/json"),
     )
     snapshots = iter([stale, fresh])
     monkeypatch.setattr(
@@ -559,46 +1173,7 @@ async def test_stale_repodata_bypasses_cached_result(client, test_app, monkeypat
     assert response.status_code == 200
     assert response.json() == [{"platform": "linux-64", "packages": [], "error": None}]
     assert calls == ["solve"]
-
-
-def test_different_output_formats_produce_different_cache_keys():
-    default_key = ResultCache.key_for(["zlib"], ["conda-forge"], ["linux-64"], None)
-    explicit_key = ResultCache.key_for(
-        ["zlib"], ["conda-forge"], ["linux-64"], "explicit"
-    )
-
-    assert explicit_key != default_key
-
-
-@pytest.mark.parametrize("package_name", app_module.CACHE_DEPENDENCY_PACKAGES)
-def test_different_dependency_versions_produce_different_cache_keys(
-    monkeypatch,
-    package_name,
-):
-    def version_one(package):
-        if package == package_name:
-            return "one"
-        return "test"
-
-    def version_two(package):
-        if package == package_name:
-            return "two"
-        return "test"
-
-    monkeypatch.setattr(app_module, "pkg_version", version_one)
-    first = ResultCache.key_for(["zlib"], ["conda-forge"], ["linux-64"], None)
-    monkeypatch.setattr(app_module, "pkg_version", version_two)
-    second = ResultCache.key_for(["zlib"], ["conda-forge"], ["linux-64"], None)
-
-    assert second != first
-
-
-def test_virtual_package_overrides_produce_different_cache_keys(monkeypatch):
-    first = ResultCache.key_for(["zlib"], ["conda-forge"], ["linux-64"], None)
-    monkeypatch.setitem(app_module.VIRTUAL_PACKAGES["linux"], "glibc", "9.9")
-    second = ResultCache.key_for(["zlib"], ["conda-forge"], ["linux-64"], None)
-
-    assert second != first
+    assert ("location" in response.headers) is expected_location
 
 
 @pytest.mark.anyio
@@ -998,9 +1573,15 @@ async def test_resolve_uses_persistent_worker_when_configured(test_app):
         )
 
     assert response.status_code == 200
-    assert calls == [
-        (["conda-forge"], ["zlib"], ["linux-64"], None, 60),
-    ]
+    assert len(calls) == 1
+    channels, specs, platforms, format_name, deadline = calls[0]
+    assert (channels, specs, platforms, format_name) == (
+        ["conda-forge"],
+        ["zlib"],
+        ["linux-64"],
+        None,
+    )
+    assert deadline > time.monotonic()
 
 
 @pytest.mark.anyio
@@ -1013,6 +1594,7 @@ async def test_run_solve_passes_per_call_timeout(test_app):
 
     test_app.state.solve_worker = SimpleNamespace(solve=solve)
 
+    started = time.monotonic()
     response = await app_module.run_solve(
         SimpleNamespace(app=test_app),
         ["zlib"],
@@ -1022,9 +1604,15 @@ async def test_run_solve_passes_per_call_timeout(test_app):
     )
 
     assert response == (b"[]", "application/json")
-    assert calls == [
-        (["conda-forge"], ["zlib"], ["linux-64"], None, 0.25),
-    ]
+    assert len(calls) == 1
+    channels, specs, platforms, format_name, deadline = calls[0]
+    assert (channels, specs, platforms, format_name) == (
+        ["conda-forge"],
+        ["zlib"],
+        ["linux-64"],
+        None,
+    )
+    assert started < deadline <= time.monotonic() + 0.25
 
 
 @pytest.mark.anyio

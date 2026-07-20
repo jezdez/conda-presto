@@ -1,11 +1,12 @@
 """Tests for conda_presto.plugin registration."""
+
 from __future__ import annotations
 
 import argparse
 
 import pytest
 
-from conda_presto.plugin import conda_subcommands
+from conda_presto.plugin import conda_solvers, conda_subcommands
 
 
 @pytest.fixture()
@@ -25,6 +26,14 @@ def test_plugin_yields_subcommand():
     assert sc.summary
     assert callable(sc.action)
     assert callable(sc.configure_parser)
+
+
+def test_plugin_yields_presto_solver():
+    solvers = list(conda_solvers())
+
+    assert len(solvers) == 1
+    assert solvers[0].name == "presto"
+    assert solvers[0].backend.__name__ == "PrestoSolver"
 
 
 @pytest.mark.parametrize(

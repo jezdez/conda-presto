@@ -110,6 +110,18 @@ def env_list(name: str, default: str) -> list[str]:
     ]
 
 
+def env_bool(name: str, default: bool = False) -> bool:
+    """Parse a boolean env var, rejecting ambiguous values."""
+    raw = os.environ.get(name)
+    if raw is None or raw == "":
+        return default
+    if raw.lower() in {"1", "true", "yes"}:
+        return True
+    if raw.lower() in {"0", "false", "no"}:
+        return False
+    raise ValueError(f"Invalid boolean for {name}: {raw!r}")
+
+
 DEFAULT_CHANNELS = env_list("CONDA_PRESTO_CHANNELS", "conda-forge")
 
 CHANNEL_ALLOWLIST = env_list(
@@ -134,11 +146,7 @@ WIN_VERSION = os.environ.get("CONDA_PRESTO_WIN_VERSION", "0")
 
 DEFAULT_HOST = os.environ.get("CONDA_PRESTO_HOST", "127.0.0.1")
 DEFAULT_PORT = env_int("CONDA_PRESTO_PORT", 8000)
-PERSISTENT_WORKER = os.environ.get("CONDA_PRESTO_PERSISTENT_WORKER", "").lower() in {
-    "1",
-    "true",
-    "yes",
-}
+PERSISTENT_WORKER = env_bool("CONDA_PRESTO_PERSISTENT_WORKER")
 RESULT_CACHE_SIZE = env_int("CONDA_PRESTO_RESULT_CACHE_SIZE", 256)
 RESULT_CACHE_MAX_MEMORY_MB = env_int(
     "CONDA_PRESTO_RESULT_CACHE_MAX_MEMORY_MB",

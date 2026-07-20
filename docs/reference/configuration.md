@@ -216,11 +216,16 @@ does not start conda-broker. The server replaces a failed worker itself.
 See the [broker-managed local service tutorial](../tutorials/broker-service.md)
 for the start, wait, and endpoint commands.
 
+The Docker image leaves the internal Presto solver endpoint disabled and is not
+a `conda --solver=presto` target.
+
 ### Result cache
 
-Successful `/resolve` responses are stored in a content-addressed
-in-process LRU cache and returned with a `Location: /r/<sha256>`
-header. Configure the maximum number of retained responses with
+Successful `/resolve` responses and internal `/solver/v1` final states share an
+in-process LRU cache. `/resolve` responses use content-addressed entries and are
+returned with a `Location: /r/<sha256>` header. Solver responses use private
+`solver-v1:` entries and are not exposed through that endpoint. Configure
+the total number of retained responses with
 `CONDA_PRESTO_RESULT_CACHE_SIZE` (default 256) and the maximum bytes
 held in memory with `CONDA_PRESTO_RESULT_CACHE_MAX_MEMORY_MB`
 (default 64, `0` disables the byte cap).
@@ -239,17 +244,15 @@ export CONDA_PRESTO_RESULT_CACHE_BACKEND=redis
 export CONDA_PRESTO_RESULT_CACHE_REDIS_URL=redis://localhost:6379/0
 ```
 
-The server still checks the in-process LRU first, then looks up the
-same content-addressed key in the persistent store before running the
-solver. Persistent entries survive server restarts and are stored under
-the same CAS key used by `/r/<sha256>`. Redis support is included in
-the published Docker server image. Other Python environments require
-the `redis` optional dependency.
+The server still checks the in-process LRU first, then looks up the corresponding
+entry in the persistent store before running the solver. Persistent entries
+survive server restarts. Redis support is included in the published Docker
+server image. Other Python environments require the `redis` optional dependency.
 
-The key includes the normalized specs, ordered channels, target
-platforms, output format, conda-presto and solver versions, and local
-repodata cache file markers. A cached response is bypassed when conda considers
-those files stale, and changed repodata produces a new key after refresh.
+The `/resolve` key includes the normalized specs, ordered channels, target
+platforms, output format, conda-presto and solver versions, and local repodata
+cache-file markers. See the [Presto solver reference](solver-backend.md) for the
+internal solver cache key and invalidation rules.
 
 ### Concurrency tuning
 

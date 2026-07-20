@@ -9,9 +9,12 @@ import time
 from contextlib import suppress
 from typing import Any
 
+from conda.exceptions import CondaError
+
 from .exceptions import UnknownFormatError
 from .exporter import OutputFormat
 from .resolve import shutdown_process_pool, solve, solve_environments, warmup
+from .solver import PrestoSolveError, PrestoSolveOutcome, PrestoSolveRequest
 
 log = logging.getLogger(__name__)
 
@@ -122,20 +125,35 @@ class PersistentSolveWorker:
         specs: list[str],
         platforms: list[str] | None,
         format_name: str | None,
-        timeout_s: float,
+        deadline: float,
     ) -> list | tuple[str, str]:
-        """Return a solve result, replacing the worker after a timeout."""
+        """Return a solve result before the absolute deadline."""
+        return self.execute((channels, specs, platforms, format_name), deadline)
+
+    def solve_final_state(
+        self,
+        request: PrestoSolveRequest,
+        deadline: float,
+    ) -> PrestoSolveOutcome:
+        """Run an internal solver request in the persistent worker."""
+        return self.execute(("solver", request), deadline)
+
+    def execute(self, request: object, deadline: float) -> object:
+        """Exchange one request with the persistent worker process."""
         with self.operation_lock:
+            if deadline <= time.monotonic():
+                raise TimeoutError
             if self.connection is None or not self.ready:
                 self.recover_if_stopped()
                 raise RuntimeError("Persistent solve worker is unavailable")
 
             try:
-                self.connection.send((channels, specs, platforms, format_name))
+                self.connection.send(request)
             except (BrokenPipeError, EOFError, OSError) as exc:
                 self.stop(restart=True)
                 raise RuntimeError("Persistent solve worker exited") from exc
-            if not self.connection.poll(timeout_s):
+            timeout_s = deadline - time.monotonic()
+            if timeout_s <= 0 or not self.connection.poll(timeout_s):
                 self.stop(restart=True)
                 raise TimeoutError
             try:
@@ -245,14 +263,24 @@ def persistent_solve_worker_entrypoint(
             if request is None:
                 break
 
-            channels, specs, platforms, format_name = request
             try:
-                if format_name is None:
-                    result = solve(channels, specs, platforms)
+                if isinstance(request, tuple) and request[0] == "solver":
+                    try:
+                        result = request[1].solve()
+                    except CondaError as exc:
+                        result = PrestoSolveOutcome(
+                            result=PrestoSolveError.from_exception(exc),
+                            metadata_before=None,
+                            metadata_used=None,
+                        )
                 else:
-                    result = OutputFormat.named(format_name).render(
-                        solve_environments(channels, specs, platforms)
-                    )
+                    channels, specs, platforms, format_name = request
+                    if format_name is None:
+                        result = solve(channels, specs, platforms)
+                    else:
+                        result = OutputFormat.named(format_name).render(
+                            solve_environments(channels, specs, platforms)
+                        )
             except UnknownFormatError as exc:
                 connection.send(
                     (

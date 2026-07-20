@@ -1,0 +1,69 @@
+name: Presto solver
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/solver-smoke.yml
+      - conda_presto/app.py
+      - conda_presto/broker.py
+      - conda_presto/cache.py
+      - conda_presto/config.py
+      - conda_presto/plugin.py
+      - conda_presto/resolve.py
+      - conda_presto/solver.py
+      - pyproject.toml
+      - pixi.lock
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: solver-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  smoke:
+    name: Broker-backed conda commands
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      CONDA_BROKER_RUNTIME_DIR: /tmp/conda-broker-runtime-${{ github.run_id }}
+      CONDA_BROKER_LOG_DIR: /tmp/conda-broker-logs-${{ github.run_id }}
+      CONDA_PKGS_DIRS: /tmp/conda-pkgs-${{ github.run_id }}
+      CONDA_PRESTO_PLATFORMS: linux-64
+      CONDA_SUBDIR: linux-64
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      - uses: prefix-dev/setup-pixi@a09b6247153796b190642a2b53fac4241043cf6f # v0.10.0
+        with:
+          environments: prod
+          cache: true
+      - name: Exercise broker-backed conda commands
+        run: |
+          pixi run -e prod bash -euo pipefail <<'BASH'
+            trap 'conda broker stop >/dev/null 2>&1 || true' EXIT
+            conda broker start conda-presto.server --timeout 30
+            conda broker wait conda-presto.server --timeout 180
+
+            prefix="$RUNNER_TEMP/presto-prefix"
+            conda create -y --solver=presto -p "$prefix" -c conda-forge 'zlib=1.2.13' --json > create.json
+            jq -e '.success == true and any(.actions.LINK[]; .name == "zlib" and .version == "1.2.13")' create.json
+            conda install -y --solver=presto -p "$prefix" -c conda-forge bzip2 --json > install.json
+            jq -e '.success == true and any(.actions.LINK[]; .name == "bzip2")' install.json
+            conda update -y --solver=presto -p "$prefix" -c conda-forge zlib --json > update.json
+            jq -e '.success == true and any(.actions.UNLINK[]; .name == "zlib" and .version == "1.2.13") and any(.actions.LINK[]; .name == "zlib" and .version != "1.2.13")' update.json
+            conda remove -y --solver=presto -p "$prefix" bzip2 --json > remove.json
+            jq -e '.success == true and any(.actions.UNLINK[]; .name == "bzip2")' remove.json
+            conda install --dry-run --solver=presto -p "$PWD/.pixi/envs/prod" -c conda-forge zlib --json > realistic-prefix.json
+            jq -e '.success == true' realistic-prefix.json
+            if conda create --dry-run --solver=presto -p "$RUNNER_TEMP/presto-missing" -c conda-forge definitely-not-a-real-package-xyz --json > missing.json; then
+              exit 1
+            fi
+            jq -e '.exception_name | startswith("PackagesNotFound")' missing.json
+          BASH
+      - name: Show service log
+        if: failure()
+        run: pixi run -e prod conda broker logs conda-presto.server --lines 200

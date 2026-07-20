@@ -73,17 +73,13 @@ Performance design:
 
 from __future__ import annotations
 
-import hashlib
-import json
 import logging
 import multiprocessing
 import os
 import time
-from collections import OrderedDict
 from collections.abc import Iterator
 from dataclasses import dataclass, field, replace
 from importlib.metadata import version as pkg_version
-from pathlib import Path
 from typing import Annotated, Literal
 
 import anyio
@@ -95,6 +91,9 @@ from conda.models.match_spec import MatchSpec
 from litestar import Litestar, Request, get, post
 from litestar.config.compression import CompressionConfig
 from litestar.config.cors import CORSConfig
+from litestar.connection import ASGIConnection
+from litestar.exceptions import NotFoundException
+from litestar.handlers import BaseRouteHandler
 from litestar.logging import LoggingConfig
 from litestar.middleware.logging import LoggingMiddlewareConfig
 from litestar.middleware.rate_limit import RateLimitConfig
@@ -109,9 +108,8 @@ from litestar.status_codes import (
     HTTP_503_SERVICE_UNAVAILABLE,
     HTTP_504_GATEWAY_TIMEOUT,
 )
-from litestar.stores.base import Store
-from litestar.stores.file import FileStore
 
+from .cache import RESULT_CACHE_STORE_NAME, ResultCache, SolverResultService
 from .config import (
     CHANNEL_ALLOWLIST,
     CORS_ORIGINS,
@@ -143,7 +141,6 @@ from .inputs import ParsedInputFile
 from .preflight import PreflightResult
 from .resolve import (
     NATIVE_SUBDIR,
-    VIRTUAL_PACKAGES,
     ExplainResult,
     PlatformDiff,
     RepodataSnapshot,
@@ -152,6 +149,11 @@ from .resolve import (
     solve,
     solve_environments,
     warmup,
+)
+from .solver import (
+    PrestoSolveError,
+    PrestoSolverClient,
+    PrestoSolveRequest,
 )
 from .worker import PersistentSolveWorker
 
@@ -167,18 +169,6 @@ RAW_CONTENT_TYPE_EXTENSIONS: dict[str, str] = {
     "text/toml": ".toml",
     "text/plain": ".txt",
 }
-
-RESULT_CACHE_CONTROL = "public, max-age=86400, immutable"
-DEFAULT_RESOLVE_FORMAT = "conda-presto-json-v1"
-CACHE_ENVELOPE_VERSION = 2
-RESULT_CACHE_STORE_NAME = "result_cache"
-RESULT_CACHE_STORE_PREFIX = "resolve-v1:"
-CACHE_DEPENDENCY_PACKAGES = (
-    "conda-presto",
-    "conda",
-    "conda-rattler-solver",
-    "conda-lockfiles",
-)
 
 
 class ErrorResponse(msgspec.Struct, omit_defaults=True):
@@ -644,188 +634,6 @@ class RepairSearch:
         return self.result(diagnosis, "exhausted")
 
 
-class StoredResult(msgspec.Struct):
-    body: bytes
-    media_type: str
-
-    @property
-    def memory_size(self) -> int:
-        return len(self.body) + len(self.media_type)
-
-
-@dataclass
-class ResultCache:
-    max_size: int
-    max_bytes: int = 0
-    store_name: str | None = None
-    entries: OrderedDict[str, StoredResult] = field(default_factory=OrderedDict)
-    current_bytes: int = 0
-
-    @staticmethod
-    def key_for(
-        specs: list[str],
-        channels: list[str],
-        platforms: list[str] | None,
-        format_name: str | None,
-        repodata: RepodataSnapshot | None = None,
-    ) -> str:
-        """Return the SHA-256 key for a canonical resolve request."""
-        resolved_platforms = list(platforms or [NATIVE_SUBDIR])
-        versions: dict[str, str] = {}
-        for package in CACHE_DEPENDENCY_PACKAGES:
-            try:
-                versions[package] = pkg_version(package)
-            except Exception:
-                versions[package] = "unknown"
-
-        if repodata is None:
-            repodata = RepodataSnapshot.capture(channels, resolved_platforms)
-
-        envelope = {
-            "version": CACHE_ENVELOPE_VERSION,
-            "specs": sorted(specs),
-            "channels": list(channels),
-            "platforms": resolved_platforms,
-            "format": format_name or DEFAULT_RESOLVE_FORMAT,
-            "dependency_versions": versions,
-            "virtual_packages": VIRTUAL_PACKAGES,
-            "repodata": repodata.records,
-        }
-        body = json.dumps(
-            envelope,
-            sort_keys=True,
-            separators=(",", ":"),
-        ).encode()
-        return hashlib.sha256(body).hexdigest()
-
-    def store_from(self, request: Request) -> Store | None:
-        """Return the configured persistent store, if enabled."""
-        if self.store_name is None:
-            return None
-        return request.app.stores.get(self.store_name)
-
-    @staticmethod
-    def store_key(key: str) -> str:
-        return f"{RESULT_CACHE_STORE_PREFIX}{key}"
-
-    @classmethod
-    def stores_for_config(
-        cls,
-        backend: str,
-        cache_dir: str | None,
-        redis_url: str | None,
-        redis_namespace: str,
-    ) -> dict[str, Store]:
-        if backend == "memory":
-            return {}
-        if backend == "file":
-            if cache_dir is None:
-                raise ValueError(
-                    "CONDA_PRESTO_RESULT_CACHE_DIR is required "
-                    "when CONDA_PRESTO_RESULT_CACHE_BACKEND=file"
-                )
-            return {
-                RESULT_CACHE_STORE_NAME: FileStore(
-                    Path(cache_dir),
-                    create_directories=True,
-                )
-            }
-        if backend == "redis":
-            try:
-                from litestar.stores.redis import RedisStore
-            except ModuleNotFoundError as exc:
-                raise RuntimeError(
-                    "Redis result cache requires the redis-py package. "
-                    "Install conda-presto with the redis extra or use "
-                    "the Pixi redis environment."
-                ) from exc
-            return {
-                RESULT_CACHE_STORE_NAME: RedisStore.with_client(
-                    url=redis_url or "redis://localhost:6379/0",
-                    namespace=redis_namespace,
-                )
-            }
-        raise ValueError(f"Unsupported result cache backend: {backend}")
-
-    def remember_memory(self, key: str, stored: StoredResult) -> bool:
-        if self.max_bytes > 0 and stored.memory_size > self.max_bytes:
-            if previous := self.entries.pop(key, None):
-                self.current_bytes -= previous.memory_size
-            return False
-
-        if previous := self.entries.get(key):
-            self.current_bytes -= previous.memory_size
-
-        self.entries[key] = stored
-        self.current_bytes += stored.memory_size
-        self.entries.move_to_end(key)
-        while len(self.entries) > self.max_size or (
-            self.max_bytes > 0 and self.current_bytes > self.max_bytes
-        ):
-            _, evicted = self.entries.popitem(last=False)
-            self.current_bytes -= evicted.memory_size
-        return key in self.entries
-
-    async def get_response(
-        self, key: str, store: Store | None = None
-    ) -> Response | None:
-        stored = self.entries.get(key)
-        if stored is not None:
-            self.entries.move_to_end(key)
-            return self.response_for(key, stored)
-
-        if store is None:
-            return None
-
-        try:
-            stored_payload = await store.get(self.store_key(key))
-        except Exception:
-            log.warning("Persistent result cache read failed", exc_info=True)
-            return None
-        if stored_payload is None:
-            return None
-
-        try:
-            stored = msgspec.msgpack.decode(stored_payload, type=StoredResult)
-        except (msgspec.DecodeError, msgspec.ValidationError):
-            log.warning("Ignoring corrupt persistent result cache entry for %s", key)
-            await store.delete(self.store_key(key))
-            return None
-
-        self.remember_memory(key, stored)
-        return self.response_for(key, stored)
-
-    async def remember(
-        self,
-        key: str,
-        body: bytes,
-        media_type: str,
-        store: Store | None = None,
-    ) -> Response:
-        stored = StoredResult(body=body, media_type=media_type)
-        retained = self.remember_memory(key, stored)
-        if store is not None:
-            try:
-                await store.set(self.store_key(key), msgspec.msgpack.encode(stored))
-                retained = True
-            except Exception:
-                log.warning("Persistent result cache write failed", exc_info=True)
-        if retained:
-            return self.response_for(key, stored)
-        return Response(stored.body, media_type=stored.media_type)
-
-    @staticmethod
-    def response_for(key: str, stored: StoredResult) -> Response:
-        return Response(
-            stored.body,
-            media_type=stored.media_type,
-            headers={
-                "Location": f"/r/{key}",
-                "Cache-Control": RESULT_CACHE_CONTROL,
-            },
-        )
-
-
 def validate_caps(
     specs: list[str],
     channels: list[str],
@@ -970,7 +778,7 @@ async def run_solve(
                     specs,
                     platforms,
                     format_name,
-                    timeout_s,
+                    deadline,
                     limiter=limiter,
                     abandon_on_cancel=True,
                 )
@@ -1145,9 +953,13 @@ async def run_cached_solve(
     cache: ResultCache = request.app.state.result_cache
     store = cache.store_from(request)
     resolved_platforms = list(platforms or [NATIVE_SUBDIR])
-    repodata = RepodataSnapshot.capture(channels, resolved_platforms)
-    key = cache.key_for(specs, channels, platforms, format_name, repodata)
-    if not repodata.stale and (cached_response := await cache.get_response(key, store)):
+    initial_repodata = RepodataSnapshot.capture(channels, resolved_platforms)
+    digest = cache.key_for(specs, channels, platforms, format_name, initial_repodata)
+    key = cache.resolve_key(digest)
+    location = f"/r/{digest}"
+    if not initial_repodata.stale and (
+        cached_response := await cache.get_response(key, store, location=location)
+    ):
         return cached_response
 
     payload = await run_solve(
@@ -1158,9 +970,18 @@ async def run_cached_solve(
 
     # Recompute after solving so refreshed repodata and the worker's index agree.
     repodata = RepodataSnapshot.capture(channels, resolved_platforms)
-    key = cache.key_for(specs, channels, platforms, format_name, repodata)
+    digest = cache.key_for(specs, channels, platforms, format_name, repodata)
+    key = cache.resolve_key(digest)
     body, media_type = payload
-    return await cache.remember(key, body, media_type, store)
+    if not repodata.is_cacheable_after(initial_repodata):
+        return Response(body, media_type=media_type)
+    return await cache.remember(
+        key,
+        body,
+        media_type,
+        store,
+        location=f"/r/{digest}",
+    )
 
 
 def transcode_rejection(
@@ -1754,7 +1575,11 @@ async def transcode_post(
 async def result_get(request: Request, key: FromPath[str]) -> Response:
     """Return a stored content-addressed solve result."""
     cache: ResultCache = request.app.state.result_cache
-    cached_response = await cache.get_response(key, cache.store_from(request))
+    cached_response = await cache.get_response(
+        cache.resolve_key(key),
+        cache.store_from(request),
+        location=f"/r/{key}",
+    )
     if cached_response is None:
         return Response(
             {"error": "result not in cache; re-POST to recompute"},
@@ -1848,6 +1673,74 @@ async def health(request: Request) -> Response[HealthResponse]:
     return Response(HealthResponse(status="ok"))
 
 
+def require_solver_service(
+    connection: ASGIConnection,
+    _route_handler: BaseRouteHandler,
+) -> None:
+    """Restrict the private solver route before Litestar parses its body."""
+    client = connection.client
+    if (
+        os.environ.get("CONDA_BROKER_SERVICE_NAME") != PrestoSolverClient.service_name
+        or client is None
+        or not PrestoSolverClient.is_loopback(client.host)
+    ):
+        raise NotFoundException
+
+
+@post(
+    "/solver/v1",
+    status_code=200,
+    include_in_schema=False,
+    guards=[require_solver_service],
+)
+async def solver_v1(
+    request: Request,
+    data: PrestoSolveRequest,
+) -> Response:
+    """Run the broker-only internal Presto solver protocol."""
+    if cap_error := validate_caps(
+        data.specs_to_add + data.specs_to_remove,
+        data.channels,
+        data.subdirs,
+        validate_channel_allowlist=False,
+    ):
+        return cap_error
+    worker = getattr(request.app.state, "solve_worker", None)
+    if worker is None:
+        return Response(
+            ErrorResponse(error="Internal Presto solver worker is unavailable"),
+            status_code=HTTP_503_SERVICE_UNAVAILABLE,
+        )
+    cache: ResultCache = request.app.state.result_cache
+    service = SolverResultService(cache, cache.store_from(request))
+    try:
+        deadline = time.monotonic() + SOLVE_TIMEOUT_S
+        with anyio.fail_after(SOLVE_TIMEOUT_S):
+            result = await service.probe(data)
+            if result is None:
+                async with request.app.state.solver_limiter:
+                    result = await service.resolve(data, worker, deadline)
+    except TimeoutError:
+        return Response(
+            ErrorResponse(error=f"Solve exceeded {SOLVE_TIMEOUT_S}s timeout"),
+            status_code=HTTP_504_GATEWAY_TIMEOUT,
+        )
+    except CondaError as exc:
+        return Response(
+            ErrorResponse(error=str(exc)),
+            status_code=HTTP_422_UNPROCESSABLE_ENTITY,
+        )
+    except Exception:
+        log.exception("Internal Presto solver failed")
+        return Response(
+            ErrorResponse(error="Internal solver error"),
+            status_code=HTTP_500_INTERNAL_SERVER_ERROR,
+        )
+    if isinstance(result.result, PrestoSolveError):
+        return Response(result.result, status_code=HTTP_422_UNPROCESSABLE_ENTITY)
+    return Response(result.result)
+
+
 async def on_startup(app: Litestar) -> None:
     """Initialize solver limiter and pre-warm repodata caches."""
     app.state.solver_limiter = anyio.CapacityLimiter(MAX_CONCURRENCY)
@@ -1902,7 +1795,7 @@ def build_cors_config(origins: list[str]) -> CORSConfig | None:
     return CORSConfig(allow_origins=origins)
 
 
-middleware = [LoggingMiddlewareConfig().middleware]
+middleware = [LoggingMiddlewareConfig(exclude=r"^/solver/v1$").middleware]
 if RATE_LIMIT:
     middleware.append(RateLimitConfig(rate_limit=("minute", RATE_LIMIT)).middleware)
 
@@ -1922,6 +1815,7 @@ app = Litestar(
         version,
         parse,
         health,
+        solver_v1,
     ],
     openapi_config=OpenAPIConfig(
         title="conda-presto",

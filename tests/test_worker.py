@@ -7,10 +7,12 @@ import time
 from types import SimpleNamespace
 
 import pytest
+from conda.exceptions import PackagesNotFoundError
 from conda.models.environment import Environment
 
 import conda_presto.worker as worker_module
 from conda_presto.resolve import SolveResult
+from conda_presto.solver import PrestoSolveError, PrestoSolveOutcome
 
 
 @pytest.fixture()
@@ -126,7 +128,16 @@ def test_persistent_solve_worker_returns_result(persistent_solve_worker):
     worker, calls = persistent_solve_worker([("ready", None), ("ok", [])])
 
     assert worker.ready
-    assert worker.solve(["conda-forge"], ["zlib"], ["linux-64"], None, 60) == []
+    assert (
+        worker.solve(
+            ["conda-forge"],
+            ["zlib"],
+            ["linux-64"],
+            None,
+            time.monotonic() + 60,
+        )
+        == []
+    )
 
     worker.stop()
     assert not worker.ready
@@ -138,6 +149,51 @@ def test_persistent_solve_worker_returns_result(persistent_solve_worker):
         ("parent", "close"),
         ("process", "join:5"),
     ]
+
+
+def test_persistent_solve_worker_passes_absolute_deadline(monkeypatch):
+    calls = []
+    worker = worker_module.PersistentSolveWorker([], [])
+    monkeypatch.setattr(worker_module.time, "monotonic", lambda: 10.0)
+    monkeypatch.setattr(
+        worker,
+        "execute",
+        lambda request, deadline: calls.append((request, deadline)) or "result",
+    )
+
+    result = worker.solve_final_state("request", 12.5)
+
+    assert result == "result"
+    assert calls == [(("solver", "request"), 12.5)]
+
+
+def test_persistent_solve_worker_deadline_includes_operation_queue():
+    sent = []
+    worker = worker_module.PersistentSolveWorker([], [])
+    worker.connection = SimpleNamespace(send=sent.append)
+    worker.process = SimpleNamespace(is_alive=lambda: True)
+    worker.is_ready = True
+    started = threading.Event()
+    errors = []
+
+    def solve() -> None:
+        started.set()
+        try:
+            worker.solve_final_state("request", time.monotonic() + 0.01)
+        except Exception as exc:
+            errors.append(exc)
+
+    worker.operation_lock.acquire()
+    thread = threading.Thread(target=solve)
+    thread.start()
+    started.wait()
+    time.sleep(0.02)
+    worker.operation_lock.release()
+    thread.join()
+
+    assert len(errors) == 1
+    assert isinstance(errors[0], TimeoutError)
+    assert sent == []
 
 
 def test_persistent_solve_worker_start_is_idempotent(persistent_solve_worker):
@@ -241,14 +297,26 @@ def test_persistent_solve_worker_rejects_unavailable_worker(persistent_solve_wor
     worker, _ = persistent_solve_worker([], start=False)
 
     with pytest.raises(RuntimeError, match="unavailable"):
-        worker.solve(["conda-forge"], ["zlib"], ["linux-64"], None, 60)
+        worker.solve(
+            ["conda-forge"],
+            ["zlib"],
+            ["linux-64"],
+            None,
+            time.monotonic() + 60,
+        )
 
 
 def test_persistent_solve_worker_handles_broken_request_pipe(persistent_solve_worker):
     worker, _ = persistent_solve_worker([("ready", None)], send_error_on="request")
 
     with pytest.raises(RuntimeError, match="exited"):
-        worker.solve(["conda-forge"], ["zlib"], ["linux-64"], None, 60)
+        worker.solve(
+            ["conda-forge"],
+            ["zlib"],
+            ["linux-64"],
+            None,
+            time.monotonic() + 60,
+        )
 
     assert worker.connection is None
     assert worker.process is None
@@ -258,7 +326,13 @@ def test_persistent_solve_worker_handles_closed_response_pipe(persistent_solve_w
     worker, _ = persistent_solve_worker([("ready", None), EOFError()])
 
     with pytest.raises(RuntimeError, match="exited"):
-        worker.solve(["conda-forge"], ["zlib"], ["linux-64"], None, 60)
+        worker.solve(
+            ["conda-forge"],
+            ["zlib"],
+            ["linux-64"],
+            None,
+            time.monotonic() + 60,
+        )
 
     assert worker.connection is None
     assert worker.process is None
@@ -329,14 +403,26 @@ def test_persistent_solve_worker_raises_worker_error(
     worker, _ = persistent_solve_worker([("ready", None), message])
 
     with pytest.raises(error):
-        worker.solve(["conda-forge"], ["zlib"], ["linux-64"], None, 60)
+        worker.solve(
+            ["conda-forge"],
+            ["zlib"],
+            ["linux-64"],
+            None,
+            time.monotonic() + 60,
+        )
 
 
 def test_persistent_solve_worker_kills_timed_out_process(persistent_solve_worker):
     worker, calls = persistent_solve_worker([("ready", None)], poll=False)
 
     with pytest.raises(TimeoutError):
-        worker.solve(["conda-forge"], ["zlib"], ["linux-64"], None, 60)
+        worker.solve(
+            ["conda-forge"],
+            ["zlib"],
+            ["linux-64"],
+            None,
+            time.monotonic() + 60,
+        )
 
     assert worker.connection is None
     assert worker.process is None
@@ -354,7 +440,13 @@ def test_persistent_solve_worker_restarts_after_timeout(persistent_solve_worker)
     )
 
     with pytest.raises(TimeoutError):
-        worker.solve(["conda-forge"], ["zlib"], ["linux-64"], None, 60)
+        worker.solve(
+            ["conda-forge"],
+            ["zlib"],
+            ["linux-64"],
+            None,
+            time.monotonic() + 60,
+        )
 
     assert not worker.ready
     assert len(worker.restart_targets) == 1
@@ -380,12 +472,24 @@ def test_persistent_solve_worker_retries_failed_recovery(persistent_solve_worker
     worker.process.terminate()
 
     with pytest.raises(RuntimeError, match="unavailable"):
-        worker.solve(["conda-forge"], ["zlib"], ["linux-64"], None, 60)
+        worker.solve(
+            ["conda-forge"],
+            ["zlib"],
+            ["linux-64"],
+            None,
+            time.monotonic() + 60,
+        )
     worker.restart_targets[0]()
     assert not worker.ready
 
     with pytest.raises(RuntimeError, match="unavailable"):
-        worker.solve(["conda-forge"], ["zlib"], ["linux-64"], None, 60)
+        worker.solve(
+            ["conda-forge"],
+            ["zlib"],
+            ["linux-64"],
+            None,
+            time.monotonic() + 60,
+        )
     worker.restart_targets[1]()
     assert worker.ready
 
@@ -398,7 +502,13 @@ def test_persistent_solve_worker_leaves_recovery_to_broker(persistent_solve_work
     worker.process.terminate()
 
     with pytest.raises(RuntimeError, match="unavailable"):
-        worker.solve(["conda-forge"], ["zlib"], ["linux-64"], None, 60)
+        worker.solve(
+            ["conda-forge"],
+            ["zlib"],
+            ["linux-64"],
+            None,
+            time.monotonic() + 60,
+        )
 
     assert worker.restart_targets == []
 
@@ -562,6 +672,33 @@ def test_persistent_solve_worker_entrypoint_handles_exporters(monkeypatch):
     )
 
     assert sent == [("ready", None), ("ok", ("output", "text/plain")), "closed"]
+
+
+def test_persistent_solve_worker_entrypoint_serializes_conda_error(monkeypatch):
+    sent = []
+    error = PackagesNotFoundError(["missing"], ["https://example.invalid"])
+    solve_request = SimpleNamespace(solve=lambda: (_ for _ in ()).throw(error))
+    requests = iter([("solver", solve_request), None])
+    connection = SimpleNamespace(
+        recv=lambda: next(requests),
+        send=sent.append,
+        close=lambda: sent.append("closed"),
+    )
+    monkeypatch.setattr(worker_module, "warmup", lambda *_: None)
+    monkeypatch.setattr(worker_module, "shutdown_process_pool", lambda: None)
+
+    worker_module.persistent_solve_worker_entrypoint(
+        connection, ["conda-forge"], ["linux-64"]
+    )
+
+    assert sent[0] == ("ready", None)
+    assert sent[1][0] == "ok"
+    assert isinstance(sent[1][1], PrestoSolveOutcome)
+    assert isinstance(sent[1][1].result, PrestoSolveError)
+    assert sent[1][1].result.kind == "packages-not-found"
+    assert sent[1][1].metadata_before is None
+    assert sent[1][1].metadata_used is None
+    assert sent[2] == "closed"
 
 
 @pytest.mark.parametrize(

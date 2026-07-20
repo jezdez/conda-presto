@@ -1,9 +1,13 @@
 # How conda-presto works
 
-conda-presto is a solve-only bridge between conda input formats and conda
-output formats. It reads specs or environment files, resolves fully pinned
-package records for one or more platforms, and writes JSON or a conda exporter
-format. It does not create prefixes, link packages, or install anything.
+The `conda presto` command and HTTP API are a solve-only bridge between conda
+input formats and conda output formats. They read specs or environment files,
+resolve fully pinned package records for one or more platforms, and write JSON
+or a conda exporter format without creating prefixes or installing packages.
+
+The optional internal `conda --solver=presto` plugin uses the same solve engine
+through the local broker service. The service returns only a final package
+state. conda computes and executes any requested prefix transaction locally.
 
 ## Data flow
 
@@ -95,14 +99,17 @@ In-memory solver index cache
   process. Repeated solves reuse it until conda's repodata policy requires a
   refresh, at which point the cached index reloads its channels before solving.
 
-Content-addressed result cache
-: successful HTTP `/resolve` responses are stored under a SHA-256 key and
-  returned with `Location: /r/<hash>` when retained. The key includes normalized
-  specs, ordered channels, target platforms, output format, relevant dependency
-  versions, and markers for conda's local repodata cache files. Repodata
-  expiry bypasses stored results, and changed metadata creates a new key instead
-  of reusing a stale solve result.
-  The in-process LRU can be backed by Litestar file or Redis stores.
+Result cache
+: successful HTTP `/resolve` responses and internal `/solver/v1` final states
+  share a bounded in-process LRU backed optionally by Litestar file or Redis
+  stores. Resolve entries use content-addressed `resolve-v1:` keys and public
+  `/r/<hash>` permalinks. Solver entries use private `solver-v1:` keys with no
+  public retrieval route. A solver key hashes serialized request fields and
+  dependency versions. Its value includes the repodata cache-file URL, source,
+  size, modification-time, and freshness markers recorded by the worker after
+  index collection. Cache reuse is bypassed when conda requires a metadata
+  refresh or the current markers differ. A retained result after refresh
+  replaces the existing entry for that request key.
 
 ## HTTP layer
 

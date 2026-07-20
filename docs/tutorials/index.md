@@ -28,6 +28,13 @@ File uploads, JSON requests, output format conversion, and more.
 Run the optional loopback service with conda-broker for repeated HTTP requests.
 :::
 
+:::{grid-item-card} {octicon}`beaker` Presto solver
+:link: solver-backend
+:link-type: doc
+
+Use the broker-managed local service as an internal conda solver backend.
+:::
+
 :::{grid-item-card} {octicon}`play` CI pipeline
 :link: ci-pipeline
 :link-type: doc
@@ -44,5 +51,6 @@ action on the runner; remote mode calls a hosted deployment.
 cli-resolve
 http-api
 broker-service
+solver-backend
 ci-pipeline
 ```
