@@ -39,7 +39,6 @@ def conda_broker_services():
             env={
                 "CONDA_PRESTO_HOST": "127.0.0.1",
                 "CONDA_PRESTO_CONCURRENCY": "1",
-                "CONDA_PRESTO_SOLVER_ENDPOINT": "1",
                 "CONDA_PRESTO_RATE_LIMIT": "0",
                 "CONDA_PRESTO_PERSISTENT_WORKER": "1",
             },

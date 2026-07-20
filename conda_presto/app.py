@@ -131,7 +131,6 @@ from .config import (
     RESULT_CACHE_REDIS_URL,
     RESULT_CACHE_SIZE,
     SOLVE_TIMEOUT_S,
-    SOLVER_ENDPOINT,
 )
 from .exceptions import SAFE_ERROR_TYPES, UnknownFormatError
 from .exporter import OutputFormat
@@ -1679,9 +1678,7 @@ async def solver_v1(
     """Run the broker-only internal Presto solver protocol."""
     client = request.client
     if (
-        not SOLVER_ENDPOINT
-        or os.environ.get("CONDA_BROKER_SERVICE_NAME")
-        != PrestoSolverClient.service_name
+        os.environ.get("CONDA_BROKER_SERVICE_NAME") != PrestoSolverClient.service_name
         or client is None
         or not PrestoSolverClient.is_loopback(client.host)
     ):

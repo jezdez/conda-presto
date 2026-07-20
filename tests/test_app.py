@@ -93,7 +93,6 @@ async def client(test_app):
 
 @pytest.fixture()
 def enabled_solver_endpoint(monkeypatch):
-    monkeypatch.setattr(app_module, "SOLVER_ENDPOINT", True)
     monkeypatch.setenv("CONDA_BROKER_SERVICE_NAME", PrestoSolverClient.service_name)
 
 
@@ -169,17 +168,6 @@ def presto_solver_outcome():
 
 
 @pytest.mark.anyio
-async def test_solver_v1_is_disabled_by_default(client, presto_solver_request):
-    response = await client.post(
-        "/solver/v1",
-        content=msgspec.json.encode(presto_solver_request),
-        headers={"content-type": "application/json"},
-    )
-
-    assert response.status_code == 404
-
-
-@pytest.mark.anyio
 @pytest.mark.parametrize(
     "service_name",
     [
@@ -194,7 +182,6 @@ async def test_solver_v1_requires_broker_service_identity(
     presto_solver_request,
     service_name,
 ):
-    monkeypatch.setattr(app_module, "SOLVER_ENDPOINT", True)
     if service_name is None:
         monkeypatch.delenv("CONDA_BROKER_SERVICE_NAME", raising=False)
     else:
@@ -1173,7 +1160,6 @@ async def test_solver_cache_rejects_corrupt_typed_envelope(
             {
                 "response": {"records": "not-a-list", "neutered": []},
                 "metadata_used": {"records": [], "stale": False},
-                "version": 1,
             }
         ),
     )
@@ -1357,7 +1343,12 @@ def test_result_cache_memory_limit(
 async def test_result_cache_remember_omits_permalink_when_memory_rejects_result():
     cache = ResultCache(max_size=10, max_bytes=10)
 
-    response = await cache.remember("oversized", b"x" * 20, "text/plain")
+    response = await cache.remember(
+        "oversized",
+        b"x" * 20,
+        "text/plain",
+        location="/r/oversized",
+    )
 
     assert "Location" not in response.headers
     assert not cache.entries
@@ -1374,7 +1365,7 @@ async def test_result_cache_ignores_failed_corrupt_entry_cleanup():
 
     cache = ResultCache(max_size=10)
 
-    assert await cache.get_response("key", Store()) is None
+    assert await cache.get_response("key", Store(), location="/r/key") is None
 
 
 @pytest.mark.anyio

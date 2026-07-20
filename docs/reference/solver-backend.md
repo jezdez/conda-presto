@@ -92,13 +92,12 @@ contain package metadata from credentialed channels.
 
 ## Internal protocol
 
-The broker child enables `POST /solver/v1` through
-`CONDA_PRESTO_SOLVER_ENDPOINT=1` and its `CONDA_BROKER_SERVICE_NAME` identity.
-Both must identify the `conda-presto.server` broker child. The handler is absent
-from the public OpenAPI contract and requires the broker's persistent worker.
-The Docker server does not enable it. Request and response logging excludes this
-route so channel credentials and installed-prefix state are not written to
-broker logs.
+The broker child enables `POST /solver/v1` through its
+`CONDA_BROKER_SERVICE_NAME` identity. It must identify the
+`conda-presto.server` broker child. The handler is absent from the public OpenAPI
+contract and requires the broker's persistent worker. The Docker server does not
+enable it. Request and response logging excludes this route so channel
+credentials and installed-prefix state are not written to broker logs.
 
 `/solver/v1` is a private implementation detail, not an HTTP API to integrate
 against. Its message format and behavior may change or be removed without a

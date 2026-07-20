@@ -9,7 +9,7 @@ from collections import OrderedDict
 from dataclasses import dataclass, field
 from importlib.metadata import version as pkg_version
 from pathlib import Path
-from typing import Literal, Protocol
+from typing import Literal
 
 import anyio
 import msgspec
@@ -25,6 +25,7 @@ from .solver import (
     PrestoSolveRequest,
     PrestoSolveResponse,
 )
+from .worker import PersistentSolveWorker
 
 log = logging.getLogger(__name__)
 
@@ -57,7 +58,6 @@ class StoredSolverResult(msgspec.Struct):
 
     response: PrestoSolveResponse
     metadata_used: RepodataSnapshot
-    version: Literal[1] = 1
 
     @property
     def memory_size(self) -> int:
@@ -247,7 +247,7 @@ class ResultCache:
         key: str,
         store: Store | None = None,
         *,
-        location: str | None = None,
+        location: str,
     ) -> Response | None:
         stored = await self.get_stored(key, StoredResult, store)
         if not isinstance(stored, StoredResult):
@@ -301,7 +301,7 @@ class ResultCache:
         media_type: str,
         store: Store | None = None,
         *,
-        location: str | None = None,
+        location: str,
     ) -> Response:
         stored = StoredResult(body=body, media_type=media_type)
         retained = await self.store_entry(key, stored, store)
@@ -316,8 +316,6 @@ class ResultCache:
         store: Store | None = None,
     ) -> tuple[StoredSolverResult | None, SolverCacheDisposition]:
         """Store a worker result unless the current entry already matches."""
-        if isinstance(outcome.result, PrestoSolveError):
-            return None, "solver-error"
         async with self.solver_publication_lock:
             existing = await self.get_stored(
                 self.solver_key(request.cache_key()),
@@ -350,28 +348,13 @@ class ResultCache:
     @staticmethod
     def response_for(
         stored: StoredResult,
-        location: str | None = None,
+        location: str,
     ) -> Response:
-        headers = (
-            {"Location": location, "Cache-Control": RESULT_CACHE_CONTROL}
-            if location is not None
-            else None
-        )
         return Response(
             stored.body,
             media_type=stored.media_type,
-            headers=headers,
+            headers={"Location": location, "Cache-Control": RESULT_CACHE_CONTROL},
         )
-
-
-class FinalStateWorker(Protocol):
-    """Worker interface needed by the solver result service."""
-
-    def solve_final_state(
-        self,
-        request: PrestoSolveRequest,
-        deadline: float,
-    ) -> PrestoSolveOutcome: ...
 
 
 @dataclass(frozen=True)
@@ -380,7 +363,6 @@ class SolverServiceResult:
 
     result: PrestoSolveResponse | PrestoSolveError
     disposition: SolverCacheDisposition
-    metadata_used: RepodataSnapshot | None = None
 
 
 @dataclass
@@ -398,13 +380,12 @@ class SolverResultService:
         return SolverServiceResult(
             result=stored.response,
             disposition="cache-hit",
-            metadata_used=stored.metadata_used,
         )
 
     async def resolve(
         self,
         request: PrestoSolveRequest,
-        worker: FinalStateWorker,
+        worker: PersistentSolveWorker,
         deadline: float,
     ) -> SolverServiceResult:
         """Return a current cache hit or solve and publish one final state."""
@@ -416,13 +397,10 @@ class SolverResultService:
             deadline,
             abandon_on_cancel=True,
         )
-        if not isinstance(outcome, PrestoSolveOutcome):
-            raise RuntimeError("Persistent solver worker returned an invalid result")
         if isinstance(outcome.result, PrestoSolveError):
             return SolverServiceResult(
                 result=outcome.result,
                 disposition="solver-error",
-                metadata_used=outcome.metadata_used,
             )
         stored, disposition = await self.cache.publish_solver(
             request,
@@ -432,7 +410,4 @@ class SolverResultService:
         return SolverServiceResult(
             result=stored.response if stored is not None else outcome.result,
             disposition=disposition,
-            metadata_used=(
-                stored.metadata_used if stored is not None else outcome.metadata_used
-            ),
         )
