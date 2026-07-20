@@ -108,3 +108,11 @@ and service environments.
 Conda does not expose structured public accessors for
 `SpecsConfigurationConflictError`, so this private protocol reads its private
 `_kwargs` payload to reconstruct the same exception in the client.
+
+`conda-rattler-solver` 0.1.1 also has no constructor input for captured virtual
+packages. The service currently replaces that one private input-state mapping
+after construction. The public injection point is tracked by
+[conda-rattler-solver #105](https://github.com/conda/conda-rattler-solver/issues/105)
+and [PR #98](https://github.com/conda/conda-rattler-solver/pull/98); conda-presto
+can remove this override after a release containing that API becomes its
+minimum supported version.

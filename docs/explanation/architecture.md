@@ -1,9 +1,13 @@
 # How conda-presto works
 
-conda-presto is a solve-only bridge between conda input formats and conda
-output formats. It reads specs or environment files, resolves fully pinned
-package records for one or more platforms, and writes JSON or a conda exporter
-format. It does not create prefixes, link packages, or install anything.
+The `conda presto` command and HTTP API are a solve-only bridge between conda
+input formats and conda output formats. They read specs or environment files,
+resolve fully pinned package records for one or more platforms, and write JSON
+or a conda exporter format without creating prefixes or installing packages.
+
+The optional internal `conda --solver=presto` plugin uses the same solve engine
+through the local broker service. The service returns only a final package
+state; conda computes and executes any requested prefix transaction locally.
 
 ## Data flow
 

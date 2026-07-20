@@ -91,6 +91,9 @@ from conda.models.match_spec import MatchSpec
 from litestar import Litestar, Request, get, post
 from litestar.config.compression import CompressionConfig
 from litestar.config.cors import CORSConfig
+from litestar.connection import ASGIConnection
+from litestar.exceptions import NotFoundException
+from litestar.handlers import BaseRouteHandler
 from litestar.logging import LoggingConfig
 from litestar.middleware.logging import LoggingMiddlewareConfig
 from litestar.middleware.rate_limit import RateLimitConfig
@@ -1670,19 +1673,31 @@ async def health(request: Request) -> Response[HealthResponse]:
     return Response(HealthResponse(status="ok"))
 
 
-@post("/solver/v1", status_code=200, include_in_schema=False)
-async def solver_v1(
-    request: Request,
-    data: PrestoSolveRequest,
-) -> Response:
-    """Run the broker-only internal Presto solver protocol."""
-    client = request.client
+def require_solver_service(
+    connection: ASGIConnection,
+    _route_handler: BaseRouteHandler,
+) -> None:
+    """Restrict the private solver route before Litestar parses its body."""
+    client = connection.client
     if (
         os.environ.get("CONDA_BROKER_SERVICE_NAME") != PrestoSolverClient.service_name
         or client is None
         or not PrestoSolverClient.is_loopback(client.host)
     ):
-        return Response({}, status_code=HTTP_404_NOT_FOUND)
+        raise NotFoundException
+
+
+@post(
+    "/solver/v1",
+    status_code=200,
+    include_in_schema=False,
+    guards=[require_solver_service],
+)
+async def solver_v1(
+    request: Request,
+    data: PrestoSolveRequest,
+) -> Response:
+    """Run the broker-only internal Presto solver protocol."""
     if cap_error := validate_caps(
         data.specs_to_add + data.specs_to_remove,
         data.channels,

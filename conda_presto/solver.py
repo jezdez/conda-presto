@@ -147,7 +147,7 @@ class PrestoSolveOutcome(msgspec.Struct):
         )
 
 
-class PrestoSolveRequest(msgspec.Struct):
+class PrestoSolveRequest(msgspec.Struct, forbid_unknown_fields=True):
     """A private serialized ``conda-rattler-solver`` input state."""
 
     channels: list[dict[str, Any]]
@@ -173,7 +173,6 @@ class PrestoSolveRequest(msgspec.Struct):
     use_only_tar_bz2: bool
     add_pip_as_python_dependency: bool
     allow_cycles: bool
-    restore_free_channel: bool
     repodata_use_shards: bool
     use_index_cache: bool
 
@@ -204,7 +203,7 @@ class PrestoSolveRequest(msgspec.Struct):
         request = cls(
             channels=[channel.dump() for channel in channels],
             subdirs=list(solver.subdirs),
-            specs_to_add=sorted(str(spec) for spec in solver._unmerged_specs_to_add),
+            specs_to_add=sorted(str(spec) for spec in solver.unmerged_specs_to_add),
             specs_to_remove=sorted(
                 str(spec) for spec in solver.unmerged_specs_to_remove
             ),
@@ -227,8 +226,8 @@ class PrestoSolveRequest(msgspec.Struct):
             always_update=sorted(
                 str(spec) for spec in input_state.always_update.values()
             ),
-            update_modifier=str(input_state._update_modifier).upper(),
-            deps_modifier=str(input_state._deps_modifier).upper(),
+            update_modifier=input_state.update_modifier.name,
+            deps_modifier=input_state.deps_modifier.name,
             ignore_pinned=input_state.ignore_pinned,
             force_remove=input_state.force_remove,
             prune=False if input_state.prune is NULL else input_state.prune,
@@ -242,13 +241,6 @@ class PrestoSolveRequest(msgspec.Struct):
             use_only_tar_bz2=bool(context.use_only_tar_bz2),
             add_pip_as_python_dependency=bool(context.add_pip_as_python_dependency),
             allow_cycles=bool(context.allow_cycles),
-            restore_free_channel=bool(
-                getattr(
-                    context,
-                    "_restore_free_channel",
-                    getattr(context, "restore_free_channel", False),
-                )
-            ),
             repodata_use_shards=bool(context.repodata_use_shards),
             use_index_cache=bool(context.use_index_cache),
         )
@@ -302,7 +294,6 @@ class PrestoSolveRequest(msgspec.Struct):
                     self.add_pip_as_python_dependency,
                 ),
                 ("allow_cycles", self.allow_cycles),
-                ("_restore_free_channel", self.restore_free_channel),
                 ("repodata_use_shards", self.repodata_use_shards),
                 ("use_index_cache", self.use_index_cache),
                 ("local_repodata_ttl", self.local_repodata_ttl),
@@ -457,7 +448,7 @@ class PrestoSolverInputState(SolverInputState):
             prune=request.prune,
             command=request.command,
         )
-        records = self._prefix_data._prefix_records
+        records = self.prefix_data._prefix_records
         records.clear()
         records.update(
             {
@@ -471,6 +462,8 @@ class PrestoSolverInputState(SolverInputState):
         self._pinned = {
             spec.name: spec for spec in (MatchSpec(value) for value in request.pinned)
         }
+        # conda-rattler-solver 0.1.1 cannot accept captured virtual packages.
+        # Remove this assignment after conda/conda-rattler-solver#98 is released.
         self._virtual = {
             record.name: record
             for record in (PackageRecord(**data) for data in request.virtual)

@@ -14,7 +14,7 @@
   - `exporter.py` owns output-format rendering through conda's exporter plugin registry.
   - `config.py`, `exceptions.py`, and `plugin.py` keep configuration, safe error surfaces, and conda plugin registration separate.
 
-- Tests live in `tests/` and mirror the module or behavior under test: `tests/test_app.py` for HTTP handlers and result-cache integration, `tests/test_cli.py` for CLI behavior, `tests/test_resolve.py` for solver internals, `tests/test_exporter.py` for output formats, and `tests/test_plugin.py` for conda plugin registration. Cross-cutting fixtures belong in `tests/conftest.py`.
+- Tests live in `tests/` and mirror the module or behavior under test: `tests/test_app.py` for HTTP handlers and result-cache integration, `tests/test_cache.py` for cache behavior and storage adapters, `tests/test_cli.py` for CLI behavior, `tests/test_resolve.py` for solver internals, `tests/test_exporter.py` for output formats, and `tests/test_plugin.py` for conda plugin registration. Cross-cutting fixtures belong in `tests/conftest.py`.
 
 - Documentation uses Sphinx with MyST, `conda-sphinx-theme`, `sphinx-design`, `sphinx-copybutton`, and `sphinxcontrib-mermaid`. Keep docs source under `docs/`; generated `docs/_build/` output is not source.
 

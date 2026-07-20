@@ -12,7 +12,7 @@ from urllib.request import ProxyHandler
 
 import msgspec
 import pytest
-from conda.base.constants import ChannelPriority, UpdateModifier
+from conda.base.constants import ChannelPriority, DepsModifier, UpdateModifier
 from conda.base.context import context
 from conda.exceptions import (
     PackagesNotFoundError,
@@ -106,10 +106,6 @@ def broker_endpoint(monkeypatch):
             id="add-pip-as-python-dependency",
         ),
         pytest.param({"allow_cycles": False}, id="allow-cycles"),
-        pytest.param(
-            {"restore_free_channel": True},
-            id="restore-free-channel",
-        ),
         pytest.param({"repodata_use_shards": False}, id="repodata-shards"),
         pytest.param({"use_index_cache": True}, id="index-cache"),
         pytest.param({"channels": [Channel("bioconda").dump()]}, id="channels"),
@@ -348,23 +344,8 @@ def test_solver_snapshot_restores_client_repodata_ttl(
     assert observed == [ttl]
 
 
-@pytest.mark.parametrize(
-    ("change", "derived_url"),
-    [
-        pytest.param(
-            {"specs_to_add": ["bioconda::zlib"]},
-            "https://conda.anaconda.org/bioconda",
-            id="qualified-spec",
-        ),
-        pytest.param(
-            {"restore_free_channel": True},
-            "https://repo.anaconda.com/pkgs/free",
-            id="restored-free-channel",
-        ),
-    ],
-)
-def test_solver_snapshot_derives_effective_channels_on_server(
-    monkeypatch, solver_request, change, derived_url
+def test_solver_snapshot_derives_qualified_spec_channel_on_server(
+    monkeypatch, solver_request
 ):
     captured = []
 
@@ -374,11 +355,14 @@ def test_solver_snapshot_derives_effective_channels_on_server(
 
     monkeypatch.setattr(solver_module.RepodataSnapshot, "capture", capture)
 
-    msgspec.structs.replace(solver_request, **change).repodata_snapshot()
+    msgspec.structs.replace(
+        solver_request,
+        specs_to_add=["bioconda::zlib"],
+    ).repodata_snapshot()
 
     assert captured == [
         "https://conda.anaconda.org/conda-forge",
-        derived_url,
+        "https://conda.anaconda.org/bioconda",
     ]
 
 
@@ -447,8 +431,7 @@ def test_presto_request_omits_prefix_file_inventory():
         aggressive_updates={},
         always_update={},
         update_modifier=UpdateModifier.UPDATE_SPECS,
-        _update_modifier=UpdateModifier.UPDATE_SPECS,
-        _deps_modifier="not_set",
+        deps_modifier=DepsModifier.NOT_SET,
         ignore_pinned=False,
         force_remove=False,
         prune=False,
@@ -461,7 +444,7 @@ def test_presto_request_omits_prefix_file_inventory():
             Channel("bioconda"),
         ],
         subdirs=["linux-64", "noarch"],
-        _unmerged_specs_to_add=[MatchSpec("zlib")],
+        unmerged_specs_to_add=[MatchSpec("zlib")],
         unmerged_specs_to_remove=[],
         _repodata_fn="repodata.json",
         _build_repodata_subset=solver_module.build_repodata_subset,
@@ -472,7 +455,6 @@ def test_presto_request_omits_prefix_file_inventory():
         context._override("_use_only_tar_bz2", True),
         context._override("add_pip_as_python_dependency", False),
         context._override("allow_cycles", False),
-        context._override("_restore_free_channel", True),
         context._override("repodata_use_shards", False),
         context._override("use_index_cache", True),
         context._override("local_repodata_ttl", 42),
@@ -496,7 +478,6 @@ def test_presto_request_omits_prefix_file_inventory():
     assert request.use_only_tar_bz2 is True
     assert request.add_pip_as_python_dependency is False
     assert request.allow_cycles is False
-    assert request.restore_free_channel is True
     assert request.repodata_use_shards is False
     assert request.use_index_cache is True
     assert request.local_repodata_ttl == 42
@@ -579,7 +560,6 @@ def test_presto_request_uses_rattler_backend(
                             context.add_pip_as_python_dependency
                         ),
                         "allow_cycles": context.allow_cycles,
-                        "restore_free_channel": context._restore_free_channel,
                         "repodata_use_shards": context.repodata_use_shards,
                         "use_index_cache": context.use_index_cache,
                         "local_repodata_ttl": context.local_repodata_ttl,
@@ -618,7 +598,6 @@ def test_presto_request_uses_rattler_backend(
         use_only_tar_bz2=True,
         add_pip_as_python_dependency=False,
         allow_cycles=False,
-        restore_free_channel=True,
         repodata_use_shards=False,
         use_index_cache=True,
         local_repodata_ttl=42,
@@ -642,7 +621,6 @@ def test_presto_request_uses_rattler_backend(
         "use_only_tar_bz2": True,
         "add_pip_as_python_dependency": False,
         "allow_cycles": False,
-        "restore_free_channel": True,
         "repodata_use_shards": False,
         "use_index_cache": True,
         "local_repodata_ttl": 42,
@@ -853,7 +831,7 @@ def test_presto_request_capture_rejects_invalid_subdirs(subdirs):
     solver = SimpleNamespace(
         channels=[Channel("conda-forge")],
         subdirs=subdirs,
-        _unmerged_specs_to_add=[MatchSpec("zlib")],
+        unmerged_specs_to_add=[MatchSpec("zlib")],
         unmerged_specs_to_remove=[],
         _repodata_fn="repodata.json",
         _build_repodata_subset=None,
@@ -867,8 +845,7 @@ def test_presto_request_capture_rejects_invalid_subdirs(subdirs):
         aggressive_updates={},
         always_update={},
         update_modifier=UpdateModifier.UPDATE_SPECS,
-        _update_modifier=UpdateModifier.UPDATE_SPECS,
-        _deps_modifier="not_set",
+        deps_modifier=DepsModifier.NOT_SET,
         ignore_pinned=False,
         force_remove=False,
         prune=False,
@@ -1104,8 +1081,7 @@ def test_presto_solver_keeps_transaction_work_local(
         aggressive_updates = {}
         always_update = {}
         update_modifier = UpdateModifier.UPDATE_SPECS
-        _update_modifier = "update_specs"
-        _deps_modifier = "not_set"
+        deps_modifier = DepsModifier.NOT_SET
         _command = "install"
         ignore_pinned = False
         force_remove = False
@@ -1164,8 +1140,7 @@ def test_presto_solver_matches_rattler_initialization(tmp_path):
         aggressive_updates={},
         always_update={},
         update_modifier=UpdateModifier.UPDATE_SPECS,
-        _update_modifier=UpdateModifier.UPDATE_SPECS,
-        _deps_modifier="not_set",
+        deps_modifier=DepsModifier.NOT_SET,
         ignore_pinned=False,
         force_remove=False,
         prune=False,
@@ -1179,7 +1154,7 @@ def test_presto_solver_matches_rattler_initialization(tmp_path):
     assert presto._repodata_fn == rattler._repodata_fn
     assert request.repodata_fn == rattler._repodata_fn
     assert request.specs_to_add == sorted(
-        str(spec) for spec in rattler._unmerged_specs_to_add
+        str(spec) for spec in rattler.unmerged_specs_to_add
     )
     assert len(request.specs_to_add) == 2
     restored = PrestoSolverInputState(request)

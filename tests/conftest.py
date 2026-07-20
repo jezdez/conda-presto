@@ -9,7 +9,7 @@ from conda.models.channel import Channel
 from conda.models.records import PackageRecord
 
 from conda_presto.resolve import RepodataSnapshot, ResolvedPackage, SolveResult
-from conda_presto.solver import PrestoSolveRequest
+from conda_presto.solver import PrestoSolveOutcome, PrestoSolveRequest
 
 
 @pytest.fixture()
@@ -126,7 +126,6 @@ def make_presto_solver_request():
             "use_only_tar_bz2": False,
             "add_pip_as_python_dependency": True,
             "allow_cycles": True,
-            "restore_free_channel": False,
             "repodata_use_shards": True,
             "use_index_cache": False,
         }
@@ -139,6 +138,18 @@ def make_presto_solver_request():
 @pytest.fixture()
 def presto_solver_request(make_presto_solver_request):
     return make_presto_solver_request()
+
+
+@pytest.fixture()
+def presto_solver_outcome():
+    def create(response, metadata_before, metadata_used=None):
+        return PrestoSolveOutcome(
+            result=response,
+            metadata_before=metadata_before,
+            metadata_used=metadata_used or metadata_before,
+        )
+
+    return create
 
 
 @pytest.fixture()
