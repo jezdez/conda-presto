@@ -35,7 +35,7 @@ CLI and the HTTP server.
 | `CONDA_PRESTO_RESULT_CACHE_DIR` | unset | Directory for the `file` result cache backend. Public resolve and private solver entries use separate key namespaces. |
 | `CONDA_PRESTO_RESULT_CACHE_REDIS_URL` | unset | Redis URL for the `redis` result cache backend. If `CONDA_PRESTO_RESULT_CACHE_BACKEND=redis` is set without this value, `redis://localhost:6379/0` is used. |
 | `CONDA_PRESTO_RESULT_CACHE_REDIS_NAMESPACE` | `conda-presto` | Redis key namespace for result cache entries. |
-| `CONDA_PRESTO_SOLVER_CACHE_WARM_CANDIDATE_SIZE` | `32` | Maximum cache-warming candidates retained for `/solver/v1`. Up to the same number of observations awaiting admission are retained. Set to `0` to disable recording. |
+| `CONDA_PRESTO_SOLVER_CACHE_WARM_CANDIDATE_SIZE` | `32` | Maximum cache-warming candidates retained for `/solver/v1`. Up to the same number of requests outside the candidate catalog are retained. Set to `0` to disable recording. |
 | `CONDA_PRESTO_SOLVER_CACHE_WARM_CANDIDATE_PERSIST` | `false` | Persist candidates without detected credentials in a configured file or Redis result store. Requires a persistent result-cache backend. |
 | `CONDA_PRESTO_SOLVER_CACHE_WARM_INTERVAL_S` | `300` | Seconds between solver-cache refresh cycles. Set to `0` to disable scheduled refresh. |
 | `CONDA_PRESTO_SOLVER_CACHE_WARM_BATCH_SIZE` | `8` | Maximum cache-warming candidates considered in one refresh cycle. |

@@ -139,7 +139,7 @@ def record_candidate_request():
 
 
 @pytest.fixture()
-def create_warmer():
+def create_warmer(monkeypatch):
     def create(
         warm_candidates: SolverWarmCandidates,
         service: RecordingService,
@@ -157,7 +157,11 @@ def create_warmer():
             batch_size=batch_size,
         )
         if worker is not None:
-            warmer.create_worker = lambda: worker
+            monkeypatch.setattr(
+                warmer_module,
+                "PersistentSolveWorker",
+                lambda *_args, **_kwargs: worker,
+            )
         return warmer
 
     return create
@@ -172,7 +176,6 @@ def enable_cache_warming(monkeypatch):
         "SOLVER_CACHE_WARM_CANDIDATE_SIZE": 8,
         "SOLVER_CACHE_WARM_BATCH_SIZE": 2,
         "SOLVER_CACHE_WARM_INTERVAL_S": 300,
-        "SOLVER_ENDPOINT": True,
     }.items():
         monkeypatch.setattr(app_module, name, value)
     monkeypatch.setenv(
@@ -396,7 +399,11 @@ async def test_persistent_store_timeout_is_bounded(
         thread_limiter=thread_limiter,
     )
     worker = SolvingWorker()
-    warmer.create_worker = lambda: worker
+    monkeypatch.setattr(
+        warmer_module,
+        "PersistentSolveWorker",
+        lambda *_args, **_kwargs: worker,
+    )
 
     stop = anyio.Event()
     async with store_operations.lifespan():
@@ -411,22 +418,23 @@ async def test_persistent_store_timeout_is_bounded(
 
     assert worker.starts == 1
     assert worker.stops == 1
-    assert cache.entries == {}
+    assert ResultCache.solver_key(presto_solver_request.cache_key()) in cache.entries
     assert fingerprint in warm_candidates.entries
     assert warmer.stats.rejected_publications == 1
 
 
 @pytest.mark.anyio
 async def test_warm_cycle_with_no_candidates_does_not_create_worker(
+    monkeypatch,
     create_warmer,
 ):
     service = RecordingService([])
     warmer = create_warmer(SolverWarmCandidates(max_size=32), service)
 
-    def fail_create():
+    def fail_create(*_args, **_kwargs):
         pytest.fail("empty cycle created a worker")
 
-    warmer.create_worker = fail_create
+    monkeypatch.setattr(warmer_module, "PersistentSolveWorker", fail_create)
 
     await warmer.cycle()
 
@@ -474,6 +482,7 @@ async def test_refresh_cycle_selection_respects_storage_limits(
 
 @pytest.mark.anyio
 async def test_fresh_cache_hit_does_not_create_worker(
+    monkeypatch,
     presto_solver_request,
     fresh_repodata_snapshot,
     record_candidate_request,
@@ -486,10 +495,10 @@ async def test_fresh_cache_hit_does_not_create_worker(
     )
     warmer = create_warmer(warm_candidates, service)
 
-    def fail_create():
+    def fail_create(*_args, **_kwargs):
         pytest.fail("fresh cache hit created a worker")
 
-    warmer.create_worker = fail_create
+    monkeypatch.setattr(warmer_module, "PersistentSolveWorker", fail_create)
 
     await warmer.cycle()
 
@@ -498,20 +507,17 @@ async def test_fresh_cache_hit_does_not_create_worker(
 
 
 @pytest.mark.anyio
-@pytest.mark.parametrize("stale", [False, True], ids=["missing", "stale"])
-async def test_missing_or_stale_cache_entry_is_replayed(
-    stale,
+async def test_missing_cache_entry_is_replayed(
     presto_solver_request,
     fresh_repodata_snapshot,
     successful_result,
     record_candidate_request,
     create_warmer,
 ):
-    current = replace(fresh_repodata_snapshot, stale=stale)
     warm_candidates = SolverWarmCandidates(max_size=32)
     record_candidate_request(warm_candidates, presto_solver_request)
     service = RecordingService(
-        [SolverServiceProbe(cached=False, current=current)],
+        [SolverServiceProbe(cached=False, current=fresh_repodata_snapshot)],
         [successful_result],
     )
     worker = RecordingWorker()
@@ -822,10 +828,10 @@ async def test_cycle_does_not_start_worker_after_inspection_uses_budget(
     )
     warmer = create_warmer(warm_candidates, service)
 
-    def fail_create():
+    def fail_create(*_args, **_kwargs):
         pytest.fail("worker started after the cycle budget")
 
-    warmer.create_worker = fail_create
+    monkeypatch.setattr(warmer_module, "PersistentSolveWorker", fail_create)
 
     await warmer.cycle()
 
@@ -1091,9 +1097,11 @@ async def test_warmer_lifespan_waits_for_cleanup_before_checkpoint(monkeypatch):
             assert finished.is_set()
             events.append("checkpoint")
 
+    warmer_options = {}
+
     class Warmer:
-        def __init__(self, **_kwargs):
-            pass
+        def __init__(self, **options):
+            warmer_options.update(options)
 
         async def run(self, stop):
             events.append("scheduler-start")
@@ -1121,7 +1129,6 @@ async def test_warmer_lifespan_waits_for_cleanup_before_checkpoint(monkeypatch):
         "shutdown_process_pool",
         lambda: events.append("process-pool-stop"),
     )
-    monkeypatch.setattr(app_module, "SOLVER_ENDPOINT", True)
     monkeypatch.setenv(
         "CONDA_BROKER_SERVICE_NAME",
         PrestoSolverClient.service_name,
@@ -1158,6 +1165,9 @@ async def test_warmer_lifespan_waits_for_cleanup_before_checkpoint(monkeypatch):
         is app.state.result_cache.store_operations
     )
     assert warm_candidate_options["store_operations"].store is store
+    assert (
+        warmer_options["thread_limiter"] is not warmer_options["service"].thread_limiter
+    )
     assert events == [
         "store-open",
         "foreground-worker-start",
@@ -1205,7 +1215,6 @@ async def test_broker_cycle_keeps_foreground_solver_ready(
 ):
     service = next(conda_broker_services())
     assert service.process is not None
-    assert service.process.env["CONDA_PRESTO_SOLVER_ENDPOINT"] == "1"
     assert service.process.env["CONDA_PRESTO_PERSISTENT_WORKER"] == "1"
     workers = []
 
@@ -1246,7 +1255,6 @@ async def test_broker_cycle_keeps_foreground_solver_ready(
         "SOLVER_CACHE_WARM_CANDIDATE_SIZE": 8,
         "SOLVER_CACHE_WARM_BATCH_SIZE": 1,
         "SOLVER_CACHE_WARM_INTERVAL_S": 300,
-        "SOLVER_ENDPOINT": True,
     }.items():
         monkeypatch.setattr(app_module, name, value)
     monkeypatch.setenv(

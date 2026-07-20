@@ -89,12 +89,12 @@ class CacheRetention:
 
 
 @dataclass(frozen=True)
-class SolverCacheState:
-    """One current solver cache inspection and its repodata state."""
+class SolverServiceProbe:
+    """A cache result and the current repodata observed during its lookup."""
 
-    stored: StoredSolverResult | None
+    cached: bool
     current: RepodataSnapshot | None
-    persistent: bool
+    persistence_failed: bool = False
 
 
 @dataclass
@@ -102,7 +102,6 @@ class ResultCache:
     max_size: int
     max_bytes: int = 0
     entries: OrderedDict[str, StoredCacheEntry] = field(default_factory=OrderedDict)
-    persistent_keys: set[str] = field(default_factory=set)
     current_bytes: int = 0
     solver_publication_lock: anyio.Lock = field(default_factory=anyio.Lock)
     store_operations: StoreOperationCoordinator | None = None
@@ -195,21 +194,18 @@ class ResultCache:
         if self.max_bytes > 0 and stored.memory_size > self.max_bytes:
             if previous := self.entries.pop(key, None):
                 self.current_bytes -= previous.memory_size
-            self.persistent_keys.discard(key)
             return False
 
         if previous := self.entries.get(key):
             self.current_bytes -= previous.memory_size
 
-        self.persistent_keys.discard(key)
         self.entries[key] = stored
         self.current_bytes += stored.memory_size
         self.entries.move_to_end(key)
         while len(self.entries) > self.max_size or (
             self.max_bytes > 0 and self.current_bytes > self.max_bytes
         ):
-            evicted_key, evicted = self.entries.popitem(last=False)
-            self.persistent_keys.discard(evicted_key)
+            _, evicted = self.entries.popitem(last=False)
             self.current_bytes -= evicted.memory_size
         return key in self.entries
 
@@ -226,7 +222,6 @@ class ResultCache:
         if stored is not None:
             self.current_bytes -= stored.memory_size
             del self.entries[key]
-            self.persistent_keys.discard(key)
 
         if self.store_operations is None:
             return None
@@ -249,7 +244,6 @@ class ResultCache:
             stored = msgspec.msgpack.decode(stored_payload, type=entry_type)
         except (msgspec.DecodeError, msgspec.ValidationError):
             log.warning("Ignoring corrupt persistent result cache entry")
-            self.persistent_keys.discard(key)
             return None
 
         current = self.entries.get(key)
@@ -259,10 +253,7 @@ class ResultCache:
         if current is not None:
             self.current_bytes -= current.memory_size
             del self.entries[key]
-            self.persistent_keys.discard(key)
         self.remember_memory(key, stored)
-        if key in self.entries:
-            self.persistent_keys.add(key)
         return stored
 
     async def get_response(
@@ -306,46 +297,12 @@ class ResultCache:
         request: PrestoSolveRequest,
         *,
         thread_limiter: anyio.CapacityLimiter | None = None,
-    ) -> SolverCacheState:
+        require_persistent: bool = False,
+    ) -> SolverServiceProbe:
         """Inspect one solver cache entry and its current metadata."""
-        key = self.solver_key(request.cache_key())
-        stored = await self.get_stored(key, StoredSolverResult)
-        persistent = (
-            self.store_operations is None
-            or key in self.persistent_keys
-            or (stored is not None and key not in self.entries)
-        )
-        try:
-            current = await anyio.to_thread.run_sync(
-                request.repodata_snapshot,
-                abandon_on_cancel=True,
-                limiter=thread_limiter,
-            )
-        except Exception:
-            log.warning("Presto solver cache metadata unavailable during lookup")
-            return SolverCacheState(stored=None, current=None, persistent=False)
-        return SolverCacheState(
-            stored=(
-                stored
-                if isinstance(stored, StoredSolverResult) and stored.matches(current)
-                else None
-            ),
-            current=current,
-            persistent=persistent,
-        )
-
-    async def ensure_solver_persistent(
-        self,
-        request: PrestoSolveRequest,
-        *,
-        thread_limiter: anyio.CapacityLimiter | None = None,
-    ) -> tuple[StoredSolverResult | None, SolverCacheDisposition]:
-        """Persist one current in-memory cache entry without solving it again."""
         async with self.solver_publication_lock:
             key = self.solver_key(request.cache_key())
             stored = await self.get_stored(key, StoredSolverResult)
-            if not isinstance(stored, StoredSolverResult):
-                return None, "publication-rejected"
             try:
                 current = await anyio.to_thread.run_sync(
                     request.repodata_snapshot,
@@ -354,17 +311,20 @@ class ResultCache:
                 )
             except Exception:
                 log.warning("Presto solver cache metadata unavailable during lookup")
-                return None, "publication-rejected"
-            if not stored.matches(current):
-                return None, "publication-rejected"
-            if key in self.persistent_keys:
-                return stored, "already-current"
-            retention = await self.store_entry(key, stored)
-            return (
-                (stored, "persistent-failed")
-                if retention.persistent_failed
-                else (stored, "already-current")
-            )
+                return SolverServiceProbe(cached=False, current=None)
+            if not isinstance(stored, StoredSolverResult) or not stored.matches(
+                current
+            ):
+                return SolverServiceProbe(cached=False, current=current)
+            if require_persistent and self.store_operations is not None:
+                retention = await self.store_entry(key, stored)
+                if retention.persistent_failed:
+                    return SolverServiceProbe(
+                        cached=False,
+                        current=current,
+                        persistence_failed=True,
+                    )
+            return SolverServiceProbe(cached=True, current=current)
 
     async def store_entry(
         self,
@@ -382,14 +342,10 @@ class ResultCache:
                 )
                 if not completed:
                     log.warning("Persistent result cache write timed out")
-                    self.persistent_keys.discard(key)
                     return CacheRetention(retained, persistent_failed=True)
                 retained = True
-                if key in self.entries:
-                    self.persistent_keys.add(key)
             except Exception:
                 log.warning("Persistent result cache write failed")
-                self.persistent_keys.discard(key)
                 return CacheRetention(retained, persistent_failed=True)
         return CacheRetention(retained)
 
@@ -442,8 +398,6 @@ class ResultCache:
             )
             retention = await self.store_entry(key, stored)
             if require_persistent and retention.persistent_failed:
-                if self.entries.get(key) is stored:
-                    self.current_bytes -= self.entries.pop(key).memory_size
                 return stored, "persistent-failed"
         return stored, "published" if retention.retained else "not-retained"
 
@@ -472,15 +426,6 @@ class SolverServiceResult:
         return self.disposition in {"cache-hit", "published", "already-current"}
 
 
-@dataclass(frozen=True)
-class SolverServiceProbe:
-    """A cache result and the current repodata observed during its lookup."""
-
-    cached: bool
-    current: RepodataSnapshot | None
-    persistence_failed: bool = False
-
-
 @dataclass
 class SolverResultService:
     """Own solver cache lookup, worker execution, and result storage."""
@@ -491,27 +436,10 @@ class SolverResultService:
 
     async def inspect(self, request: PrestoSolveRequest) -> SolverServiceProbe:
         """Return one cache inspection for background scheduling decisions."""
-        state = await self.cache.inspect_solver_result(
+        return await self.cache.inspect_solver_result(
             request,
             thread_limiter=self.thread_limiter,
-        )
-        stored = state.stored
-        persistence_failed = False
-        if (
-            stored is not None
-            and self.require_persistent
-            and self.cache.store_operations is not None
-            and not state.persistent
-        ):
-            stored, disposition = await self.cache.ensure_solver_persistent(
-                request,
-                thread_limiter=self.thread_limiter,
-            )
-            persistence_failed = disposition == "persistent-failed"
-        return SolverServiceProbe(
-            cached=stored is not None and not persistence_failed,
-            current=state.current,
-            persistence_failed=persistence_failed,
+            require_persistent=self.require_persistent,
         )
 
     async def probe(self, request: PrestoSolveRequest) -> SolverServiceResult | None:

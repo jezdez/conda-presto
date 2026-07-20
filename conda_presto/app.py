@@ -1687,8 +1687,7 @@ def require_solver_service(
     """Restrict the private solver route before Litestar parses its body."""
     client = connection.client
     if (
-        os.environ.get("CONDA_BROKER_SERVICE_NAME")
-        != PrestoSolverClient.service_name
+        os.environ.get("CONDA_BROKER_SERVICE_NAME") != PrestoSolverClient.service_name
         or client is None
         or not PrestoSolverClient.is_loopback(client.host)
     ):
@@ -1843,24 +1842,24 @@ async def solver_cache_refresher_lifespan(app: Litestar) -> AsyncIterator[None]:
         store_operations=cache.store_operations,
     )
     await warm_candidates.load()
-    thread_limiter = anyio.CapacityLimiter(1)
+    service_thread_limiter = anyio.CapacityLimiter(1)
+    worker_thread_limiter = anyio.CapacityLimiter(1)
     warmer = SolverCacheWarmer(
         warm_candidates=warm_candidates,
         service=SolverResultService(
             cache=cache,
-            thread_limiter=thread_limiter,
+            thread_limiter=service_thread_limiter,
             require_persistent=cache.store_operations is not None,
         ),
         limiter=app.state.solver_limiter,
         interval_s=SOLVER_CACHE_WARM_INTERVAL_S,
         batch_size=SOLVER_CACHE_WARM_BATCH_SIZE,
-        thread_limiter=thread_limiter,
+        thread_limiter=worker_thread_limiter,
     )
     app.state.solver_warm_candidates = warm_candidates
     app.state.solver_cache_refresher = warmer
     enabled = (
-        os.environ.get("CONDA_BROKER_SERVICE_NAME")
-        == PrestoSolverClient.service_name
+        os.environ.get("CONDA_BROKER_SERVICE_NAME") == PrestoSolverClient.service_name
         and PERSISTENT_WORKER
         and SOLVER_CACHE_WARM_INTERVAL_S > 0
         and SOLVER_CACHE_WARM_BATCH_SIZE > 0

@@ -285,9 +285,9 @@ not merge candidate lists across service processes.
 
 ### Scheduled solver-cache refresh
 
-Scheduled refresh runs only in the broker child when the private solver endpoint
-and persistent worker are enabled. Normal HTTP servers and the Docker image do
-not run it.
+Scheduled refresh runs only when `CONDA_BROKER_SERVICE_NAME` identifies the
+`conda-presto.server` broker child and `CONDA_PRESTO_PERSISTENT_WORKER=true`.
+Normal HTTP servers and the Docker image do not run it.
 
 `CONDA_PRESTO_SOLVER_CACHE_WARM_INTERVAL_S`
 : Seconds between refresh cycles (default 300). Set to `0` to disable scheduled

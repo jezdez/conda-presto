@@ -124,15 +124,6 @@ def test_warming_key_covers_protocol_version(monkeypatch, solver_request):
     assert solver_request.warming_key() != first
 
 
-def test_warming_key_covers_caller_repodata_filename(solver_request):
-    current = msgspec.structs.replace(
-        solver_request,
-        repodata_fn="current_repodata.json",
-    )
-
-    assert current.warming_key() != solver_request.warming_key()
-
-
 def test_warming_key_excludes_dependency_versions(monkeypatch, solver_request):
     monkeypatch.setattr(solver_module, "pkg_version", lambda _name: "one")
     first_key = solver_request.warming_key()

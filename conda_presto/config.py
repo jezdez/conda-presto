@@ -42,8 +42,8 @@ Server tuning:
         Optional Redis URL for a Redis-backed result cache.
     ``CONDA_PRESTO_SOLVER_CACHE_WARM_CANDIDATE_SIZE``
         Max successful cacheable foreground ``/solver/v1`` requests retained
-        for cache warming (default: ``32``), plus the same number of
-        one-request observations. Set to ``0`` to disable recording.
+        for cache warming (default: ``32``), plus the same number retained
+        outside the candidate catalog. Set to ``0`` to disable recording.
     ``CONDA_PRESTO_SOLVER_CACHE_WARM_CANDIDATE_PERSIST``
         Persist candidates without detected credentials in a configured file
         or Redis result store (default: ``false``).

@@ -30,9 +30,9 @@ Only the conda `Solver.solve_final_state()` operation is delegated. The client
 serializes installed package records, history, pins, virtual packages,
 requested specs, channel definitions, and the effective channel-priority,
 package-format, implicit Python `pip` dependency, dependency-cycle,
-free-channel, repodata-shard, index-cache, and local repodata TTL settings. The
-effective repodata filename selected by the client remains authoritative in the
-service. The service reconstructs that state with private
+repodata-shard, index-cache, and local repodata TTL settings. The effective
+repodata filename selected by the client remains authoritative in the service.
+The service reconstructs that state with private
 `conda-rattler-solver` APIs and forces its `rattler` backend. Packages-not-found,
 unsatisfiable, and pin conflict errors are
 reconstructed in the client as their conda exception categories so conda's

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 import time
-from dataclasses import asdict, dataclass, field
+from dataclasses import dataclass, field
 
 import anyio
 
@@ -55,10 +55,6 @@ class SolverCacheWarmStats:
     failures: int = 0
     rejected_publications: int = 0
 
-    def log_context(self, selected: int) -> dict[str, int]:
-        """Return counters for cycle logging."""
-        return {"selected": selected, **asdict(self)}
-
 
 @dataclass
 class SolverCacheWarmer:
@@ -92,18 +88,6 @@ class SolverCacheWarmer:
                 self.stats.failures += 1
                 log.warning("Solver cache refresh cycle failed")
             delay_s = max(0.0, self.interval_s - (time.monotonic() - started))
-
-    def create_worker(self) -> PersistentSolveWorker:
-        """Create the worker for one refresh cycle."""
-        timeout_s = min(SOLVE_TIMEOUT_S, SOLVER_CACHE_WARM_REQUEST_TIMEOUT_S)
-        return PersistentSolveWorker(
-            [],
-            [],
-            restart_on_failure=False,
-            startup_timeout_s=timeout_s,
-            warmup_on_start=False,
-            log_worker_errors=False,
-        )
 
     async def cycle(self, stop: anyio.Event | None = None) -> None:
         """Refresh the selected cache-warming candidates."""
@@ -193,7 +177,17 @@ class SolverCacheWarmer:
                     self.stats.foreground_skips += 1
                     break
                 if self.active_worker is None:
-                    self.active_worker = self.create_worker()
+                    self.active_worker = PersistentSolveWorker(
+                        [],
+                        [],
+                        restart_on_failure=False,
+                        startup_timeout_s=min(
+                            SOLVE_TIMEOUT_S,
+                            SOLVER_CACHE_WARM_REQUEST_TIMEOUT_S,
+                        ),
+                        warmup_on_start=False,
+                        log_worker_errors=False,
+                    )
                     try:
                         await anyio.to_thread.run_sync(
                             self.active_worker.start,
@@ -321,7 +315,7 @@ class SolverCacheWarmer:
                         self.stats.failures += 1
                         log.warning("Solver cache refresh worker cleanup failed")
                 await self.warm_candidates.checkpoint()
-                summary = self.stats.log_context(selected)
+                summary = {"selected": selected, **vars(self.stats)}
                 log.info(
                     "Solver cache refresh cycle %s",
                     " ".join(f"{key}={value}" for key, value in summary.items()),
