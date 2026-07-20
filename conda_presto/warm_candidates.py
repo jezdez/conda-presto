@@ -111,6 +111,13 @@ class SolverWarmCandidates:
             if entry.eligible(now)
         )[:limit]
 
+    def discard(self, fingerprint: str) -> None:
+        """Discard one request that cannot produce a cacheable result."""
+        removed = self.entries.pop(fingerprint, None)
+        removed = self.observations.pop(fingerprint, None) or removed
+        if removed is not None:
+            self.generation += 1
+
     async def load(self, store: Store | None, now: float | None = None) -> None:
         """Load persisted candidates without affecting readiness."""
         if not self.persist or store is None:

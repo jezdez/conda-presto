@@ -383,6 +383,22 @@ def test_warm_candidates_bounds_new_request_observations(solver_request):
     assert list(warm_candidates.observations) == [requests[2].warming_key()]
 
 
+def test_warm_candidates_discards_entries_and_observations(solver_request):
+    warm_candidates = SolverWarmCandidates(max_size=1)
+    observed = msgspec.structs.replace(solver_request, specs_to_add=["observed"])
+    warm_candidates.record(solver_request, now=1)
+    warm_candidates.record(solver_request, now=2)
+    warm_candidates.record(observed, now=3)
+    generation = warm_candidates.generation
+
+    warm_candidates.discard(observed.warming_key())
+    warm_candidates.discard(solver_request.warming_key())
+
+    assert warm_candidates.entries == {}
+    assert warm_candidates.observations == {}
+    assert warm_candidates.generation == generation + 2
+
+
 def test_zero_size_disables_recording(solver_request):
     warm_candidates = SolverWarmCandidates(max_size=0)
 
