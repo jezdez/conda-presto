@@ -44,7 +44,8 @@ Cache-warming candidates
 : successful cacheable foreground solver requests are recorded locally. A
   request becomes eligible for refresh after repeated use. Candidates are
   ordered by request count and recency; background refreshes do not change
-  either value.
+  either value. A bounded observation tier lets a repeated new request enter a
+  full candidate catalog instead of being discarded after every request.
 
 ## Cache keys and repodata checks
 

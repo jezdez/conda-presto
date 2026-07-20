@@ -51,6 +51,7 @@ class SolverWarmCandidates:
     max_size: int
     persist: bool = False
     entries: dict[str, SolverWarmCandidate] = field(default_factory=dict)
+    observations: dict[str, SolverWarmCandidate] = field(default_factory=dict)
     generation: int = 0
     persisted_generation: int = 0
 
@@ -70,16 +71,30 @@ class SolverWarmCandidates:
             entry.request = request
             entry.request_count += 1
             entry.last_requested = now
-        else:
+        elif entry := self.observations.pop(fingerprint, None):
+            entry.request = request
+            entry.request_count += 1
+            entry.last_requested = now
+            if len(self.entries) == self.max_size:
+                del self.entries[self._ranked()[-1].fingerprint]
+            self.entries[fingerprint] = entry
+        elif len(self.entries) < self.max_size:
             self.entries[fingerprint] = SolverWarmCandidate(
                 fingerprint=fingerprint,
                 request=request,
                 request_count=1,
                 last_requested=now,
             )
+        else:
+            self.observations[fingerprint] = SolverWarmCandidate(
+                fingerprint=fingerprint,
+                request=request,
+                request_count=1,
+                last_requested=now,
+            )
+            self._enforce_observation_limit()
         self.generation += 1
-        self._enforce_limit()
-        return fingerprint in self.entries
+        return fingerprint in self.entries or fingerprint in self.observations
 
     def candidates(
         self,
@@ -125,6 +140,8 @@ class SolverWarmCandidates:
         now = time.time() if now is None else now
         filtered = False
         self.entries.clear()
+        self.observations.clear()
+        loaded: dict[str, SolverWarmCandidate] = {}
         for entry in catalog.entries:
             fingerprint = entry.request.warming_key()
             if (
@@ -135,16 +152,24 @@ class SolverWarmCandidates:
             ):
                 filtered = True
                 continue
-            existing = self.entries.get(fingerprint)
-            if existing is not None and self._rank_key(existing) <= self._rank_key(
-                entry
-            ):
+            existing = loaded.get(fingerprint)
+            if existing is not None:
                 filtered = True
-                continue
-            self.entries[fingerprint] = entry
-        before = len(self.entries)
+                if self._rank_key(existing) <= self._rank_key(entry):
+                    continue
+            loaded[fingerprint] = entry
+        ranked = sorted(loaded.values(), key=self._rank_key)
+        for entry in ranked:
+            target = (
+                self.entries
+                if entry.eligible(now) or len(self.entries) < self.max_size
+                else self.observations
+            )
+            target[entry.fingerprint] = entry
+        before = len(self.entries) + len(self.observations)
         self._enforce_limit()
-        filtered = filtered or before != len(self.entries)
+        self._enforce_observation_limit()
+        filtered = filtered or before != len(self.entries) + len(self.observations)
         self.generation = 1 if filtered else 0
         self.persisted_generation = 0
 
@@ -162,7 +187,7 @@ class SolverWarmCandidates:
             StoredWarmCandidates(
                 entries=[
                     msgspec.structs.replace(entry)
-                    for entry in self._ranked()
+                    for entry in (*self._ranked(), *self._ranked_observations())
                     if not entry.request.has_detected_credentials()
                 ]
             )
@@ -184,23 +209,37 @@ class SolverWarmCandidates:
             self.persisted_generation = generation
 
     def _prune(self, now: float) -> bool:
-        expired = [
-            fingerprint
-            for fingerprint, entry in self.entries.items()
-            if max(0.0, now - entry.last_requested) > SOLVER_WARM_CANDIDATE_MAX_AGE_S
-        ]
-        for fingerprint in expired:
-            del self.entries[fingerprint]
-        return bool(expired)
+        changed = False
+        for entries in (self.entries, self.observations):
+            expired = [
+                fingerprint
+                for fingerprint, entry in entries.items()
+                if max(0.0, now - entry.last_requested)
+                > SOLVER_WARM_CANDIDATE_MAX_AGE_S
+            ]
+            for fingerprint in expired:
+                del entries[fingerprint]
+            changed = changed or bool(expired)
+        return changed
 
     def _enforce_limit(self) -> None:
         while len(self.entries) > self.max_size:
             del self.entries[self._ranked()[-1].fingerprint]
 
+    def _enforce_observation_limit(self) -> None:
+        while len(self.observations) > self.max_size:
+            del self.observations[self._ranked_observations()[-1].fingerprint]
+
     def _ranked(self) -> list[SolverWarmCandidate]:
         return sorted(
             self.entries.values(),
             key=self._rank_key,
+        )
+
+    def _ranked_observations(self) -> list[SolverWarmCandidate]:
+        return sorted(
+            self.observations.values(),
+            key=lambda entry: (-entry.last_requested, entry.fingerprint),
         )
 
     @staticmethod

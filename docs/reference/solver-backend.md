@@ -97,7 +97,9 @@ versions so recorded requests can remain eligible after compatible upgrades.
 Background requests are not recorded. Candidates remain process-local unless
 persistence is enabled, and requests with detected credentials are excluded
 from persistence. Candidates are not available through `/r`, OpenAPI, health
-responses, or request logs.
+responses, or request logs. A bounded set of one-request observations allows a
+repeated newcomer to replace the lowest-ranked entry when the candidate catalog
+is full.
 
 ## Internal protocol
 

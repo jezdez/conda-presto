@@ -261,7 +261,10 @@ cache-warming candidates. Each record stores the serialized request, request
 count, and most recent request time. A request becomes eligible after two uses
 and expires after seven days without another use. Set
 `CONDA_PRESTO_SOLVER_CACHE_WARM_CANDIDATE_SIZE=0` to disable recording or change
-the default 32-entry limit.
+the default 32-entry limit. When that catalog is full, conda-presto also retains
+up to the same number of one-request observations. A second request promotes an
+observation into the catalog and evicts its lowest-ranked entry. This lets a
+changed workload replace candidates accumulated earlier in the service lifetime.
 
 Candidates are process-local and are not served through HTTP or included in
 logs. Persistence is disabled by default because requests can contain installed

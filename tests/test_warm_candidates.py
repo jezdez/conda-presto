@@ -155,18 +155,13 @@ def test_warming_key_covers_protocol_version(monkeypatch, solver_request):
     assert solver_request.warming_key() != first
 
 
-def test_warming_key_uses_effective_repodata_filename(monkeypatch, solver_request):
+def test_warming_key_covers_caller_repodata_filename(solver_request):
     current = msgspec.structs.replace(
         solver_request,
         repodata_fn="current_repodata.json",
     )
-    monkeypatch.setattr(
-        solver_module,
-        "maybe_ignore_current_repodata",
-        lambda _value: "repodata.json",
-    )
 
-    assert current.warming_key() == solver_request.warming_key()
+    assert current.warming_key() != solver_request.warming_key()
 
 
 def test_warming_key_excludes_dependency_versions(monkeypatch, solver_request):
@@ -285,6 +280,7 @@ def test_warm_candidates_expires_entries_after_seven_days(solver_request):
 
     assert candidates == ()
     assert warm_candidates.entries == {}
+    assert warm_candidates.observations == {}
 
 
 def test_warm_candidates_ranks_by_request_count_then_recency(solver_request):
@@ -340,6 +336,7 @@ def test_warm_candidates_evicts_lowest_ranked_entry_at_count_limit(solver_reques
     warm_candidates.record(most_requested, now=0)
     warm_candidates.record(oldest, now=1)
     warm_candidates.record(newest, now=2)
+    warm_candidates.record(newest, now=3)
 
     assert set(warm_candidates.entries) == {
         most_requested.warming_key(),
@@ -347,11 +344,51 @@ def test_warm_candidates_evicts_lowest_ranked_entry_at_count_limit(solver_reques
     }
 
 
+def test_warm_candidates_admits_repeated_newcomer_to_full_catalog(solver_request):
+    warm_candidates = SolverWarmCandidates(max_size=1)
+    established = msgspec.structs.replace(
+        solver_request,
+        specs_to_add=["established"],
+    )
+    newcomer = msgspec.structs.replace(
+        solver_request,
+        specs_to_add=["newcomer"],
+    )
+    for request_count in range(100):
+        warm_candidates.record(established, now=request_count)
+
+    warm_candidates.record(newcomer, now=100)
+
+    assert list(warm_candidates.entries) == [established.warming_key()]
+    assert list(warm_candidates.observations) == [newcomer.warming_key()]
+
+    warm_candidates.record(newcomer, now=101)
+
+    assert list(warm_candidates.entries) == [newcomer.warming_key()]
+    assert warm_candidates.observations == {}
+    assert warm_candidates.entries[newcomer.warming_key()].request_count == 2
+
+
+def test_warm_candidates_bounds_new_request_observations(solver_request):
+    warm_candidates = SolverWarmCandidates(max_size=1)
+    requests = [
+        msgspec.structs.replace(solver_request, specs_to_add=[name])
+        for name in ("established", "older", "newer")
+    ]
+    warm_candidates.record(requests[0], now=0)
+    warm_candidates.record(requests[0], now=1)
+    warm_candidates.record(requests[1], now=2)
+    warm_candidates.record(requests[2], now=3)
+
+    assert list(warm_candidates.observations) == [requests[2].warming_key()]
+
+
 def test_zero_size_disables_recording(solver_request):
     warm_candidates = SolverWarmCandidates(max_size=0)
 
     assert not warm_candidates.record(solver_request, now=1)
     assert warm_candidates.entries == {}
+    assert warm_candidates.observations == {}
 
 
 @pytest.mark.anyio
@@ -372,6 +409,29 @@ async def test_persistent_warm_candidates_round_trip(
     assert restored.entries[fingerprint].request == solver_request
     assert restored.entries[fingerprint].request_count == 2
     assert len(restored.candidates(limit=1, now=30)) == 1
+
+
+@pytest.mark.anyio
+async def test_persistent_warm_candidates_round_trips_observations(
+    persistent_store,
+    solver_request,
+):
+    source = SolverWarmCandidates(max_size=1, persist=True)
+    established = msgspec.structs.replace(
+        solver_request,
+        specs_to_add=["established"],
+    )
+    observed = msgspec.structs.replace(solver_request, specs_to_add=["observed"])
+    source.record(established, now=10)
+    source.record(established, now=11)
+    source.record(observed, now=12)
+
+    await source.checkpoint(persistent_store, now=12)
+    restored = SolverWarmCandidates(max_size=1, persist=True)
+    await restored.load(persistent_store, now=13)
+
+    assert list(restored.entries) == [established.warming_key()]
+    assert list(restored.observations) == [observed.warming_key()]
 
 
 @pytest.mark.anyio
