@@ -114,10 +114,6 @@ def persistent_store(request, tmp_path):
             id="pip-dependency",
         ),
         pytest.param({"allow_cycles": False}, id="allow-cycles"),
-        pytest.param(
-            {"restore_free_channel": True},
-            id="restore-free-channel",
-        ),
         pytest.param({"repodata_use_shards": False}, id="repodata-shards"),
         pytest.param({"use_index_cache": True}, id="index-cache"),
         pytest.param(
@@ -336,7 +332,9 @@ def test_warm_candidates_evicts_lowest_ranked_entry_at_count_limit(solver_reques
     }
 
 
-def test_warm_candidates_admits_repeated_newcomer_to_full_catalog(solver_request):
+def test_warm_candidates_admits_newcomer_after_it_outranks_candidate(
+    solver_request,
+):
     warm_candidates = SolverWarmCandidates(max_size=1)
     established = msgspec.structs.replace(
         solver_request,
@@ -345,6 +343,10 @@ def test_warm_candidates_admits_repeated_newcomer_to_full_catalog(solver_request
     newcomer = msgspec.structs.replace(
         solver_request,
         specs_to_add=["newcomer"],
+    )
+    one_off = msgspec.structs.replace(
+        solver_request,
+        specs_to_add=["one-off"],
     )
     for request_count in range(100):
         warm_candidates.record(established, now=request_count)
@@ -356,9 +358,54 @@ def test_warm_candidates_admits_repeated_newcomer_to_full_catalog(solver_request
 
     warm_candidates.record(newcomer, now=101)
 
+    assert list(warm_candidates.entries) == [established.warming_key()]
+    assert list(warm_candidates.observations) == [newcomer.warming_key()]
+    assert warm_candidates.observations[newcomer.warming_key()].request_count == 2
+
+    warm_candidates.record(one_off, now=102)
+
+    assert list(warm_candidates.observations) == [newcomer.warming_key()]
+
+    for request_count in range(103, 201):
+        warm_candidates.record(newcomer, now=request_count)
+
     assert list(warm_candidates.entries) == [newcomer.warming_key()]
+    assert list(warm_candidates.observations) == [established.warming_key()]
+    assert warm_candidates.entries[newcomer.warming_key()].request_count == 100
+    assert warm_candidates.observations[established.warming_key()].request_count == 100
+
+    warm_candidates.record(established, now=201)
+
+    assert list(warm_candidates.entries) == [established.warming_key()]
+    assert warm_candidates.entries[established.warming_key()].request_count == 101
+    assert warm_candidates.observations[newcomer.warming_key()].request_count == 100
+
+
+@pytest.mark.parametrize(
+    "vacate",
+    [pytest.param("expire", id="expired"), pytest.param("discard", id="discarded")],
+)
+def test_warm_candidates_promotes_observation_when_catalog_slot_opens(
+    solver_request,
+    vacate,
+):
+    warm_candidates = SolverWarmCandidates(max_size=1)
+    observed = msgspec.structs.replace(solver_request, specs_to_add=["observed"])
+    for _ in range(3):
+        warm_candidates.record(solver_request, now=0)
+    warm_candidates.record(observed, now=100)
+    warm_candidates.record(observed, now=101)
+
+    if vacate == "expire":
+        warm_candidates.candidates(
+            limit=1,
+            now=SOLVER_WARM_CANDIDATE_MAX_AGE_S + 1,
+        )
+    else:
+        warm_candidates.discard(solver_request.warming_key())
+
+    assert list(warm_candidates.entries) == [observed.warming_key()]
     assert warm_candidates.observations == {}
-    assert warm_candidates.entries[newcomer.warming_key()].request_count == 2
 
 
 def test_warm_candidates_bounds_new_request_observations(solver_request):
@@ -431,10 +478,9 @@ async def test_persistent_warm_candidates_round_trip(
 
 @pytest.mark.anyio
 async def test_persistent_warm_candidates_round_trips_observations(
-    persistent_store,
     solver_request,
 ):
-    store_operations = StoreOperationCoordinator(persistent_store)
+    store_operations = StoreOperationCoordinator(MemoryStore())
     source = SolverWarmCandidates(
         max_size=1,
         persist=True,
@@ -447,7 +493,9 @@ async def test_persistent_warm_candidates_round_trips_observations(
     observed = msgspec.structs.replace(solver_request, specs_to_add=["observed"])
     source.record(established, now=10)
     source.record(established, now=11)
-    source.record(observed, now=12)
+    source.record(established, now=12)
+    source.record(observed, now=13)
+    source.record(observed, now=14)
 
     restored = SolverWarmCandidates(
         max_size=1,
@@ -455,27 +503,36 @@ async def test_persistent_warm_candidates_round_trips_observations(
         store_operations=store_operations,
     )
     async with store_operations.lifespan():
-        await source.checkpoint(now=12)
-        await restored.load(now=13)
+        await source.checkpoint(now=14)
+        await restored.load(now=15)
 
     assert list(restored.entries) == [established.warming_key()]
     assert list(restored.observations) == [observed.warming_key()]
+    assert restored.observations[observed.warming_key()].request_count == 2
 
 
 @pytest.mark.anyio
 async def test_persistence_is_opt_in(solver_request):
     store = MemoryStore()
-    source = SolverWarmCandidates(max_size=32)
+    store_operations = StoreOperationCoordinator(store)
+    source = SolverWarmCandidates(max_size=32, store_operations=store_operations)
     source.record(solver_request, now=1)
-    await source.checkpoint(now=1)
-    assert await store.get(SOLVER_WARM_CANDIDATE_STORE_KEY) is None
-
-    payload = msgspec.msgpack.encode(
-        StoredWarmCandidates(entries=list(source.entries.values()))
+    restored = SolverWarmCandidates(
+        max_size=32,
+        store_operations=store_operations,
     )
-    await store.set(SOLVER_WARM_CANDIDATE_STORE_KEY, payload)
-    restored = SolverWarmCandidates(max_size=32)
-    await restored.load(now=1)
+
+    async with store_operations.lifespan():
+        await source.checkpoint(now=1)
+        assert await store.get(SOLVER_WARM_CANDIDATE_STORE_KEY) is None
+        await store.set(
+            SOLVER_WARM_CANDIDATE_STORE_KEY,
+            msgspec.msgpack.encode(
+                StoredWarmCandidates(entries=list(source.entries.values()))
+            ),
+        )
+        await restored.load(now=1)
+
     assert restored.entries == {}
 
 

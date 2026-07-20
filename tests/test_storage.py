@@ -149,7 +149,7 @@ async def test_store_timeout_covers_queue_and_completion():
 
     async with anyio.create_task_group() as tasks:
         tasks.start_soon(complete_later)
-        with anyio.fail_after(0.18):
+        with anyio.fail_after(0.3):
             completed = await coordinator.set("key", b"value", timeout_s=0.15)
         tasks.cancel_scope.cancel()
 

@@ -71,13 +71,21 @@ class SolverWarmCandidates:
             entry.request = request
             entry.request_count += 1
             entry.last_requested = now
-        elif entry := self.observations.pop(fingerprint, None):
+        elif entry := self.observations.get(fingerprint):
             entry.request = request
             entry.request_count += 1
             entry.last_requested = now
-            if len(self.entries) == self.max_size:
-                del self.entries[self._ranked()[-1].fingerprint]
-            self.entries[fingerprint] = entry
+            if len(self.entries) < self.max_size:
+                del self.observations[fingerprint]
+                self.entries[fingerprint] = entry
+            else:
+                lowest_ranked = self._ranked()[-1]
+                if self._rank_key(entry) < self._rank_key(lowest_ranked):
+                    del self.observations[fingerprint]
+                    del self.entries[lowest_ranked.fingerprint]
+                    self.entries[fingerprint] = entry
+                    self.observations[lowest_ranked.fingerprint] = lowest_ranked
+                    self._rebalance()
         elif len(self.entries) < self.max_size:
             self.entries[fingerprint] = SolverWarmCandidate(
                 fingerprint=fingerprint,
@@ -92,7 +100,7 @@ class SolverWarmCandidates:
                 request_count=1,
                 last_requested=now,
             )
-            self._enforce_observation_limit()
+            self._rebalance()
         self.generation += 1
         return fingerprint in self.entries or fingerprint in self.observations
 
@@ -116,6 +124,7 @@ class SolverWarmCandidates:
         removed = self.entries.pop(fingerprint, None)
         removed = self.observations.pop(fingerprint, None) or removed
         if removed is not None:
+            self._rebalance()
             self.generation += 1
 
     async def load(self, now: float | None = None) -> None:
@@ -167,14 +176,11 @@ class SolverWarmCandidates:
         ranked = sorted(loaded.values(), key=self._rank_key)
         for entry in ranked:
             target = (
-                self.entries
-                if entry.eligible(now) or len(self.entries) < self.max_size
-                else self.observations
+                self.entries if len(self.entries) < self.max_size else self.observations
             )
             target[entry.fingerprint] = entry
         before = len(self.entries) + len(self.observations)
-        self._enforce_limit()
-        self._enforce_observation_limit()
+        self._rebalance()
         filtered = filtered or before != len(self.entries) + len(self.observations)
         self.generation = 1 if filtered else 0
         self.persisted_generation = 0
@@ -226,13 +232,15 @@ class SolverWarmCandidates:
             for fingerprint in expired:
                 del entries[fingerprint]
             changed = changed or bool(expired)
+        if changed:
+            self._rebalance()
         return changed
 
-    def _enforce_limit(self) -> None:
-        while len(self.entries) > self.max_size:
-            del self.entries[self._ranked()[-1].fingerprint]
-
-    def _enforce_observation_limit(self) -> None:
+    def _rebalance(self) -> None:
+        while len(self.entries) < self.max_size and self.observations:
+            entry = self._ranked_observations()[0]
+            del self.observations[entry.fingerprint]
+            self.entries[entry.fingerprint] = entry
         while len(self.observations) > self.max_size:
             del self.observations[self._ranked_observations()[-1].fingerprint]
 
@@ -245,7 +253,7 @@ class SolverWarmCandidates:
     def _ranked_observations(self) -> list[SolverWarmCandidate]:
         return sorted(
             self.observations.values(),
-            key=lambda entry: (-entry.last_requested, entry.fingerprint),
+            key=self._rank_key,
         )
 
     @staticmethod

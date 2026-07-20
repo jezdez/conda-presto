@@ -129,11 +129,9 @@ class ResultCache:
         """Return the configured persistent store, if enabled."""
         if self.store_name is None:
             return None
-        return getattr(
-            request.app.state,
-            "result_store",
-            request.app.stores.get(self.store_name),
-        )
+        if hasattr(request.app.state, "result_store"):
+            return request.app.state.result_store
+        return request.app.stores.get(self.store_name)
 
     @staticmethod
     def resolve_key(key: str) -> str:

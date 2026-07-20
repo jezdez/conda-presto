@@ -100,7 +100,9 @@ uses the broker-managed local process and does not define a remote protocol.
 Its final-state entries share the configured cache storage and
 in-memory bounds, but remain separate from public `/resolve` permalinks.
 Successful foreground requests can be recorded as candidates for later cache
-refresh without changing the final-state cache key.
+refresh without changing the final-state cache key. When the catalog is full, a
+recorded request enters only after its count, then recency, outranks the
+lowest-ranked candidate.
 
 ## Conventions
 

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import anyio
 import msgspec
 import pytest
@@ -13,6 +15,20 @@ import conda_presto.cache as cache_module
 from conda_presto.cache import ResultCache
 from conda_presto.resolve import RepodataSnapshot
 from conda_presto.solver import PrestoSolveRequest, PrestoSolveResponse
+
+
+def test_result_cache_uses_lifespan_store_without_registry_fallback():
+    store = MemoryStore()
+    request = SimpleNamespace(
+        app=SimpleNamespace(
+            state=SimpleNamespace(result_store=store),
+            stores=SimpleNamespace(
+                get=lambda _name: pytest.fail("store registry fallback was used")
+            ),
+        )
+    )
+
+    assert ResultCache(max_size=1, store_name="results").store_from(request) is store
 
 
 @pytest.mark.anyio
