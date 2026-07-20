@@ -254,6 +254,28 @@ platforms, output format, conda-presto and solver versions, and local repodata
 cache-file markers. See the [Presto solver reference](solver-backend.md) for the
 internal solver cache key and invalidation rules.
 
+### Cache-warming candidates
+
+Successful cacheable foreground `/solver/v1` requests are recorded as
+cache-warming candidates. Each record stores the serialized request, request
+count, and most recent request time. A catalog entry becomes eligible for
+refresh after two uses and expires after seven days without another use. Set
+`CONDA_PRESTO_SOLVER_CACHE_WARM_CANDIDATE_SIZE=0` to disable recording or change
+the default 32-entry limit. When that catalog is full, conda-presto also retains
+up to the same number of observations outside it. An observation and the
+lowest-ranked candidate exchange places when the observation's request count,
+then its most recent request time, ranks higher. The displaced candidate keeps
+its accumulated count, and the highest-ranked observation fills a catalog slot
+when one becomes vacant.
+
+Candidates are process-local and are not served through HTTP or included in
+logs. Persistence is disabled by default because requests can contain installed
+package and channel state. To persist requests without detected credentials,
+configure a file or Redis result-cache backend and set
+`CONDA_PRESTO_SOLVER_CACHE_WARM_CANDIDATE_PERSIST=true`. Requests with detected
+channel credentials or tokenized URLs remain memory-only. Redis deployments do
+not merge candidate lists across service processes.
+
 ### Concurrency tuning
 
 Two variables control parallelism:

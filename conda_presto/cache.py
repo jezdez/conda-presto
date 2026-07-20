@@ -129,6 +129,8 @@ class ResultCache:
         """Return the configured persistent store, if enabled."""
         if self.store_name is None:
             return None
+        if hasattr(request.app.state, "result_store"):
+            return request.app.state.result_store
         return request.app.stores.get(self.store_name)
 
     @staticmethod
@@ -363,6 +365,11 @@ class SolverServiceResult:
 
     result: PrestoSolveResponse | PrestoSolveError
     disposition: SolverCacheDisposition
+
+    @property
+    def should_record_for_warming(self) -> bool:
+        """Return whether this result should be recorded for cache warming."""
+        return self.disposition in {"cache-hit", "published", "already-current"}
 
 
 @dataclass

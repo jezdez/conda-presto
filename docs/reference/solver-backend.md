@@ -90,6 +90,18 @@ Measure hit rates against the commands and prefix states used by the deployment.
 Treat a configured file or Redis store as private because final states can
 contain package metadata from credentialed channels.
 
+The service records successful cacheable foreground `/solver/v1` requests as
+cache-warming candidates.
+Candidate identity includes the serialized request but omits dependency
+versions so recorded requests can remain eligible after compatible upgrades.
+Background requests are not recorded. Candidates remain process-local unless
+persistence is enabled, and requests with detected credentials are excluded
+from persistence. Candidates are not available through `/r`, OpenAPI, health
+responses, or request logs. A bounded set of observations retains requests
+outside the candidate catalog. An observation and the lowest-ranked candidate
+exchange places when the observation's request count, then recency, ranks
+higher, without discarding either request's accumulated count.
+
 ## Internal protocol
 
 The broker child enables `POST /solver/v1` through its

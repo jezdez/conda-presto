@@ -26,8 +26,6 @@ from conda_presto.app import (
     explain_post,
     formats,
     health,
-    on_shutdown,
-    on_startup,
     parse,
     platforms,
     preflight_post,
@@ -35,6 +33,7 @@ from conda_presto.app import (
     resolve_get,
     resolve_post,
     result_get,
+    solver_resources_lifespan,
     solver_v1,
     transcode_post,
     version,
@@ -49,6 +48,7 @@ from conda_presto.solver import (
     PrestoSolveRequest,
     PrestoSolveResponse,
 )
+from conda_presto.warm_candidates import SolverWarmCandidates
 
 
 @pytest.fixture()
@@ -247,6 +247,7 @@ async def test_solver_v1_caches_successful_final_state(
     )
     test_app.state.solve_worker = SimpleNamespace(solve_final_state=solve)
     test_app.state.solver_limiter = anyio.CapacityLimiter(1)
+    test_app.state.solver_warm_candidates = SolverWarmCandidates(max_size=32)
 
     first = await client.post(
         "/solver/v1",
@@ -265,6 +266,8 @@ async def test_solver_v1_caches_successful_final_state(
     assert "location" not in second.headers
     assert [data for data, _ in calls] == [presto_solver_request]
     assert calls[0][1] > time.monotonic()
+    entry = next(iter(test_app.state.solver_warm_candidates.entries.values()))
+    assert entry.request_count == 2
 
 
 @pytest.mark.anyio
@@ -524,6 +527,7 @@ async def test_solver_v1_coalesces_concurrent_cache_misses(
     )
     test_app.state.solve_worker = SimpleNamespace(solve_final_state=solve)
     test_app.state.solver_limiter = anyio.CapacityLimiter(1)
+    test_app.state.solver_warm_candidates = SolverWarmCandidates(max_size=32)
 
     try:
         async with anyio.create_task_group() as tasks:
@@ -568,6 +572,7 @@ async def test_solver_v1_returns_structured_conda_error(
     )
     test_app.state.solve_worker = SimpleNamespace(solve_final_state=solve)
     test_app.state.solver_limiter = anyio.CapacityLimiter(1)
+    test_app.state.solver_warm_candidates = SolverWarmCandidates(max_size=32)
 
     responses = [
         await client.post(
@@ -582,6 +587,7 @@ async def test_solver_v1_returns_structured_conda_error(
     assert responses[0].json()["kind"] == "packages-not-found"
     assert responses[0].json()["packages"] == ["missing"]
     assert [data for data, _ in calls] == [presto_solver_request] * 2
+    assert not test_app.state.solver_warm_candidates.entries
 
 
 @pytest.mark.anyio
@@ -681,6 +687,7 @@ async def test_solver_v1_does_not_cache_transient_shard_fallback(
         )
     )
     test_app.state.solver_limiter = anyio.CapacityLimiter(1)
+    test_app.state.solver_warm_candidates = SolverWarmCandidates(max_size=32)
 
     response = await client.post(
         "/solver/v1",
@@ -691,6 +698,7 @@ async def test_solver_v1_does_not_cache_transient_shard_fallback(
     assert response.status_code == 200
     assert response.json()["records"] == [{"name": "zlib"}]
     assert not test_app.state.result_cache.entries
+    assert not test_app.state.solver_warm_candidates.entries
 
 
 @pytest.mark.anyio
@@ -3052,18 +3060,6 @@ async def test_resolve_format_propagates_solver_errors_as_500(client, monkeypatc
 
 
 @pytest.mark.anyio
-async def test_on_shutdown_shuts_down_process_pool(monkeypatch):
-    calls = []
-    monkeypatch.setattr(
-        "conda_presto.app.shutdown_process_pool",
-        lambda: calls.append(True),
-    )
-    dummy_app = Litestar(route_handlers=[health])
-    await on_shutdown(dummy_app)
-    assert calls == [True]
-
-
-@pytest.mark.anyio
 async def test_openapi_schema(client):
     resp = await client.get("/openapi.json")
     assert resp.status_code == 200
@@ -3120,23 +3116,31 @@ async def test_openapi_schema(client):
 
 
 @pytest.mark.anyio
-async def test_on_startup_initializes(monkeypatch):
+async def test_solver_resources_lifespan_initializes_and_shuts_down(monkeypatch):
     warmup_calls = []
+    shutdown_calls = []
 
     def fake_warmup(channels, platforms):
         warmup_calls.append((channels, platforms))
 
     monkeypatch.setattr(app_module, "warmup", fake_warmup)
+    monkeypatch.setattr(
+        app_module,
+        "shutdown_process_pool",
+        lambda: shutdown_calls.append(True),
+    )
     dummy_app = Litestar(route_handlers=[health])
-    await on_startup(dummy_app)
-    assert dummy_app.state.solver_limiter is not None
-    assert dummy_app.state.result_cache is not None
+    async with solver_resources_lifespan(dummy_app):
+        assert dummy_app.state.solver_limiter is not None
+        assert dummy_app.state.result_cache is not None
     assert len(warmup_calls) == 1
+    assert shutdown_calls == [True]
 
 
 @pytest.mark.anyio
-async def test_on_startup_starts_persistent_worker(monkeypatch):
+async def test_solver_resources_lifespan_starts_persistent_worker(monkeypatch):
     started = []
+    stopped = []
     monkeypatch.delenv("CONDA_BROKER_SERVICE_NAME", raising=False)
 
     def create_worker(channels, platforms, *, restart_on_failure):
@@ -3144,52 +3148,40 @@ async def test_on_startup_starts_persistent_worker(monkeypatch):
         return SimpleNamespace(
             running=True,
             start=lambda: started.append((channels, platforms)),
+            shutdown=lambda: stopped.append(True),
         )
 
     monkeypatch.setattr(app_module, "PERSISTENT_WORKER", True)
     monkeypatch.setattr(app_module, "PersistentSolveWorker", create_worker)
     dummy_app = Litestar(route_handlers=[health])
 
-    await on_startup(dummy_app)
-
-    assert started == [
-        (app_module.DEFAULT_CHANNELS, app_module.DEFAULT_PLATFORMS),
-    ]
-    assert dummy_app.state.solve_worker.running
+    async with solver_resources_lifespan(dummy_app):
+        assert started == [
+            (app_module.DEFAULT_CHANNELS, app_module.DEFAULT_PLATFORMS),
+        ]
+        assert dummy_app.state.solve_worker.running
+    assert stopped == [True]
 
 
 @pytest.mark.anyio
-async def test_on_startup_leaves_broker_worker_recovery_to_broker(monkeypatch):
+async def test_solver_resources_lifespan_leaves_broker_recovery_to_broker(
+    monkeypatch,
+):
     captured = {}
 
     def create_worker(channels, platforms, *, restart_on_failure):
         captured["restart_on_failure"] = restart_on_failure
-        return SimpleNamespace(running=True, start=lambda: None)
+        return SimpleNamespace(running=True, start=lambda: None, shutdown=lambda: None)
 
     monkeypatch.setenv("CONDA_BROKER_SERVICE_NAME", "conda-presto.server")
     monkeypatch.setattr(app_module, "PERSISTENT_WORKER", True)
     monkeypatch.setattr(app_module, "PersistentSolveWorker", create_worker)
     dummy_app = Litestar(route_handlers=[health])
 
-    await on_startup(dummy_app)
+    async with solver_resources_lifespan(dummy_app):
+        pass
 
     assert captured == {"restart_on_failure": False}
-
-
-@pytest.mark.anyio
-async def test_on_shutdown_shuts_down_persistent_worker(monkeypatch):
-    calls = []
-    dummy_app = Litestar(route_handlers=[health])
-    dummy_app.state.solve_worker = SimpleNamespace(
-        shutdown=lambda: calls.append("worker")
-    )
-    monkeypatch.setattr(
-        app_module, "shutdown_process_pool", lambda: calls.append("pool")
-    )
-
-    await on_shutdown(dummy_app)
-
-    assert calls == ["worker", "pool"]
 
 
 @pytest.mark.anyio

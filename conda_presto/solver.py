@@ -40,6 +40,7 @@ from .resolve import RepodataSnapshot, platform_lock
 log = logging.getLogger(__name__)
 
 SOLVER_CACHE_ENVELOPE_VERSION = 3
+SOLVER_WARMING_ENVELOPE_VERSION = 1
 SOLVER_CACHE_DEPENDENCY_PACKAGES = (
     "conda-presto",
     "conda",
@@ -247,6 +248,10 @@ class PrestoSolveRequest(msgspec.Struct, forbid_unknown_fields=True):
         request.target_subdir()
         return request
 
+    def canonical_state(self) -> dict[str, Any]:
+        """Return this request as built-in serializable values."""
+        return msgspec.to_builtins(self)
+
     def cache_key(self) -> str:
         """Return the cache key for this request and dependency versions."""
         versions = {}
@@ -255,7 +260,7 @@ class PrestoSolveRequest(msgspec.Struct, forbid_unknown_fields=True):
                 versions[package] = pkg_version(package)
             except Exception:
                 versions[package] = "unknown"
-        request = msgspec.to_builtins(self)
+        request = self.canonical_state()
         # TTL controls freshness checks but not the final state for matching
         # repodata markers, so callers with different TTLs can share an entry.
         del request["local_repodata_ttl"]
@@ -271,6 +276,45 @@ class PrestoSolveRequest(msgspec.Struct, forbid_unknown_fields=True):
             separators=(",", ":"),
         ).encode()
         return hashlib.sha256(body).hexdigest()
+
+    def warming_key(self) -> str:
+        """Return the key used to record this request for cache warming."""
+        envelope = {
+            "version": SOLVER_WARMING_ENVELOPE_VERSION,
+            "operation": "solver/v1",
+            "request": self.canonical_state(),
+        }
+        body = json.dumps(
+            envelope,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode()
+        return hashlib.sha256(body).hexdigest()
+
+    def has_detected_credentials(self) -> bool:
+        """Return whether known credential patterns occur in this request."""
+        pending = [self.canonical_state()]
+        while pending:
+            value = pending.pop()
+            if isinstance(value, dict):
+                for key, item in value.items():
+                    if key.lower() in {"auth", "password", "token"} and item:
+                        return True
+                    pending.append(item)
+            elif isinstance(value, (list, tuple)):
+                pending.extend(value)
+            elif isinstance(value, str):
+                parsed = urlparse(value)
+                if (
+                    parsed.username
+                    or parsed.password
+                    or (parsed.scheme and (parsed.query or parsed.fragment))
+                ):
+                    return True
+                parts = [part for part in parsed.path.split("/") if part]
+                if parsed.scheme and "t" in parts[:-1]:
+                    return True
+        return False
 
     def repodata_snapshot(self) -> RepodataSnapshot:
         """Capture the server metadata that can affect this solve."""

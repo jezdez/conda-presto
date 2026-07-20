@@ -59,7 +59,7 @@ Performance design:
     - All solve calls run off the event loop via ``anyio.to_thread``
       with a concurrency limit of ``MAX_CONCURRENCY`` (configurable via
       ``CONDA_PRESTO_CONCURRENCY``).
-    - The ``on_startup`` hook pre-warms repodata caches so the first
+    - The application lifespan pre-warms repodata caches so the first
       request doesn't pay cold-start costs.
     - Successful ``/resolve`` responses are stored in a content-addressed
       result cache and can be fetched again from ``/r/{hash}`` while the
@@ -77,7 +77,8 @@ import logging
 import multiprocessing
 import os
 import time
-from collections.abc import Iterator
+from collections.abc import AsyncIterator, Iterator
+from contextlib import AsyncExitStack, asynccontextmanager
 from dataclasses import dataclass, field, replace
 from importlib.metadata import version as pkg_version
 from typing import Annotated, Literal
@@ -134,6 +135,8 @@ from .config import (
     RESULT_CACHE_REDIS_URL,
     RESULT_CACHE_SIZE,
     SOLVE_TIMEOUT_S,
+    SOLVER_CACHE_WARM_CANDIDATE_PERSIST,
+    SOLVER_CACHE_WARM_CANDIDATE_SIZE,
 )
 from .exceptions import SAFE_ERROR_TYPES, UnknownFormatError
 from .exporter import OutputFormat
@@ -155,6 +158,8 @@ from .solver import (
     PrestoSolverClient,
     PrestoSolveRequest,
 )
+from .storage import StoreOperationCoordinator
+from .warm_candidates import SolverWarmCandidates
 from .worker import PersistentSolveWorker
 
 log = logging.getLogger(__name__)
@@ -1738,54 +1743,94 @@ async def solver_v1(
         )
     if isinstance(result.result, PrestoSolveError):
         return Response(result.result, status_code=HTTP_422_UNPROCESSABLE_ENTITY)
+    warm_candidates = getattr(request.app.state, "solver_warm_candidates", None)
+    if warm_candidates is not None and result.should_record_for_warming:
+        warm_candidates.record(data)
     return Response(result.result)
 
 
-async def on_startup(app: Litestar) -> None:
-    """Initialize solver limiter and pre-warm repodata caches."""
-    app.state.solver_limiter = anyio.CapacityLimiter(MAX_CONCURRENCY)
-    app.state.result_cache = ResultCache(
-        max_size=RESULT_CACHE_SIZE,
-        max_bytes=RESULT_CACHE_MAX_MEMORY_BYTES,
-        store_name=(
-            RESULT_CACHE_STORE_NAME if RESULT_CACHE_BACKEND != "memory" else None
-        ),
-    )
-    if PERSISTENT_WORKER:
-        app.state.solve_worker = PersistentSolveWorker(
-            DEFAULT_CHANNELS,
-            DEFAULT_PLATFORMS,
-            restart_on_failure="CONDA_BROKER_SERVICE_NAME" not in os.environ,
+@asynccontextmanager
+async def solver_resources_lifespan(app: Litestar) -> AsyncIterator[None]:
+    """Own persistent storage, solver caches, and worker processes."""
+    resources = AsyncExitStack()
+    app.state.solve_worker = None
+    try:
+        await resources.__aenter__()
+        stores = ResultCache.stores_for_config(
+            RESULT_CACHE_BACKEND,
+            RESULT_CACHE_DIR,
+            RESULT_CACHE_REDIS_URL,
+            RESULT_CACHE_REDIS_NAMESPACE,
         )
-        log.info(
-            "Starting persistent solve worker for %s on %s",
-            DEFAULT_CHANNELS,
-            DEFAULT_PLATFORMS,
+        store = stores.get(RESULT_CACHE_STORE_NAME)
+        if store is not None:
+            await resources.enter_async_context(store)
+        app.state.result_store = store
+        store_operations = (
+            StoreOperationCoordinator(store) if store is not None else None
         )
-        await anyio.to_thread.run_sync(
-            app.state.solve_worker.start,
-            abandon_on_cancel=True,
+        app.state.solver_limiter = anyio.CapacityLimiter(MAX_CONCURRENCY)
+        app.state.result_cache = ResultCache(
+            max_size=RESULT_CACHE_SIZE,
+            max_bytes=RESULT_CACHE_MAX_MEMORY_BYTES,
+            store_name=RESULT_CACHE_STORE_NAME if store is not None else None,
         )
-    else:
-        app.state.solve_worker = None
-        log.info(
-            "Pre-warming repodata cache for %s on %s",
-            DEFAULT_CHANNELS,
-            DEFAULT_PLATFORMS,
+        app.state.solver_warm_candidates = SolverWarmCandidates(
+            max_size=SOLVER_CACHE_WARM_CANDIDATE_SIZE,
+            persist=SOLVER_CACHE_WARM_CANDIDATE_PERSIST,
+            store_operations=store_operations,
         )
-        await anyio.to_thread.run_sync(
-            lambda: warmup(DEFAULT_CHANNELS, DEFAULT_PLATFORMS),
-            abandon_on_cancel=True,
-        )
-    log.info("Repodata cache warm")
 
-
-async def on_shutdown(app: Litestar) -> None:
-    """Cleanly shut down the process pool on server teardown."""
-    worker = getattr(app.state, "solve_worker", None)
-    if worker is not None:
-        await anyio.to_thread.run_sync(worker.shutdown, abandon_on_cancel=True)
-    shutdown_process_pool()
+        async with AsyncExitStack() as runtime:
+            if store_operations is not None:
+                await runtime.enter_async_context(store_operations.lifespan())
+            await app.state.solver_warm_candidates.load()
+            if PERSISTENT_WORKER:
+                app.state.solve_worker = PersistentSolveWorker(
+                    DEFAULT_CHANNELS,
+                    DEFAULT_PLATFORMS,
+                    restart_on_failure=("CONDA_BROKER_SERVICE_NAME" not in os.environ),
+                )
+                log.info(
+                    "Starting persistent solve worker for %s on %s",
+                    DEFAULT_CHANNELS,
+                    DEFAULT_PLATFORMS,
+                )
+                await anyio.to_thread.run_sync(
+                    app.state.solve_worker.start,
+                    abandon_on_cancel=True,
+                )
+            else:
+                log.info(
+                    "Pre-warming repodata cache for %s on %s",
+                    DEFAULT_CHANNELS,
+                    DEFAULT_PLATFORMS,
+                )
+                await anyio.to_thread.run_sync(
+                    lambda: warmup(DEFAULT_CHANNELS, DEFAULT_PLATFORMS),
+                    abandon_on_cancel=True,
+                )
+            log.info("Repodata cache warm")
+            try:
+                yield
+            finally:
+                with anyio.CancelScope(shield=True):
+                    await app.state.solver_warm_candidates.checkpoint()
+    finally:
+        with anyio.CancelScope(shield=True):
+            try:
+                if app.state.solve_worker is not None:
+                    await anyio.to_thread.run_sync(
+                        app.state.solve_worker.shutdown,
+                        abandon_on_cancel=True,
+                    )
+            except Exception:
+                log.warning("Persistent solve worker cleanup failed")
+            finally:
+                try:
+                    shutdown_process_pool()
+                finally:
+                    await resources.aclose()
 
 
 def build_cors_config(origins: list[str]) -> CORSConfig | None:
@@ -1823,14 +1868,7 @@ app = Litestar(
         description="Fast dry-run conda solver HTTP API.",
         path="/",
     ),
-    on_startup=[on_startup],
-    on_shutdown=[on_shutdown],
-    stores=ResultCache.stores_for_config(
-        RESULT_CACHE_BACKEND,
-        RESULT_CACHE_DIR,
-        RESULT_CACHE_REDIS_URL,
-        RESULT_CACHE_REDIS_NAMESPACE,
-    ),
+    lifespan=[solver_resources_lifespan],
     request_max_body_size=MAX_BODY_BYTES,
     compression_config=CompressionConfig(backend="brotli", brotli_gzip_fallback=True),
     cors_config=build_cors_config(CORS_ORIGINS),

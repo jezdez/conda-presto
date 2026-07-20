@@ -40,6 +40,14 @@ Result cache
   client. The LRU can be backed by a persistent file or Redis store, which lets
   cached results survive server restarts.
 
+Cache-warming candidates
+: successful cacheable foreground solver requests are recorded locally. A
+  request becomes eligible for refresh after repeated use. Candidates are
+  ordered by request count and recency. Background refreshes do not change either
+  value. A bounded observation tier retains requests outside the catalog,
+  including displaced candidates. An observation and the lowest-ranked candidate
+  exchange places when the observation's count, then recency, ranks higher.
+
 ## Cache keys and repodata checks
 
 The result cache key is tied to the inputs that can change the response:
@@ -79,6 +87,12 @@ The final-state cache has narrower reuse than `/resolve`: repeated dry-runs,
 retries, creates, and cloned prefix states can hit, while a completed transaction
 normally changes the installed records and therefore the next key. Requests
 with different prefix histories or pins also use different keys.
+
+Candidate identity omits dependency versions and current repodata markers so a
+recorded request can remain eligible after metadata refreshes and compatible
+upgrades. Cache reuse still includes dependency versions and requires the
+current repodata markers to match. Candidates are local by default. Persistence
+excludes requests with detected credentials.
 
 ## Multi-platform solving
 
