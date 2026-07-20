@@ -32,8 +32,8 @@ In-memory solver index cache
 
 Result cache
 : successful HTTP `/resolve` responses and internal `/solver/v1` final states
-  share a bounded in-process LRU. Resolve responses use content-addressed keys;
-  solver final states use keys derived from serialized request fields and
+  share a bounded in-process LRU. Resolve responses use content-addressed keys.
+  Solver final states use keys derived from serialized request fields and
   dependency versions. Each solver entry also records repodata cache-file
   markers. A solver hit skips state-specific index construction and SAT solving,
   but the cached response is still encoded by the service and decoded by the

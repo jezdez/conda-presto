@@ -30,7 +30,7 @@ conda create --dry-run --solver=presto -n demo -c conda-forge python=3.13
 The service receives installed package records, history, pins, virtual packages,
 channel definitions, and the requested solver settings. It never receives the
 local prefix path or its file inventory. The result comes back as a final
-package state; conda still computes the local unlink/link transaction, including
+package state. conda still computes the local unlink/link transaction, including
 `--force-reinstall` behavior.
 
 ## Stop the service

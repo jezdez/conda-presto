@@ -44,9 +44,9 @@ The client still uses conda's `solve_for_diff()` and transaction code.
 The backend rejects operations it cannot reproduce accurately:
 
 - offline solves, because the service does not receive the client's package
-  cache paths;
+  cache paths.
 - `--update-deps`, because rattler implements it with a recursive solver that
-  would otherwise read the service's empty synthetic prefix; and
+  would otherwise read the service's empty synthetic prefix.
 - conda-build caller-provided indexes or repodata-subset callbacks.
 
 Create, install, update with the default update strategy, remove, and
@@ -113,6 +113,6 @@ Conda does not expose structured public accessors for
 packages. The service currently replaces that one private input-state mapping
 after construction. The public injection point is tracked by
 [conda-rattler-solver #105](https://github.com/conda/conda-rattler-solver/issues/105)
-and [PR #98](https://github.com/conda/conda-rattler-solver/pull/98); conda-presto
+and [PR #98](https://github.com/conda/conda-rattler-solver/pull/98). conda-presto
 can remove this override after a release containing that API becomes its
 minimum supported version.

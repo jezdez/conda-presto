@@ -7,7 +7,7 @@ or a conda exporter format without creating prefixes or installing packages.
 
 The optional internal `conda --solver=presto` plugin uses the same solve engine
 through the local broker service. The service returns only a final package
-state; conda computes and executes any requested prefix transaction locally.
+state. conda computes and executes any requested prefix transaction locally.
 
 ## Data flow
 

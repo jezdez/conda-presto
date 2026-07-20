@@ -57,7 +57,7 @@ does not start automatically or change normal `conda presto` commands. See the
 to start the service and find its endpoint.
 
 The service can also back the internal `conda --solver=presto` backend. It
-remains loopback-only and is not available through the Docker server image; see
+remains loopback-only and is not available through the Docker server image. See
 the [Presto solver tutorial](https://jezdez.github.io/conda-presto/tutorials/solver-backend/).
 
 ## Documentation
