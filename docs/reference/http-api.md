@@ -133,6 +133,53 @@ curl -sS http://localhost:8000/preflight \
 
 ---
 
+### `POST /repair`
+
+Return single-spec relaxations for an infeasible inline solve. It accepts
+`specs`, `channels`, and `platforms`. It does not parse files or change channels.
+Every returned suggestion solves on every requested platform.
+
+The initial strategies relax an exact `==` pin or drop one side of a simple
+bounded version range. Fuzzy equality such as `python=3.12` is not rewritten.
+Specs containing a package URL or filename are left unchanged. The
+`max_suggestions`, `max_attempts`, and `time_budget_ms` query parameters cannot
+exceed their corresponding server limits. The time budget includes time spent
+waiting for solver capacity.
+
+```bash
+curl -sS 'http://localhost:8000/repair?max_suggestions=3&max_attempts=10' \
+  --json '{"specs":["scipy==1.5"],"channels":["conda-forge"],"platforms":["linux-64"]}'
+```
+
+```json
+{
+  "feasible": false,
+  "diagnosis": {"kind": "solver_conflict", "summary": "..."},
+  "suggestions": [
+    {
+      "changes": [{"from": "scipy==1.5", "to": "scipy", "strategy": "relax_exact_pin"}],
+      "solve_attempts": 1,
+      "platforms": ["linux-64"]
+    }
+  ],
+  "completion_reason": "exhausted"
+}
+```
+
+Candidates are evaluated in input-spec order. For a bounded range, dropping
+the upper bound is tried before dropping the lower bound. `solve_attempts`
+counts candidate solves, excluding the initial solve, through that suggestion.
+`platforms` lists where the suggestion solved.
+
+`completion_reason` is one of `feasible`,
+`exhausted`, `suggestion_limit`, `attempt_limit`, or `time_limit`. If the
+initial diagnostic solve times out, the endpoint returns HTTP 504 without a
+repair result. Once infeasibility is established, a candidate timeout returns
+HTTP 200 with `completion_reason: "time_limit"` and any suggestions that
+already solved.
+
+---
+
 ### `POST /diff`
 
 Compare two resolve inputs. Both `from` and `to` use the `ResolveRequest`

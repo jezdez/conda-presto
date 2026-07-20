@@ -1,4 +1,5 @@
 """Conda solve orchestration and cross-platform dispatch."""
+
 from __future__ import annotations
 
 import logging
@@ -6,6 +7,7 @@ import threading
 from collections import OrderedDict, deque
 from collections.abc import Callable
 from concurrent.futures import ProcessPoolExecutor, as_completed
+from functools import partial
 from operator import attrgetter
 
 import msgspec
@@ -262,6 +264,24 @@ class SolveResult(msgspec.Struct):
     platform: str
     packages: list[ResolvedPackage]
     error: str | None = None
+
+    @classmethod
+    def from_exception(
+        cls,
+        platform: str,
+        exc: Exception,
+        *,
+        captured_errors: tuple[type[Exception], ...] = (Exception,),
+    ) -> SolveResult:
+        """Convert an expected platform failure into a safe result."""
+        if not isinstance(exc, captured_errors):
+            raise exc
+        log.warning("Solver dispatch error for %s: %s", platform, exc)
+        return cls(
+            platform=platform,
+            packages=[],
+            error=safe_error_message(exc),
+        )
 
     @classmethod
     def from_environment(cls, environment: Environment) -> SolveResult:
@@ -566,29 +586,29 @@ def solve_one_platform(
     return SolveResult(platform=platform, packages=packages)
 
 
-def solve_result_error(platform: str, exc: Exception) -> SolveResult:
-    """Wrap an exception as a ``SolveResult`` with a sanitized message."""
-    log.warning("Solver dispatch error for %s: %s", platform, exc)
-    return SolveResult(platform=platform, packages=[], error=safe_error_message(exc))
-
-
 def solve(
     channels: list[str],
     dependencies: list[str],
     platforms: list[str] | None = None,
+    *,
+    captured_errors: tuple[type[Exception], ...] = (Exception,),
 ) -> list[SolveResult]:
     """Solve for one or more platforms, returning ``SolveResult`` objects.
 
     Used by the HTTP API.  Single-platform solves run in-process;
     multi-platform solves are dispatched to a persistent process pool.
-    Errors are captured per-platform rather than raised.
+    Errors matching *captured_errors* are captured per-platform. Other
+    failures propagate to the caller.
     """
     return dispatch(
         solve_one_platform,
         tuple(channels),
         dependencies,
         platforms or [NATIVE_SUBDIR],
-        on_error=solve_result_error,
+        on_error=partial(
+            SolveResult.from_exception,
+            captured_errors=captured_errors,
+        ),
     )
 
 

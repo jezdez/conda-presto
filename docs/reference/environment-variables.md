@@ -20,6 +20,9 @@ CLI and the HTTP server.
 | `CONDA_PRESTO_MAX_SPECS` | `200` | Maximum number of specs per request. Returns HTTP 400 if exceeded. |
 | `CONDA_PRESTO_MAX_CHANNELS` | `8` | Maximum number of channels per request. Returns HTTP 400 if exceeded. |
 | `CONDA_PRESTO_MAX_PLATFORMS` | `8` | Maximum number of platforms per request. Returns HTTP 400 if exceeded. |
+| `CONDA_PRESTO_MAX_REPAIR_SUGGESTIONS` | `5` | Maximum returned repair suggestions per request. |
+| `CONDA_PRESTO_MAX_REPAIR_ATTEMPTS` | `20` | Maximum repair candidates evaluated per request. |
+| `CONDA_PRESTO_MAX_REPAIR_TIME_BUDGET_MS` | `5000` | Maximum repair search wall-clock budget in milliseconds. |
 | `CONDA_PRESTO_MAX_INDEX_CACHE_ENTRIES` | `128` | Maximum number of in-process solver index cache entries. Set to `0` to disable index caching. |
 | `CONDA_PRESTO_SOLVE_TIMEOUT_S` | `60` | Per-request solve timeout in seconds. Returns HTTP 504 if exceeded. |
 | `CONDA_PRESTO_PARSE_TIMEOUT_S` | `10` | Per-request file parsing timeout in seconds. Returns HTTP 504 if exceeded. |

@@ -1,4 +1,5 @@
 """Tests for conda_presto.resolve."""
+
 from __future__ import annotations
 
 import threading
@@ -29,7 +30,6 @@ from conda_presto.resolve import (
     solve,
     solve_environments,
     solve_one_platform,
-    solve_result_error,
     warmup,
     warmup_indexes,
 )
@@ -60,9 +60,7 @@ def _warm_index():
         pytest.param("minimal_record", "md5", "", id="empty-md5"),
         pytest.param("minimal_record", "size", None, id="empty-size"),
         pytest.param("minimal_record", "depends", (), id="empty-depends"),
-        pytest.param(
-            "minimal_record", "constrains", (), id="empty-constrains"
-        ),
+        pytest.param("minimal_record", "constrains", (), id="empty-constrains"),
     ],
 )
 def test_resolved_package_from_record(record_fixture, field, expected, request):
@@ -527,14 +525,45 @@ def test_safe_error_message_redacts_known_error_channel_urls():
     assert "auth=secret" not in message
 
 
-def test_solve_result_error_sanitizes_generic():
-    """solve_result_error returns generic message for unknown exception types."""
+def test_solve_result_from_exception_sanitizes_generic():
     exc = ValueError("/Users/secret/path")
-    result = solve_result_error("linux-64", exc)
+    result = SolveResult.from_exception("linux-64", exc)
     assert isinstance(result, SolveResult)
     assert result.platform == "linux-64"
     assert result.error == "Internal solver error"
     assert result.packages == []
+
+
+def test_solve_only_captures_selected_error_types(monkeypatch):
+    def fail(*args, **kwargs):
+        raise RuntimeError("transport failed")
+
+    monkeypatch.setattr(resolve_module, "run_solver", fail)
+
+    with pytest.raises(RuntimeError, match="transport failed"):
+        solve(
+            ["conda-forge"],
+            ["zlib"],
+            ["linux-64"],
+            captured_errors=(UnsatisfiableError, PackagesNotFoundError),
+        )
+
+
+def test_solve_captures_selected_solver_error(monkeypatch):
+    def fail(*args, **kwargs):
+        raise PackagesNotFoundError(["missing"])
+
+    monkeypatch.setattr(resolve_module, "run_solver", fail)
+
+    result = solve(
+        ["conda-forge"],
+        ["missing"],
+        ["linux-64"],
+        captured_errors=(UnsatisfiableError, PackagesNotFoundError),
+    )[0]
+
+    assert result.error is not None
+    assert "missing" in result.error
 
 
 @pytest.mark.parametrize(

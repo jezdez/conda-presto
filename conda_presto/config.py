@@ -50,6 +50,12 @@ Request limits (abuse/DoS protection):
     ``CONDA_PRESTO_MAX_SPECS``
         Max specs per request (default: ``200``).  Returns HTTP 400
         if exceeded.
+    ``CONDA_PRESTO_MAX_REPAIR_SUGGESTIONS``
+        Max returned repair suggestions per request (default: ``5``).
+    ``CONDA_PRESTO_MAX_REPAIR_ATTEMPTS``
+        Max repair candidates evaluated per request (default: ``20``).
+    ``CONDA_PRESTO_MAX_REPAIR_TIME_BUDGET_MS``
+        Max repair search wall-clock budget in milliseconds (default: ``5000``).
 
 HTTP middleware:
     ``CONDA_PRESTO_RATE_LIMIT``
@@ -159,6 +165,16 @@ PARSE_TIMEOUT_S = env_int("CONDA_PRESTO_PARSE_TIMEOUT_S", 10)
 MAX_CHANNELS = env_int("CONDA_PRESTO_MAX_CHANNELS", 8)
 MAX_PLATFORMS = env_int("CONDA_PRESTO_MAX_PLATFORMS", 8)
 MAX_SPECS = env_int("CONDA_PRESTO_MAX_SPECS", 200)
-MAX_INDEX_CACHE_ENTRIES = env_int(
-    "CONDA_PRESTO_MAX_INDEX_CACHE_ENTRIES", 128
-)
+MAX_REPAIR_SUGGESTIONS = env_int("CONDA_PRESTO_MAX_REPAIR_SUGGESTIONS", 5)
+MAX_REPAIR_ATTEMPTS = env_int("CONDA_PRESTO_MAX_REPAIR_ATTEMPTS", 20)
+MAX_REPAIR_TIME_BUDGET_MS = env_int("CONDA_PRESTO_MAX_REPAIR_TIME_BUDGET_MS", 5_000)
+if (
+    min(
+        MAX_REPAIR_SUGGESTIONS,
+        MAX_REPAIR_ATTEMPTS,
+        MAX_REPAIR_TIME_BUDGET_MS,
+    )
+    < 1
+):
+    raise ValueError("Repair limits must be positive")
+MAX_INDEX_CACHE_ENTRIES = env_int("CONDA_PRESTO_MAX_INDEX_CACHE_ENTRIES", 128)
