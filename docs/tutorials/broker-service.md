@@ -41,6 +41,11 @@ for the configured channels and platforms. It runs on a broker-assigned loopback
 port and disables rate limiting only for that child process. The longer timeout
 allows for an initial repodata download when the cache is empty.
 
+Run the service only on a trusted single-user host. A loopback TCP listener does
+not authenticate local operating-system users. See the
+[security and trust model](../explanation/security.md)
+before using private channels or a persistent result cache.
+
 ## Stop the service
 
 Stop the service when the local workflow is complete:
