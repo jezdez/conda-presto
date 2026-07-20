@@ -14,7 +14,7 @@ Endpoints:
 - ``GET /platforms`` — list known conda platform subdirs
 - ``GET /version`` — version info for conda-presto and dependencies
 - ``POST /parse`` — extract specs/channels from a file without solving
-- ``GET /health`` — returns ``{"status": "ok"}``
+- ``GET /health`` — reports solver readiness
 - ``GET /`` — interactive Scalar API documentation
 - ``GET /openapi.json`` — OpenAPI 3.1 schema (auto-generated)
 
@@ -77,6 +77,7 @@ import hashlib
 import json
 import logging
 import multiprocessing
+import os
 import time
 from collections import OrderedDict
 from collections.abc import Iterator
@@ -88,7 +89,6 @@ from typing import Annotated, Literal
 import anyio
 import msgspec
 from conda.base.constants import KNOWN_SUBDIRS
-from conda.core.subdir_data import SubdirData
 from conda.exceptions import CondaError
 from conda.models.channel import Channel
 from conda.models.match_spec import MatchSpec
@@ -106,6 +106,7 @@ from litestar.status_codes import (
     HTTP_404_NOT_FOUND,
     HTTP_422_UNPROCESSABLE_ENTITY,
     HTTP_500_INTERNAL_SERVER_ERROR,
+    HTTP_503_SERVICE_UNAVAILABLE,
     HTTP_504_GATEWAY_TIMEOUT,
 )
 from litestar.stores.base import Store
@@ -126,6 +127,7 @@ from .config import (
     MAX_REPAIR_TIME_BUDGET_MS,
     MAX_SPECS,
     PARSE_TIMEOUT_S,
+    PERSISTENT_WORKER,
     RATE_LIMIT,
     RESULT_CACHE_BACKEND,
     RESULT_CACHE_DIR,
@@ -144,12 +146,14 @@ from .resolve import (
     VIRTUAL_PACKAGES,
     ExplainResult,
     PlatformDiff,
+    RepodataSnapshot,
     SolveResult,
     shutdown_process_pool,
     solve,
     solve_environments,
     warmup,
 )
+from .worker import PersistentSolveWorker
 
 log = logging.getLogger(__name__)
 
@@ -183,6 +187,12 @@ class ErrorResponse(msgspec.Struct, omit_defaults=True):
     error: str
     platform: str | None = None
     supported: list[str] | None = None
+
+
+class HealthResponse(msgspec.Struct):
+    """Solver readiness payload."""
+
+    status: Literal["ok", "unavailable"]
 
 
 @dataclass
@@ -651,13 +661,13 @@ class ResultCache:
     entries: OrderedDict[str, StoredResult] = field(default_factory=OrderedDict)
     current_bytes: int = 0
 
-    @classmethod
+    @staticmethod
     def key_for(
-        cls,
         specs: list[str],
         channels: list[str],
         platforms: list[str] | None,
         format_name: str | None,
+        repodata: RepodataSnapshot | None = None,
     ) -> str:
         """Return the SHA-256 key for a canonical resolve request."""
         resolved_platforms = list(platforms or [NATIVE_SUBDIR])
@@ -668,25 +678,8 @@ class ResultCache:
             except Exception:
                 versions[package] = "unknown"
 
-        repodata: list[dict[str, object]] = []
-        seen_urls: set[str] = set()
-        for channel in channels:
-            for platform in resolved_platforms:
-                for url in Channel(channel).urls(subdirs=(platform, "noarch")):
-                    if url in seen_urls:
-                        continue
-                    seen_urls.add(url)
-                    subdir_data = SubdirData(
-                        Channel.from_url(url),
-                        repodata_fn="repodata.json",
-                    )
-                    repodata.append(
-                        {
-                            "url": url,
-                            "json": cls.file_marker(subdir_data.cache_path_json),
-                            "state": cls.file_marker(subdir_data.cache_path_state),
-                        }
-                    )
+        if repodata is None:
+            repodata = RepodataSnapshot.capture(channels, resolved_platforms)
 
         envelope = {
             "version": CACHE_ENVELOPE_VERSION,
@@ -696,7 +689,7 @@ class ResultCache:
             "format": format_name or DEFAULT_RESOLVE_FORMAT,
             "dependency_versions": versions,
             "virtual_packages": VIRTUAL_PACKAGES,
-            "repodata": repodata,
+            "repodata": repodata.records,
         }
         body = json.dumps(
             envelope,
@@ -704,18 +697,6 @@ class ResultCache:
             separators=(",", ":"),
         ).encode()
         return hashlib.sha256(body).hexdigest()
-
-    @staticmethod
-    def file_marker(path: Path) -> dict[str, object]:
-        try:
-            stat = path.stat()
-        except FileNotFoundError:
-            return {"exists": False}
-        return {
-            "exists": True,
-            "size": stat.st_size,
-            "mtime_ns": stat.st_mtime_ns,
-        }
 
     def store_from(self, request: Request) -> Store | None:
         """Return the configured persistent store, if enabled."""
@@ -980,7 +961,20 @@ async def run_solve(
     deadline = time.monotonic() + timeout_s
     try:
         limiter = request.app.state.solver_limiter
-        if limiter is None:
+        worker = getattr(request.app.state, "solve_worker", None)
+        if worker is not None:
+            with anyio.fail_after(timeout_s):
+                result = await anyio.to_thread.run_sync(
+                    worker.solve,
+                    channels,
+                    specs,
+                    platforms,
+                    format_name,
+                    timeout_s,
+                    limiter=limiter,
+                    abandon_on_cancel=True,
+                )
+        elif limiter is None:
             with anyio.fail_after(timeout_s):
                 result = await anyio.to_thread.run_sync(
                     run_solve_work,
@@ -1150,8 +1144,10 @@ async def run_cached_solve(
     """Run a solve through the content-addressed result cache."""
     cache: ResultCache = request.app.state.result_cache
     store = cache.store_from(request)
-    key = cache.key_for(specs, channels, platforms, format_name)
-    if cached_response := await cache.get_response(key, store):
+    resolved_platforms = list(platforms or [NATIVE_SUBDIR])
+    repodata = RepodataSnapshot.capture(channels, resolved_platforms)
+    key = cache.key_for(specs, channels, platforms, format_name, repodata)
+    if not repodata.stale and (cached_response := await cache.get_response(key, store)):
         return cached_response
 
     payload = await run_solve(
@@ -1160,9 +1156,9 @@ async def run_cached_solve(
     if isinstance(payload, Response):
         return payload
 
-    # Recompute after solving so a cold repodata cache stores under the
-    # marker that exists after conda has fetched repodata.
-    key = cache.key_for(specs, channels, platforms, format_name)
+    # Recompute after solving so refreshed repodata and the worker's index agree.
+    repodata = RepodataSnapshot.capture(channels, resolved_platforms)
+    key = cache.key_for(specs, channels, platforms, format_name, repodata)
     body, media_type = payload
     return await cache.remember(key, body, media_type, store)
 
@@ -1828,10 +1824,28 @@ async def parse(request: Request, data: ParseRequest) -> Response:
     return Response(ParseResult(parsed_file.specs, parsed_file.channels))
 
 
-@get("/health")
-async def health() -> dict[str, str]:
-    """Liveness probe."""
-    return {"status": "ok"}
+@get(
+    "/health",
+    responses={
+        HTTP_503_SERVICE_UNAVAILABLE: ResponseSpec(
+            data_container=HealthResponse,
+            description="Persistent solver worker is unavailable",
+        ),
+    },
+)
+async def health(request: Request) -> Response[HealthResponse]:
+    """Return readiness for the persistent worker when one is configured."""
+    worker = getattr(request.app.state, "solve_worker", None)
+    if worker is not None and not worker.ready:
+        await anyio.to_thread.run_sync(
+            worker.recover_if_stopped,
+            abandon_on_cancel=True,
+        )
+        return Response(
+            HealthResponse(status="unavailable"),
+            status_code=HTTP_503_SERVICE_UNAVAILABLE,
+        )
+    return Response(HealthResponse(status="ok"))
 
 
 async def on_startup(app: Litestar) -> None:
@@ -1844,20 +1858,40 @@ async def on_startup(app: Litestar) -> None:
             RESULT_CACHE_STORE_NAME if RESULT_CACHE_BACKEND != "memory" else None
         ),
     )
-    log.info(
-        "Pre-warming repodata cache for %s on %s",
-        DEFAULT_CHANNELS,
-        DEFAULT_PLATFORMS,
-    )
-    await anyio.to_thread.run_sync(
-        lambda: warmup(DEFAULT_CHANNELS, DEFAULT_PLATFORMS),
-        abandon_on_cancel=True,
-    )
+    if PERSISTENT_WORKER:
+        app.state.solve_worker = PersistentSolveWorker(
+            DEFAULT_CHANNELS,
+            DEFAULT_PLATFORMS,
+            restart_on_failure="CONDA_BROKER_SERVICE_NAME" not in os.environ,
+        )
+        log.info(
+            "Starting persistent solve worker for %s on %s",
+            DEFAULT_CHANNELS,
+            DEFAULT_PLATFORMS,
+        )
+        await anyio.to_thread.run_sync(
+            app.state.solve_worker.start,
+            abandon_on_cancel=True,
+        )
+    else:
+        app.state.solve_worker = None
+        log.info(
+            "Pre-warming repodata cache for %s on %s",
+            DEFAULT_CHANNELS,
+            DEFAULT_PLATFORMS,
+        )
+        await anyio.to_thread.run_sync(
+            lambda: warmup(DEFAULT_CHANNELS, DEFAULT_PLATFORMS),
+            abandon_on_cancel=True,
+        )
     log.info("Repodata cache warm")
 
 
 async def on_shutdown(app: Litestar) -> None:
     """Cleanly shut down the process pool on server teardown."""
+    worker = getattr(app.state, "solve_worker", None)
+    if worker is not None:
+        await anyio.to_thread.run_sync(worker.shutdown, abandon_on_cancel=True)
     shutdown_process_pool()
 
 

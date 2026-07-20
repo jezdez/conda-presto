@@ -236,7 +236,7 @@ curl -sS "$CONDA_PRESTO_URL/version"
 
 ### Health
 
-Simple liveness check:
+Check whether the server is ready to solve requests:
 
 ```bash
 curl -sS "$CONDA_PRESTO_URL/health"

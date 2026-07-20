@@ -10,6 +10,7 @@ license = "BSD-3-Clause"
 requires-python = ">=3.13"
 dependencies = [
     # conda and conda-rattler-solver are supplied by the active conda environment.
+    "conda-broker>=0.1.1",
     "msgspec>=0.19",
 ]
 dynamic = ["version"]
@@ -22,6 +23,9 @@ conda-presto = "conda_presto.cli:main"
 
 [project.entry-points.conda]
 "conda-presto" = "conda_presto.plugin"
+
+[project.entry-points.conda_broker]
+"conda-presto" = "conda_presto.broker"
 
 [tool.hatch.version]
 source = "vcs"

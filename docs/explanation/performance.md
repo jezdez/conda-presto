@@ -27,7 +27,8 @@ On-disk repodata cache
 
 In-memory solver index cache
 : each process keeps a `RattlerIndexHelper` per `(channels, platform)` key.
-  Once built, the index stays warm for the lifetime of that process.
+  Reuse follows conda's repodata freshness policy. When repodata expires or a
+  cache file changes, the existing index reloads those channels before solving.
 
 Content-addressed result cache
 : successful HTTP `/resolve` responses are stored by a SHA-256 key. A cache hit
@@ -39,9 +40,10 @@ Content-addressed result cache
 
 The result cache key is tied to the inputs that can change the response:
 normalized specs, ordered channels, target platforms, output format, relevant
-dependency versions, and markers for conda's local `repodata.json` and state
-files. When conda refreshes repodata, those file markers change and the next
-request gets a different key.
+dependency versions, and markers for conda's local `repodata.json` files. A
+request bypasses a stored result when conda considers any corresponding
+repodata cache stale. If refreshed package metadata changes, the next result
+uses a different key.
 
 That design keeps shared caching practical for public channels while avoiding
 reuse across channel metadata snapshots. Private channels and credentialed
@@ -56,11 +58,11 @@ index. Server startup can pre-warm expected channel/platform combinations using
 `CONDA_PRESTO_CHANNELS` and `CONDA_PRESTO_PLATFORMS`, shifting that cost from
 the first user request to startup.
 
-The result cache adds one lightweight store lookup on each HTTP solve request.
-On a miss, conda-presto computes the key before solving and recomputes it after
-the solve so a cold repodata cache stores the result under the post-refresh
-metadata markers. That overhead scales with the number of channel/platform
-repodata files and is normally much smaller than solving.
+The result cache adds one freshness check and store lookup on each HTTP solve
+request. On a miss or expired repodata, conda-presto recomputes the key after
+the solve so the result uses the metadata markers loaded by the solver. That
+overhead scales with the number of channel/platform repodata files and is
+normally much smaller than solving.
 
 ## Multi-platform solving
 

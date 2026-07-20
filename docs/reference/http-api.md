@@ -307,8 +307,8 @@ a file-backed or Redis-backed persistent store using the same
 `resolve-v1:<sha256>` CAS key. The hash key includes the normalized
 specs, ordered channels, platforms, output format, conda-presto and
 solver/exporter dependency versions, and metadata from conda's local
-repodata cache files. That keeps cached results sensitive to repodata
-refreshes. A future sharded repodata index can replace the file
+repodata cache files. Expired repodata bypasses a cached result, and changed
+metadata produces a new key. A future sharded repodata index can replace the file
 metadata marker with exact shard or sparse-index digests.
 
 ---
@@ -397,10 +397,18 @@ curl -sS http://localhost:8000/parse \
 
 ### `GET /health`
 
-Liveness probe. Returns HTTP 200 with a fixed body.
+Readiness probe. Returns HTTP 200 after the configured persistent solver worker
+has loaded its indexes, or whenever persistent-worker mode is disabled.
 
 ```json
 {"status": "ok"}
+```
+
+If the persistent worker stops or becomes unavailable, the endpoint returns HTTP
+503 until the server or conda-broker replaces it:
+
+```json
+{"status": "unavailable"}
 ```
 
 ---

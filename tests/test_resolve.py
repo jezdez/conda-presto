@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import threading
 from concurrent.futures import Future, ProcessPoolExecutor, ThreadPoolExecutor
+from types import SimpleNamespace
 
 import msgspec
 import pytest
@@ -15,6 +16,7 @@ from conda.models.records import PackageRecord
 import conda_presto.resolve as resolve_module
 from conda_presto.exceptions import safe_error_message
 from conda_presto.resolve import (
+    RepodataSnapshot,
     ResolvedPackage,
     SolveResult,
     build_index,
@@ -307,6 +309,24 @@ def test_get_process_pool_threadsafe():
     assert all(p is pools[0] for p in pools)
 
 
+def test_process_pool_worker_exits_with_parent(monkeypatch):
+    calls = []
+    parent = SimpleNamespace(join=lambda: calls.append("join"))
+    monkeypatch.setattr(
+        resolve_module.multiprocessing, "parent_process", lambda: parent
+    )
+    monkeypatch.setattr(resolve_module.os, "_exit", lambda code: calls.append(code))
+    monkeypatch.setattr(
+        resolve_module.threading,
+        "Thread",
+        lambda *, target, daemon: SimpleNamespace(start=target),
+    )
+
+    resolve_module.watch_parent_process()
+
+    assert calls == ["join", 0]
+
+
 def test_run_solver_returns_sorted_records():
     records = run_solver(
         channels=("conda-forge",),
@@ -475,6 +495,79 @@ def test_build_index_cache_respects_entry_limit(monkeypatch):
         (("conda-forge",), ("linux-64", "noarch")),
         (("bioconda",), ("linux-64", "noarch")),
     ]
+
+
+def test_repodata_snapshot_uses_conda_freshness(monkeypatch, tmp_path):
+    cache_path = tmp_path / "repodata.json"
+    cache_path.write_text("{}")
+    cache = SimpleNamespace(
+        cache_path_json=cache_path,
+        load_state=lambda: None,
+        stale=lambda: True,
+    )
+    monkeypatch.setattr(
+        resolve_module,
+        "SubdirData",
+        lambda *_, **__: SimpleNamespace(repo_cache=cache),
+    )
+
+    snapshot = RepodataSnapshot.capture(
+        ["https://conda.example/channel"],
+        ["linux-64"],
+    )
+
+    assert snapshot.stale
+    assert [record[0] for record in snapshot.records] == [
+        "https://conda.example/channel/linux-64",
+        "https://conda.example/channel/noarch",
+    ]
+
+
+@pytest.mark.parametrize(
+    "second_snapshot",
+    [
+        pytest.param(
+            RepodataSnapshot((("channel/linux-64", 20, 2),), False),
+            id="cache-file-changed",
+        ),
+        pytest.param(
+            RepodataSnapshot((("channel/linux-64", 10, 1),), True),
+            id="cache-expired",
+        ),
+    ],
+)
+def test_build_index_refreshes_reused_repodata(monkeypatch, second_snapshot):
+    snapshots = iter(
+        [
+            RepodataSnapshot((("channel/linux-64", 10, 1),), False),
+            second_snapshot,
+            RepodataSnapshot(second_snapshot.records, False),
+        ]
+    )
+    reloads = []
+
+    class FakeIndex:
+        def __init__(self, channels, subdirs):
+            self.channels = channels
+            self.subdirs = subdirs
+
+        def reload_channel(self, channel):
+            reloads.append(channel.canonical_name)
+
+    clear_index_cache()
+    monkeypatch.setattr(resolve_module, "RattlerIndexHelper", FakeIndex)
+    monkeypatch.setattr(
+        resolve_module.RepodataSnapshot,
+        "capture",
+        lambda *_: next(snapshots),
+    )
+
+    first = build_index(("conda-forge",), "linux-64")
+    second = build_index(("conda-forge",), "linux-64")
+
+    assert second is first
+    assert reloads == ["conda-forge"]
+    clear_index_cache()
 
 
 def test_cached_solve_produces_correct_results():

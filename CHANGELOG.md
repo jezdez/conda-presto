@@ -10,6 +10,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - `POST /repair` suggests single-spec relaxations for infeasible requests and returns only suggestions that solve on every requested platform.
+- Register `conda-presto.server` as a manual, loopback-only conda-broker service.
+- Require `conda-broker` and document how to run the local service.
+- Run the Docker server in persistent-worker mode without starting conda-broker.
+
+### Fixed
+
+- Refresh loaded solver indexes when conda considers their repodata stale, and key cached results by the repodata cache files used.
+- Restart failed persistent workers in Docker while conda-broker restarts its server process.
 
 ## [0.6.0] - 2026-07-10
 

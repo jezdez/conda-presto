@@ -5,6 +5,7 @@ from __future__ import annotations
 import time
 from types import SimpleNamespace
 
+import anyio
 import msgspec
 import pytest
 import yaml
@@ -38,7 +39,7 @@ from conda_presto.app import (
     version,
 )
 from conda_presto.inputs import ParsedInputFile
-from conda_presto.resolve import ResolvedPackage, SolveResult
+from conda_presto.resolve import RepodataSnapshot, ResolvedPackage, SolveResult
 
 
 @pytest.fixture()
@@ -120,6 +121,21 @@ async def test_health(client):
     resp = await client.get("/health")
     assert resp.status_code == 200
     assert resp.json() == {"status": "ok"}
+
+
+@pytest.mark.anyio
+async def test_health_is_unavailable_when_persistent_worker_stops(client, test_app):
+    recoveries = []
+    test_app.state.solve_worker = SimpleNamespace(
+        ready=False,
+        recover_if_stopped=lambda: recoveries.append("recover"),
+    )
+
+    response = await client.get("/health")
+
+    assert response.status_code == 503
+    assert response.json() == {"status": "unavailable"}
+    assert recoveries == ["recover"]
 
 
 def test_build_cors_config_disabled_without_origins():
@@ -502,6 +518,47 @@ async def test_spec_order_canonicalization_reuses_cached_result(client, monkeypa
 
     assert calls == 1
     assert second.headers["location"] == first.headers["location"]
+
+
+@pytest.mark.anyio
+async def test_stale_repodata_bypasses_cached_result(client, test_app, monkeypatch):
+    records = (("https://conda.example/linux-64", 10, 1),)
+    stale = RepodataSnapshot(records, True)
+    fresh = RepodataSnapshot(records, False)
+    key = ResultCache.key_for(
+        ["zlib"],
+        ["conda-forge"],
+        ["linux-64"],
+        None,
+        stale,
+    )
+    test_app.state.result_cache.remember_memory(
+        key,
+        app_module.StoredResult(b'[{"stale":true}]', "application/json"),
+    )
+    snapshots = iter([stale, fresh])
+    monkeypatch.setattr(
+        app_module.RepodataSnapshot,
+        "capture",
+        lambda *_: next(snapshots),
+    )
+    calls = []
+    monkeypatch.setattr(
+        app_module,
+        "solve",
+        lambda *_, **__: (
+            calls.append("solve") or [SolveResult(platform="linux-64", packages=[])]
+        ),
+    )
+
+    response = await client.post(
+        "/resolve",
+        json={"specs": ["zlib"], "platforms": ["linux-64"]},
+    )
+
+    assert response.status_code == 200
+    assert response.json() == [{"platform": "linux-64", "packages": [], "error": None}]
+    assert calls == ["solve"]
 
 
 def test_different_output_formats_produce_different_cache_keys():
@@ -921,6 +978,84 @@ async def test_resolve_worker_deadline_includes_capacity_wait(
     assert response.status_code == 200
     assert len(remaining) == 1
     assert 0 < remaining[0] < 0.45
+
+
+@pytest.mark.anyio
+async def test_resolve_uses_persistent_worker_when_configured(test_app):
+    calls = []
+
+    def solve(*args):
+        calls.append(args)
+        return []
+
+    test_app.state.solve_worker = SimpleNamespace(running=True, solve=solve)
+    test_app.state.solver_limiter = app_module.anyio.CapacityLimiter(1)
+    transport = ASGITransport(app=test_app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.post(
+            "/resolve",
+            json={"specs": ["zlib"], "platforms": ["linux-64"]},
+        )
+
+    assert response.status_code == 200
+    assert calls == [
+        (["conda-forge"], ["zlib"], ["linux-64"], None, 60),
+    ]
+
+
+@pytest.mark.anyio
+async def test_run_solve_passes_per_call_timeout(test_app):
+    calls = []
+
+    def solve(*args):
+        calls.append(args)
+        return []
+
+    test_app.state.solve_worker = SimpleNamespace(solve=solve)
+
+    response = await app_module.run_solve(
+        SimpleNamespace(app=test_app),
+        ["zlib"],
+        ["conda-forge"],
+        ["linux-64"],
+        timeout_s=0.25,
+    )
+
+    assert response == (b"[]", "application/json")
+    assert calls == [
+        (["conda-forge"], ["zlib"], ["linux-64"], None, 0.25),
+    ]
+
+
+@pytest.mark.anyio
+async def test_run_solve_timeout_includes_persistent_worker_queue(test_app):
+    calls = []
+    occupied = anyio.Event()
+    release = anyio.Event()
+    test_app.state.solver_limiter = anyio.CapacityLimiter(1)
+    test_app.state.solve_worker = SimpleNamespace(
+        solve=lambda *_: calls.append("solve") or []
+    )
+
+    async def occupy_limiter():
+        async with test_app.state.solver_limiter:
+            occupied.set()
+            await release.wait()
+
+    async with anyio.create_task_group() as tasks:
+        tasks.start_soon(occupy_limiter)
+        await occupied.wait()
+        response = await app_module.run_solve(
+            SimpleNamespace(app=test_app),
+            ["zlib"],
+            ["conda-forge"],
+            ["linux-64"],
+            timeout_s=0.05,
+        )
+        release.set()
+
+    assert response.status_code == 504
+    assert calls == []
 
 
 def test_run_solve_in_process_returns_worker_result(fake_solve_process):
@@ -2355,6 +2490,13 @@ async def test_openapi_schema(client):
     assert "/r/{key}" in data["paths"]
     assert "/health" in data["paths"]
 
+    health_endpoint = data["paths"]["/health"]["get"]
+    assert {"200", "503"} <= health_endpoint["responses"].keys()
+    for status_code in ("200", "503"):
+        assert health_endpoint["responses"][status_code]["content"]["application/json"][
+            "schema"
+        ]["$ref"].endswith("/HealthResponse")
+
     preflight = data["paths"]["/preflight"]["post"]
     assert preflight["responses"]["200"]["content"]["application/json"]["schema"][
         "$ref"
@@ -2402,6 +2544,64 @@ async def test_on_startup_initializes(monkeypatch):
     assert dummy_app.state.solver_limiter is not None
     assert dummy_app.state.result_cache is not None
     assert len(warmup_calls) == 1
+
+
+@pytest.mark.anyio
+async def test_on_startup_starts_persistent_worker(monkeypatch):
+    started = []
+    monkeypatch.delenv("CONDA_BROKER_SERVICE_NAME", raising=False)
+
+    def create_worker(channels, platforms, *, restart_on_failure):
+        assert restart_on_failure
+        return SimpleNamespace(
+            running=True,
+            start=lambda: started.append((channels, platforms)),
+        )
+
+    monkeypatch.setattr(app_module, "PERSISTENT_WORKER", True)
+    monkeypatch.setattr(app_module, "PersistentSolveWorker", create_worker)
+    dummy_app = Litestar(route_handlers=[health])
+
+    await on_startup(dummy_app)
+
+    assert started == [
+        (app_module.DEFAULT_CHANNELS, app_module.DEFAULT_PLATFORMS),
+    ]
+    assert dummy_app.state.solve_worker.running
+
+
+@pytest.mark.anyio
+async def test_on_startup_leaves_broker_worker_recovery_to_broker(monkeypatch):
+    captured = {}
+
+    def create_worker(channels, platforms, *, restart_on_failure):
+        captured["restart_on_failure"] = restart_on_failure
+        return SimpleNamespace(running=True, start=lambda: None)
+
+    monkeypatch.setenv("CONDA_BROKER_SERVICE_NAME", "conda-presto.server")
+    monkeypatch.setattr(app_module, "PERSISTENT_WORKER", True)
+    monkeypatch.setattr(app_module, "PersistentSolveWorker", create_worker)
+    dummy_app = Litestar(route_handlers=[health])
+
+    await on_startup(dummy_app)
+
+    assert captured == {"restart_on_failure": False}
+
+
+@pytest.mark.anyio
+async def test_on_shutdown_shuts_down_persistent_worker(monkeypatch):
+    calls = []
+    dummy_app = Litestar(route_handlers=[health])
+    dummy_app.state.solve_worker = SimpleNamespace(
+        shutdown=lambda: calls.append("worker")
+    )
+    monkeypatch.setattr(
+        app_module, "shutdown_process_pool", lambda: calls.append("pool")
+    )
+
+    await on_shutdown(dummy_app)
+
+    assert calls == ["worker", "pool"]
 
 
 @pytest.mark.anyio

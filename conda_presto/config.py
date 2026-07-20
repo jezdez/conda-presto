@@ -22,6 +22,10 @@ Server tuning:
         Default bind address for ``--serve`` (default: ``127.0.0.1``).
     ``CONDA_PRESTO_PORT``
         Default port for ``--serve`` (default: ``8000``).
+    ``CONDA_PRESTO_PERSISTENT_WORKER``
+        Run HTTP solves through one worker that retains loaded repodata and
+        indexes between requests (default: ``false``). Used by the
+        broker-managed local service and Docker server image.
     ``CONDA_PRESTO_RESULT_CACHE_SIZE``
         Max number of solve responses retained by the in-process result
         cache (default: ``256``).
@@ -130,6 +134,11 @@ WIN_VERSION = os.environ.get("CONDA_PRESTO_WIN_VERSION", "0")
 
 DEFAULT_HOST = os.environ.get("CONDA_PRESTO_HOST", "127.0.0.1")
 DEFAULT_PORT = env_int("CONDA_PRESTO_PORT", 8000)
+PERSISTENT_WORKER = os.environ.get("CONDA_PRESTO_PERSISTENT_WORKER", "").lower() in {
+    "1",
+    "true",
+    "yes",
+}
 RESULT_CACHE_SIZE = env_int("CONDA_PRESTO_RESULT_CACHE_SIZE", 256)
 RESULT_CACHE_MAX_MEMORY_MB = env_int(
     "CONDA_PRESTO_RESULT_CACHE_MAX_MEMORY_MB",

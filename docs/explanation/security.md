@@ -35,12 +35,23 @@ Dry-run package access
 : conda-presto reads channel metadata and package records but does not download
   or extract package payloads as part of a solve.
 
+## Broker-managed local service boundary
+
+The broker-managed service listens on a loopback TCP address. Loopback limits
+network access, but it does not authenticate the calling operating-system user.
+Run the service only on a trusted single-user host or behind equivalent local
+process isolation.
+
+When the service uses private channels, keep its credentials, repodata, and
+persistent result cache inside that same trust boundary. conda-broker manages
+the service lifecycle. It does not add authentication to conda-presto's HTTP API.
+
 ## Result cache boundary
 
 HTTP `/resolve` responses can be stored under content-addressed `/r/<hash>`
 permalinks. The cache key includes the normalized request, output format,
-dependency versions, and local repodata cache file markers so repodata refreshes
-produce new keys.
+dependency versions, and local repodata cache file markers. Expired repodata
+bypasses the stored result, and changed package metadata produces a new key.
 
 The shared cache is currently appropriate for public-channel solves. Avoid
 using a shared public deployment for private channels or credential-bearing

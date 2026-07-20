@@ -16,9 +16,12 @@ The server image starts the HTTP API by default:
 docker run -p 8000:8000 ghcr.io/jezdez/conda-presto:latest
 ```
 
-The first startup can take longer while the repodata cache warms up.
-Subsequent solves can reuse the warm repodata and in-memory solver
-indexes.
+The server starts one persistent worker process. On startup, it loads repodata
+and indexes for the configured channels and platforms. Single-platform requests
+run in that process. For multi-platform requests, the worker coordinates a
+persistent process pool whose size is controlled by `CONDA_PRESTO_WORKERS`.
+After a solve times out, the server reports unavailable until a replacement
+worker has loaded its indexes.
 
 ### CLI image
 
@@ -198,6 +201,21 @@ export CONDA_PRESTO_CHANNELS="conda-forge,bioconda"
 export CONDA_PRESTO_PLATFORMS="linux-64,osx-arm64"
 ```
 
+### Broker-managed local service
+
+conda-presto registers `conda-presto.server` with
+[conda-broker](https://jezdez.github.io/conda-broker/). The manual service binds
+to a broker-assigned loopback port. Its conda-presto server runs in
+persistent-worker mode, so its worker and process pool retain loaded repodata
+and indexes between requests. If the worker fails or times out, `/health`
+reports unavailable and conda-broker replaces the server process.
+
+The published Docker server image also enables persistent-worker mode, but it
+does not start conda-broker. The server replaces a failed worker itself.
+
+See the [broker-managed local service tutorial](../tutorials/broker-service.md)
+for the start, wait, and endpoint commands.
+
 ### Result cache
 
 Successful `/resolve` responses are stored in a content-addressed
@@ -230,8 +248,8 @@ the `redis` optional dependency.
 
 The key includes the normalized specs, ordered channels, target
 platforms, output format, conda-presto and solver versions, and local
-repodata cache file markers. Repodata refreshes therefore produce new
-keys instead of reusing stale solve results.
+repodata cache file markers. A cached response is bypassed when conda considers
+those files stale, and changed repodata produces a new key after refresh.
 
 ### Concurrency tuning
 

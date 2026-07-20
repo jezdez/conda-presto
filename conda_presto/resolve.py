@@ -3,15 +3,19 @@
 from __future__ import annotations
 
 import logging
+import multiprocessing
+import os
 import threading
 from collections import OrderedDict, deque
 from collections.abc import Callable
 from concurrent.futures import ProcessPoolExecutor, as_completed
+from dataclasses import dataclass
 from functools import partial
 from operator import attrgetter
 
 import msgspec
 from conda.base.context import context
+from conda.core.subdir_data import SubdirData
 from conda.models.channel import Channel
 from conda.models.environment import Environment
 from conda.models.match_spec import MatchSpec
@@ -52,7 +56,63 @@ platform_lock = threading.Lock()
 context_configured = False
 
 index_lock = threading.Lock()
-index_cache: OrderedDict[tuple[tuple[str, ...], str], object] = OrderedDict()
+
+
+@dataclass(frozen=True)
+class RepodataSnapshot:
+    """Repodata files and conda freshness state used by one solve."""
+
+    records: tuple[tuple[str, int | None, int | None], ...]
+    stale: bool
+
+    @classmethod
+    def capture(
+        cls,
+        channels: tuple[str, ...] | list[str],
+        platforms: list[str],
+    ) -> RepodataSnapshot:
+        """Capture cache files and whether conda would refresh any of them."""
+        records = []
+        stale = False
+        selected_urls = {}
+        for channel in channels:
+            channel = Channel(channel)
+            for platform in platforms:
+                public_urls = channel.urls(
+                    subdirs=(platform, "noarch"),
+                )
+                credentialed_urls = channel.urls(
+                    with_credentials=True,
+                    subdirs=(platform, "noarch"),
+                )
+                for public_url, credentialed_url in zip(
+                    public_urls,
+                    credentialed_urls,
+                    strict=True,
+                ):
+                    if public_url not in selected_urls or channel.auth or channel.token:
+                        selected_urls[public_url] = credentialed_url
+        for public_url, credentialed_url in selected_urls.items():
+            subdir_data = SubdirData(
+                Channel.from_url(credentialed_url),
+                repodata_fn="repodata.json",
+            )
+            cache = subdir_data.repo_cache
+            cache.load_state()
+            try:
+                stat = cache.cache_path_json.stat()
+            except FileNotFoundError:
+                records.append((public_url, None, None))
+                stale = True
+            else:
+                records.append((public_url, stat.st_size, stat.st_mtime_ns))
+                stale = stale or public_url.startswith("file://") or cache.stale()
+        return cls(records=tuple(records), stale=stale)
+
+
+index_cache: OrderedDict[
+    tuple[tuple[str, ...], str], tuple[object, RepodataSnapshot]
+] = OrderedDict()
 
 
 def configure_platform(platform: str):
@@ -443,17 +503,21 @@ def build_index(
     channels: tuple[str, ...],
     platform: str,
 ) -> object:
-    """Return a cached ``RattlerIndexHelper``, building if absent.
-
-    ``index_lock`` makes the check-then-build atomic, so only one
-    thread ever builds a given index — no thundering herd.
-    """
+    """Return the cached index, building or refreshing it under ``index_lock``."""
     key = (channels, platform)
     with index_lock:
         cached = index_cache.get(key)
         if cached is not None:
+            index, cached_snapshot = cached
+            snapshot = RepodataSnapshot.capture(channels, [platform])
+            if snapshot.stale or snapshot.records != cached_snapshot.records:
+                log.debug("Refreshing index for %s/%s", channels, platform)
+                for channel in channels:
+                    index.reload_channel(Channel(channel))
+                snapshot = RepodataSnapshot.capture(channels, [platform])
+                index_cache[key] = index, snapshot
             index_cache.move_to_end(key)
-            return cached
+            return index
         log.debug("Building index for %s/%s", channels, platform)
         index = RattlerIndexHelper(
             channels=list(channels),
@@ -461,7 +525,7 @@ def build_index(
         )
         if MAX_INDEX_CACHE_ENTRIES <= 0:
             return index
-        index_cache[key] = index
+        index_cache[key] = index, RepodataSnapshot.capture(channels, [platform])
         while len(index_cache) > MAX_INDEX_CACHE_ENTRIES:
             index_cache.popitem(last=False)
         return index
@@ -668,8 +732,24 @@ def get_process_pool() -> ProcessPoolExecutor:
         return process_pool
     with pool_lock:
         if process_pool is None:
-            process_pool = ProcessPoolExecutor(max_workers=MAX_WORKERS)
+            process_pool = ProcessPoolExecutor(
+                max_workers=MAX_WORKERS,
+                initializer=watch_parent_process,
+            )
         return process_pool
+
+
+def watch_parent_process() -> None:
+    """Exit a pool worker when its owning process exits unexpectedly."""
+    parent = multiprocessing.parent_process()
+    if parent is None:
+        return
+
+    def exit_with_parent() -> None:
+        parent.join()
+        os._exit(0)
+
+    threading.Thread(target=exit_with_parent, daemon=True).start()
 
 
 def shutdown_process_pool() -> None:
