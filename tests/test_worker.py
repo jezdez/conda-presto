@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import threading
+import time
 from types import SimpleNamespace
 
 import pytest
@@ -26,12 +28,13 @@ def persistent_solve_worker(monkeypatch):
         restart_on_failure=True,
         process_create_error: Exception | None = None,
         process_start_error: Exception | None = None,
+        startup_timeout_s=worker_module.PERSISTENT_WORKER_STARTUP_TIMEOUT_S,
     ):
         calls = []
         restart_targets = []
         alive = {"value": True}
         received = iter(messages)
-        poll_calls = 0
+        awaiting_startup = False
 
         def send(value):
             if value is None and send_error_on == "stop":
@@ -41,7 +44,9 @@ def persistent_solve_worker(monkeypatch):
             calls.append(("send", value))
 
         def receive():
+            nonlocal awaiting_startup
             value = next(received)
+            awaiting_startup = False
             if isinstance(value, Exception):
                 raise value
             return value
@@ -56,19 +61,19 @@ def persistent_solve_worker(monkeypatch):
                 alive["value"] = False
 
         def start_process():
-            nonlocal poll_calls
-            poll_calls = 0
+            nonlocal awaiting_startup
+            awaiting_startup = True
             alive["value"] = True
             calls.append(("process", "start"))
             if process_start_error is not None:
                 raise process_start_error
 
         def can_receive(_):
-            nonlocal poll_calls
-            poll_calls += 1
-            if poll_calls == 1 and startup_poll_error is not None:
-                raise startup_poll_error
-            return startup_poll if poll_calls == 1 else poll
+            if awaiting_startup:
+                if startup_poll_error is not None:
+                    raise startup_poll_error
+                return startup_poll
+            return poll
 
         parent = SimpleNamespace(
             send=send,
@@ -100,12 +105,14 @@ def persistent_solve_worker(monkeypatch):
             lambda *, target, daemon: SimpleNamespace(
                 start=lambda: restart_targets.append(target),
                 is_alive=lambda: False,
+                join=lambda *_: None,
             ),
         )
         worker = worker_module.PersistentSolveWorker(
             ["conda-forge"],
             ["linux-64"],
             restart_on_failure=restart_on_failure,
+            startup_timeout_s=startup_timeout_s,
         )
         if start:
             worker.start()
@@ -190,7 +197,12 @@ def test_persistent_solve_worker_rejects_startup_failure(persistent_solve_worker
 
 
 def test_persistent_solve_worker_bounds_startup(persistent_solve_worker):
-    worker, _ = persistent_solve_worker([], start=False, startup_poll=False)
+    worker, _ = persistent_solve_worker(
+        [],
+        start=False,
+        startup_poll=False,
+        startup_timeout_s=0.001,
+    )
 
     with pytest.raises(TimeoutError, match="startup timed out"):
         worker.start()
@@ -389,6 +401,81 @@ def test_persistent_solve_worker_leaves_recovery_to_broker(persistent_solve_work
         worker.solve(["conda-forge"], ["zlib"], ["linux-64"], None, 60)
 
     assert worker.restart_targets == []
+
+
+def test_persistent_solve_worker_shutdown_prevents_pending_restart(
+    persistent_solve_worker,
+):
+    worker, calls = persistent_solve_worker([("ready", None)])
+    worker.process.terminate()
+    worker.recover_if_stopped()
+    restart = worker.restart_targets[0]
+
+    assert worker.shutdown()
+    restart()
+
+    assert calls.count(("process", "start")) == 1
+    assert worker.process is None
+
+
+def test_persistent_solve_worker_shutdown_interrupts_restart_startup(monkeypatch):
+    processes = []
+    second_startup_polled = threading.Event()
+
+    def create_pipe():
+        index = len(processes)
+
+        def poll(timeout_s):
+            if index == 0:
+                return True
+            second_startup_polled.set()
+            time.sleep(timeout_s)
+            return False
+
+        return (
+            SimpleNamespace(
+                send=lambda _: None,
+                poll=poll,
+                recv=lambda: ("ready", None),
+                close=lambda: None,
+            ),
+            SimpleNamespace(close=lambda: None),
+        )
+
+    def create_process(**_):
+        alive = {"value": False}
+        process = SimpleNamespace(pid=None)
+
+        def start():
+            process.pid = len(processes) + 1
+            alive["value"] = True
+
+        process.start = start
+        process.is_alive = lambda: alive["value"]
+        process.terminate = lambda: alive.update(value=False)
+        process.kill = lambda: alive.update(value=False)
+        process.join = lambda *_: None
+        processes.append(process)
+        return process
+
+    context = SimpleNamespace(Pipe=create_pipe, Process=create_process)
+    monkeypatch.setattr(
+        worker_module.multiprocessing,
+        "get_context",
+        lambda _: context,
+    )
+    worker = worker_module.PersistentSolveWorker([], [])
+    worker.start()
+    worker.process.terminate()
+    worker.recover_if_stopped()
+    assert second_startup_polled.wait(1)
+
+    started = time.monotonic()
+    assert worker.shutdown()
+
+    assert time.monotonic() - started < 2
+    assert len(processes) == 2
+    assert worker.process is None
 
 
 def test_persistent_solve_worker_entrypoint_handles_native_requests(monkeypatch):

@@ -546,7 +546,7 @@ async def test_stale_repodata_bypasses_cached_result(client, test_app, monkeypat
     monkeypatch.setattr(
         app_module,
         "solve",
-        lambda *_: (
+        lambda *_, **__: (
             calls.append("solve") or [SolveResult(platform="linux-64", packages=[])]
         ),
     )
@@ -2589,17 +2589,19 @@ async def test_on_startup_leaves_broker_worker_recovery_to_broker(monkeypatch):
 
 
 @pytest.mark.anyio
-async def test_on_shutdown_stops_persistent_worker(monkeypatch):
+async def test_on_shutdown_shuts_down_persistent_worker(monkeypatch):
     calls = []
     dummy_app = Litestar(route_handlers=[health])
-    dummy_app.state.solve_worker = SimpleNamespace(stop=lambda: calls.append("stop"))
+    dummy_app.state.solve_worker = SimpleNamespace(
+        shutdown=lambda: calls.append("worker")
+    )
     monkeypatch.setattr(
         app_module, "shutdown_process_pool", lambda: calls.append("pool")
     )
 
     await on_shutdown(dummy_app)
 
-    assert calls == ["stop", "pool"]
+    assert calls == ["worker", "pool"]
 
 
 @pytest.mark.anyio

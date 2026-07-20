@@ -1891,7 +1891,7 @@ async def on_shutdown(app: Litestar) -> None:
     """Cleanly shut down the process pool on server teardown."""
     worker = getattr(app.state, "solve_worker", None)
     if worker is not None:
-        await anyio.to_thread.run_sync(worker.stop, abandon_on_cancel=True)
+        await anyio.to_thread.run_sync(worker.shutdown, abandon_on_cancel=True)
     shutdown_process_pool()
 
 

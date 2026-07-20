@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import multiprocessing
 import threading
+import time
 from contextlib import suppress
 from typing import Any
 
@@ -38,6 +39,7 @@ class PersistentSolveWorker:
         self.restart_thread: threading.Thread | None = None
         self.is_ready = False
         self.operation_lock = threading.RLock()
+        self._shutdown_requested = threading.Event()
 
     @property
     def running(self) -> bool:
@@ -52,7 +54,7 @@ class PersistentSolveWorker:
     def start(self) -> None:
         """Start the worker and wait within a bounded readiness period."""
         with self.operation_lock:
-            if self.ready:
+            if self.ready or self._shutdown_requested.is_set():
                 return
 
             if not self.stop():
@@ -89,8 +91,16 @@ class PersistentSolveWorker:
             self.connection = parent
 
             try:
-                if not parent.poll(self.startup_timeout_s):
-                    raise TimeoutError("Persistent solve worker startup timed out")
+                deadline = time.monotonic() + self.startup_timeout_s
+                while True:
+                    if self._shutdown_requested.is_set():
+                        self.stop()
+                        return
+                    remaining_s = deadline - time.monotonic()
+                    if remaining_s <= 0:
+                        raise TimeoutError("Persistent solve worker startup timed out")
+                    if parent.poll(min(0.1, remaining_s)):
+                        break
                 status, _ = parent.recv()
                 if status != "ready":
                     raise RuntimeError("Persistent solve worker failed during startup")
@@ -181,13 +191,33 @@ class PersistentSolveWorker:
             stopped = not process_started or not process.is_alive()
             if stopped:
                 self.process = None
-        if stopped and restart and self.restart_on_failure:
-            if self.restart_thread is None or not self.restart_thread.is_alive():
+            if (
+                stopped
+                and restart
+                and self.restart_on_failure
+                and not self._shutdown_requested.is_set()
+                and (self.restart_thread is None or not self.restart_thread.is_alive())
+            ):
                 self.restart_thread = threading.Thread(
                     target=self.restart,
                     daemon=True,
                 )
                 self.restart_thread.start()
+        return stopped
+
+    def shutdown(self) -> bool:
+        """Stop permanently and wait for any pending restart to finish."""
+        self._shutdown_requested.set()
+        stopped = self.stop()
+        restart_thread = self.restart_thread
+        if (
+            restart_thread is not None
+            and restart_thread is not threading.current_thread()
+        ):
+            restart_thread.join(PERSISTENT_WORKER_STOP_TIMEOUT_S)
+            if restart_thread.is_alive():
+                log.warning("Persistent solve worker restart did not stop")
+                return False
         return stopped
 
 
