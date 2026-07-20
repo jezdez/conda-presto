@@ -51,7 +51,7 @@ before using private channels or a persistent result cache.
 Repeated successful `conda --solver=presto` requests become eligible for
 scheduled cache refresh. Configure the interval and cycle batch
 before starting the broker. conda-broker captures these variables when its
-daemon starts; restarting only `conda-presto.server` retains the daemon's old
+daemon starts. Restarting only `conda-presto.server` retains the daemon's old
 environment. If the broker is already running, stop it first:
 
 ```bash

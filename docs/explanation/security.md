@@ -65,8 +65,8 @@ channel URLs. If private channel support is needed before a dedicated policy is
 implemented, run an isolated server and avoid sharing its persistent cache
 outside that trust domain.
 
-The broker-only solver stores final states under private `solver-v1:` keys;
-there is no HTTP route for retrieving them. Those values can still contain
+The broker-only solver stores final states under private `solver-v1:` keys.
+There is no HTTP route for retrieving them. Those values can still contain
 package metadata from private channels. Optional candidate persistence stores
 serialized solver requests, but excludes requests with detected channel
 credentials or tokenized URLs. Treat the file or Redis store as service data

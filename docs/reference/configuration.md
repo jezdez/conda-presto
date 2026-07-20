@@ -202,7 +202,7 @@ export CONDA_PRESTO_PLATFORMS="linux-64,osx-arm64"
 ```
 
 This generic startup warmup belongs to the foreground worker. Scheduled refresh
-replays recorded solver requests; its dedicated worker does not pre-build the
+replays recorded solver requests. Its dedicated worker does not pre-build the
 configured default channel/platform combinations.
 
 ### Broker-managed local service

@@ -107,7 +107,7 @@ recomputes missing or stale entries in a separate worker. It starts no replay
 while foreground work is active or waiting. Repodata invalidation uses the same
 freshness and cache-file marker checks as foreground solves.
 Solver errors remove a candidate until another successful foreground request
-records it; timeouts and infrastructure failures leave it for the next cycle.
+records it. Timeouts and infrastructure failures leave it for the next cycle.
 
 The timing and batch settings are documented in
 [Configuration](configuration.md). Freshness and foreground trade-offs are

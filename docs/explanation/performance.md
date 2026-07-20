@@ -107,7 +107,7 @@ completes.
 
 The refresh worker does not use the foreground worker or concurrency limiter.
 No replay starts while foreground work is active or waiting. Foreground work
-arriving during a replay prevents another candidate from starting; the current
+arriving during a replay prevents another candidate from starting. The current
 replay finishes or reaches its timeout. The broker child keeps conda filesystem
 locking enabled because both workers may access the same repodata cache.
 
