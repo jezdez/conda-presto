@@ -44,8 +44,7 @@ process isolation.
 
 When the service uses private channels, keep its credentials, repodata, and
 persistent result cache inside that same trust boundary. conda-broker manages
-the service lifecycle; it does not add authentication to conda-presto's HTTP
-API.
+the service lifecycle. It does not add authentication to conda-presto's HTTP API.
 
 ## Result cache boundary
 

@@ -17,7 +17,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - Refresh loaded solver indexes when conda considers their repodata stale, and key cached results by the repodata cache files used.
-- Restart failed persistent workers in Docker; conda-broker restarts its server process.
+- Restart failed persistent workers in Docker while conda-broker restarts its server process.
 
 ## [0.6.0] - 2026-07-10
 
