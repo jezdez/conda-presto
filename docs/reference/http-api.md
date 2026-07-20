@@ -397,10 +397,18 @@ curl -sS http://localhost:8000/parse \
 
 ### `GET /health`
 
-Liveness probe. Returns HTTP 200 with a fixed body.
+Readiness probe. Returns HTTP 200 after the configured persistent solver worker
+has loaded its indexes, or whenever persistent-worker mode is disabled.
 
 ```json
 {"status": "ok"}
+```
+
+If the persistent worker stops or becomes unavailable, the endpoint returns HTTP
+503 until the server or conda-broker replaces it:
+
+```json
+{"status": "unavailable"}
 ```
 
 ---

@@ -49,7 +49,7 @@ jobs:
   broker:
     name: Broker lifecycle
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
@@ -71,3 +71,54 @@ jobs:
         run: >-
           pixi run -e test conda broker dev test conda-presto.server
           --scenario crash --timeout 180 --json
+      - name: Exercise nested worker replacement
+        timeout-minutes: 8
+        shell: bash
+        run: |
+          set -euo pipefail
+          runtime_dir="$(mktemp -d)"
+          log_dir="$(mktemp -d)"
+          export CONDA_BROKER_RUNTIME_DIR="$runtime_dir"
+          export CONDA_BROKER_LOG_DIR="$log_dir"
+          cleanup() {
+            pixi run -e test conda broker stop conda-presto.server --json >/dev/null 2>&1 || true
+          }
+          trap cleanup EXIT
+
+          pixi run -e test conda broker start conda-presto.server --timeout 180 --json >/dev/null
+          pixi run -e test conda broker wait conda-presto.server --timeout 180 --json >/dev/null
+          service_status="$(pixi run -e test conda broker status conda-presto.server --json)"
+          service_pid="$(jq -r '.services[0].pid' <<<"$service_status")"
+          endpoint="$(pixi run -e test conda broker endpoint conda-presto.server --json | jq -r '.endpoint.url')"
+          worker_pid="$(pgrep -P "$service_pid" -f spawn_main | head -1)"
+          test -n "$worker_pid"
+
+          # conda-broker ignores health failures during the configured startup period.
+          sleep 121
+          kill -9 "$worker_pid"
+
+          unavailable=false
+          for _ in {1..40}; do
+            code="$(curl --silent --output /dev/null --write-out '%{http_code}' "${endpoint}health" || true)"
+            if test "$code" = 503; then
+              unavailable=true
+              break
+            fi
+            sleep 0.1
+          done
+          test "$unavailable" = true
+
+          replacement=false
+          for _ in {1..180}; do
+            service_status="$(pixi run -e test conda broker status conda-presto.server --json)"
+            replacement_pid="$(jq -r '.services[0].pid // empty' <<<"$service_status")"
+            ready="$(jq -r '.services[0].ready' <<<"$service_status")"
+            if test -n "$replacement_pid" \
+              && test "$replacement_pid" != "$service_pid" \
+              && test "$ready" = true; then
+              replacement=true
+              break
+            fi
+            sleep 1
+          done
+          test "$replacement" = true

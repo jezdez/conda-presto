@@ -93,4 +93,4 @@ def test_broker_is_a_required_dependency():
     assert config["project"]["entry-points"]["conda_broker"] == {
         "conda-presto": "conda_presto.broker"
     }
-    assert "conda-broker>=0.1.1,<0.2" in config["project"]["dependencies"]
+    assert "conda-broker>=0.1.1" in config["project"]["dependencies"]

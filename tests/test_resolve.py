@@ -309,6 +309,24 @@ def test_get_process_pool_threadsafe():
     assert all(p is pools[0] for p in pools)
 
 
+def test_process_pool_worker_exits_with_parent(monkeypatch):
+    calls = []
+    parent = SimpleNamespace(join=lambda: calls.append("join"))
+    monkeypatch.setattr(
+        resolve_module.multiprocessing, "parent_process", lambda: parent
+    )
+    monkeypatch.setattr(resolve_module.os, "_exit", lambda code: calls.append(code))
+    monkeypatch.setattr(
+        resolve_module.threading,
+        "Thread",
+        lambda *, target, daemon: SimpleNamespace(start=target),
+    )
+
+    resolve_module.watch_parent_process()
+
+    assert calls == ["join", 0]
+
+
 def test_run_solver_returns_sorted_records():
     records = run_solver(
         channels=("conda-forge",),

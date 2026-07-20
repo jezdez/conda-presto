@@ -1,9 +1,9 @@
 # Run a broker-managed local service
 
 Use conda-broker to run a persistent conda-presto HTTP service on a loopback
-port. Its worker retains loaded repodata and indexes between requests. The
-service is opt-in: ordinary `conda presto` commands continue to solve in their
-own process.
+port. Its solver processes retain loaded repodata and indexes between requests.
+The service is opt-in: ordinary `conda presto` commands continue to solve in
+their own process.
 
 ## Install the integration
 
@@ -11,7 +11,8 @@ Use a conda-presto environment with the server dependencies installed. In a
 source checkout, Pixi supplies them:
 
 ```bash
-pixi install
+pixi install -e prod
+pixi shell -e prod
 ```
 
 conda-broker is installed with conda-presto.
@@ -35,8 +36,8 @@ curl -X POST http://127.0.0.1:PORT/resolve \
   -d '{"specs": ["python=3.13"], "platforms": ["linux-64"]}'
 ```
 
-`wait` finishes only after the service's solver worker has loaded indexes for
-the configured channels and platforms. It runs on a broker-assigned loopback
+`wait` finishes only after the service's solver processes have loaded indexes
+for the configured channels and platforms. It runs on a broker-assigned loopback
 port and disables rate limiting only for that child process. The longer timeout
 allows for an initial repodata download when the cache is empty.
 

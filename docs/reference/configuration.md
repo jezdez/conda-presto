@@ -16,10 +16,12 @@ The server image starts the HTTP API by default:
 docker run -p 8000:8000 ghcr.io/jezdez/conda-presto:latest
 ```
 
-The server starts one persistent solver worker. On startup, the worker loads
-repodata and indexes for the configured channels and platforms. Requests reuse
-that process. After a solve times out, the server reports unhealthy until a
-replacement worker has loaded its indexes.
+The server starts one persistent worker process. On startup, it loads repodata
+and indexes for the configured channels and platforms. Single-platform requests
+run in that process. For multi-platform requests, the worker coordinates a
+persistent process pool whose size is controlled by `CONDA_PRESTO_WORKERS`.
+After a solve times out, the server reports unavailable until a replacement
+worker has loaded its indexes.
 
 ### CLI image
 
@@ -204,9 +206,9 @@ export CONDA_PRESTO_PLATFORMS="linux-64,osx-arm64"
 conda-presto registers `conda-presto.server` with
 [conda-broker](https://jezdez.github.io/conda-broker/). The manual service binds
 to a broker-assigned loopback port. Its conda-presto server runs in
-persistent-worker mode, so one worker retains loaded repodata and indexes
-between requests. If the worker fails or times out, `/health` reports
-unavailable and conda-broker replaces the server process.
+persistent-worker mode, so its worker and process pool retain loaded repodata
+and indexes between requests. If the worker fails or times out, `/health`
+reports unavailable and conda-broker replaces the server process.
 
 The published Docker server image also enables persistent-worker mode, but it
 does not start conda-broker. The server replaces a failed worker itself.

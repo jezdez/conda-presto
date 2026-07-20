@@ -14,7 +14,7 @@ Endpoints:
 - ``GET /platforms`` — list known conda platform subdirs
 - ``GET /version`` — version info for conda-presto and dependencies
 - ``POST /parse`` — extract specs/channels from a file without solving
-- ``GET /health`` — returns ``{"status": "ok"}``
+- ``GET /health`` — reports solver readiness
 - ``GET /`` — interactive Scalar API documentation
 - ``GET /openapi.json`` — OpenAPI 3.1 schema (auto-generated)
 
@@ -78,7 +78,6 @@ import json
 import logging
 import multiprocessing
 import os
-import threading
 import time
 from collections import OrderedDict
 from collections.abc import Iterator
@@ -152,12 +151,9 @@ from .resolve import (
     shutdown_process_pool,
     solve,
     solve_environments,
-    solve_one_environment,
-    solve_one_platform,
-    solve_result_error,
     warmup,
-    warmup_indexes,
 )
+from .worker import PersistentSolveWorker
 
 log = logging.getLogger(__name__)
 
@@ -191,6 +187,12 @@ class ErrorResponse(msgspec.Struct, omit_defaults=True):
     error: str
     platform: str | None = None
     supported: list[str] | None = None
+
+
+class HealthResponse(msgspec.Struct):
+    """Solver readiness payload."""
+
+    status: Literal["ok", "unavailable"]
 
 
 @dataclass
@@ -936,194 +938,6 @@ async def parse_input_for_request(
         )
     except (CondaError, ValueError) as exc:
         return Response({"error": str(exc)}, status_code=HTTP_400_BAD_REQUEST)
-
-
-class PersistentSolveWorker:
-    """Run HTTP solves in one worker process and replace it after a timeout."""
-
-    def __init__(
-        self,
-        channels: list[str],
-        platforms: list[str],
-        *,
-        restart_on_failure: bool = True,
-    ) -> None:
-        self.channels = channels
-        self.platforms = platforms
-        self.restart_on_failure = restart_on_failure
-        self.connection = None
-        self.process = None
-        self.restart_thread = None
-        self.is_ready = False
-        self.operation_lock = threading.RLock()
-
-    @property
-    def running(self) -> bool:
-        return self.process is not None and self.process.is_alive()
-
-    @property
-    def ready(self) -> bool:
-        """Return whether the worker has loaded its configured indexes."""
-        return self.is_ready and self.running
-
-    def start(self) -> None:
-        """Start the worker and wait until it loads its configured indexes."""
-        with self.operation_lock:
-            if self.ready:
-                return
-
-            self.stop()
-            context = multiprocessing.get_context("spawn")
-            parent, child = context.Pipe()
-            self.process = context.Process(
-                target=persistent_solve_worker_entrypoint,
-                args=(child, self.channels, self.platforms),
-            )
-            self.process.start()
-            child.close()
-            self.connection = parent
-
-            try:
-                status, _ = parent.recv()
-            except EOFError as exc:
-                self.stop()
-                raise RuntimeError(
-                    "Persistent solve worker exited during startup"
-                ) from exc
-            if status != "ready":
-                self.stop()
-                raise RuntimeError("Persistent solve worker failed during startup")
-            self.is_ready = True
-
-    def solve(
-        self,
-        channels: list[str],
-        specs: list[str],
-        platforms: list[str] | None,
-        format_name: str | None,
-        timeout_s: float,
-    ) -> list | tuple[str, str]:
-        """Return a solve result, replacing the worker if it exceeds its timeout."""
-        with self.operation_lock:
-            if self.connection is None or not self.ready:
-                self.recover_if_stopped()
-                raise RuntimeError("Persistent solve worker is unavailable")
-
-            try:
-                self.connection.send((channels, specs, platforms, format_name))
-            except (BrokenPipeError, EOFError, OSError) as exc:
-                self.stop(restart=True)
-                raise RuntimeError("Persistent solve worker exited") from exc
-            if not self.connection.poll(timeout_s):
-                self.stop(restart=True)
-                raise TimeoutError
-            try:
-                status, payload = self.connection.recv()
-            except EOFError as exc:
-                self.stop(restart=True)
-                raise RuntimeError("Persistent solve worker exited") from exc
-
-            if status == "ok":
-                return payload
-            if status == "unknown-format":
-                raise UnknownFormatError(payload["format_name"], payload["available"])
-            raise RuntimeError("Persistent solve worker failed")
-
-    def restart(self) -> None:
-        """Start a replacement worker without surfacing background errors."""
-        try:
-            self.start()
-        except Exception:
-            log.exception("Persistent solve worker restart failed")
-
-    def recover_if_stopped(self) -> None:
-        """Schedule recovery when the worker process is no longer running."""
-        with self.operation_lock:
-            if self.running:
-                return
-            self.stop(restart=True)
-
-    def stop(self, *, restart: bool = False) -> None:
-        """Stop the worker process if one is running."""
-        with self.operation_lock:
-            connection, self.connection = self.connection, None
-            process, self.process = self.process, None
-            self.is_ready = False
-            if connection is not None:
-                try:
-                    connection.send(None)
-                except (BrokenPipeError, EOFError, OSError):
-                    pass
-                connection.close()
-            if process is not None:
-                if process.is_alive():
-                    process.terminate()
-                    process.join(5)
-                if process.is_alive():
-                    process.kill()
-                process.join()
-        if restart and self.restart_on_failure:
-            if self.restart_thread is None or not self.restart_thread.is_alive():
-                self.restart_thread = threading.Thread(
-                    target=self.restart,
-                    daemon=True,
-                )
-                self.restart_thread.start()
-
-
-def persistent_solve_worker_entrypoint(
-    connection,
-    warmup_channels: list[str],
-    warmup_platforms: list[str],
-) -> None:
-    """Serve sequential solve requests from a persistent worker process."""
-    try:
-        warmup_indexes(warmup_channels, warmup_platforms)
-    except Exception:
-        log.exception("Persistent solve worker startup failed")
-        connection.send(("startup-failed", None))
-        connection.close()
-        return
-
-    connection.send(("ready", None))
-    while True:
-        try:
-            request = connection.recv()
-        except EOFError:
-            break
-        if request is None:
-            break
-
-        channels, specs, platforms, format_name = request
-        try:
-            if format_name is None:
-                result = []
-                for platform in platforms or [NATIVE_SUBDIR]:
-                    try:
-                        result.append(
-                            solve_one_platform(tuple(channels), specs, platform)
-                        )
-                    except Exception as exc:
-                        result.append(solve_result_error(platform, exc))
-            else:
-                envs = [
-                    solve_one_environment(tuple(channels), specs, platform)
-                    for platform in platforms or [NATIVE_SUBDIR]
-                ]
-                result = OutputFormat.named(format_name).render(envs)
-        except UnknownFormatError as exc:
-            connection.send(
-                (
-                    "unknown-format",
-                    {"format_name": exc.format_name, "available": exc.available},
-                )
-            )
-        except Exception:
-            log.exception("Persistent solve worker failed")
-            connection.send(("error", None))
-        else:
-            connection.send(("ok", result))
-    connection.close()
 
 
 async def run_solve(
@@ -2010,8 +1824,16 @@ async def parse(request: Request, data: ParseRequest) -> Response:
     return Response(ParseResult(parsed_file.specs, parsed_file.channels))
 
 
-@get("/health")
-async def health(request: Request) -> Response | dict[str, str]:
+@get(
+    "/health",
+    responses={
+        HTTP_503_SERVICE_UNAVAILABLE: ResponseSpec(
+            data_container=HealthResponse,
+            description="Persistent solver worker is unavailable",
+        ),
+    },
+)
+async def health(request: Request) -> Response[HealthResponse]:
     """Return readiness for the persistent worker when one is configured."""
     worker = getattr(request.app.state, "solve_worker", None)
     if worker is not None and not worker.ready:
@@ -2020,10 +1842,10 @@ async def health(request: Request) -> Response | dict[str, str]:
             abandon_on_cancel=True,
         )
         return Response(
-            {"status": "unavailable"},
+            HealthResponse(status="unavailable"),
             status_code=HTTP_503_SERVICE_UNAVAILABLE,
         )
-    return {"status": "ok"}
+    return Response(HealthResponse(status="ok"))
 
 
 async def on_startup(app: Litestar) -> None:

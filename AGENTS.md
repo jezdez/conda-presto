@@ -8,6 +8,7 @@
   - `cli.py` owns parser setup, conda subcommand dispatch, and standalone CLI execution.
   - `app.py` owns Litestar route handlers and HTTP request/response behavior.
   - `resolve.py` owns solver/index/cache interactions and cross-platform solve execution.
+  - `worker.py` owns persistent solver-process lifecycle and request dispatch.
   - `inputs.py` owns input-file parsing through conda's environment specifier plugin registry.
   - `exporter.py` owns output-format rendering through conda's exporter plugin registry.
   - `config.py`, `exceptions.py`, and `plugin.py` keep configuration, safe error surfaces, and conda plugin registration separate.
@@ -116,4 +117,3 @@
 - For failing GitHub Actions checks, inspect the specific failing job log before changing code. Distinguish root-cause failures from downstream cleanup/output failures.
 
 - Keep workflow tests close to the workflow or action they verify. Composite action behavior belongs in a dedicated workflow smoke test plus lightweight local tests for script/string generation where practical.
-

@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import logging
+import multiprocessing
+import os
 import threading
 from collections import OrderedDict, deque
 from collections.abc import Callable
@@ -730,8 +732,24 @@ def get_process_pool() -> ProcessPoolExecutor:
         return process_pool
     with pool_lock:
         if process_pool is None:
-            process_pool = ProcessPoolExecutor(max_workers=MAX_WORKERS)
+            process_pool = ProcessPoolExecutor(
+                max_workers=MAX_WORKERS,
+                initializer=watch_parent_process,
+            )
         return process_pool
+
+
+def watch_parent_process() -> None:
+    """Exit a pool worker when its owning process exits unexpectedly."""
+    parent = multiprocessing.parent_process()
+    if parent is None:
+        return
+
+    def exit_with_parent() -> None:
+        parent.join()
+        os._exit(0)
+
+    threading.Thread(target=exit_with_parent, daemon=True).start()
 
 
 def shutdown_process_pool() -> None:

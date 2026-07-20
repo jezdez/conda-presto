@@ -9700,7 +9700,7 @@ packages:
 - pypi: ./
   name: conda-presto
   requires_dist:
-  - conda-broker>=0.1.1,<0.2
+  - conda-broker>=0.1.1
   - msgspec>=0.19
   - redis>=5.0 ; extra == 'redis'
   requires_python: '>=3.13'
