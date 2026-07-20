@@ -39,7 +39,7 @@ docker run ghcr.io/jezdez/conda-presto:cli -f environment.yml -p linux-64
 |---|---|---|
 | `latest` | Server | Most recent server release |
 | `<version>` | Server | Specific release (e.g. `0.6.0`) |
-| `<major>.<minor>` | Server | Latest patch for a minor (e.g. `0.5`) |
+| `<major>.<minor>` | Server | Latest patch for a minor (e.g. `0.6`) |
 | `<major>` | Server | Latest minor for a major (e.g. `0`) |
 | `cli` | CLI | Most recent CLI release |
 | `<version>-cli` | CLI | Specific CLI release (e.g. `0.6.0-cli`) |
@@ -255,9 +255,10 @@ survive server restarts. Redis support is included in the published Docker
 server image. Other Python environments require the `redis` optional dependency.
 
 The `/resolve` key includes the normalized specs, ordered channels, target
-platforms, output format, conda-presto and solver versions, and local repodata
-cache-file markers. See the [Presto solver reference](solver-backend.md) for the
-internal solver cache key and invalidation rules.
+platforms, output format, configured virtual-package overrides, conda-presto and
+solver versions, and local repodata cache-file markers. See the
+[Presto solver reference](solver-backend.md) for the internal solver cache key
+and invalidation rules.
 
 ### Cache-warming candidates
 
@@ -296,6 +297,10 @@ not run it.
 : Maximum cache-warming candidates checked per cycle (default 8). For a
   memory-only cache, this is capped by the in-process result-cache entry limit.
 
+The first cycle starts 30 seconds after the broker child becomes ready. Each
+inspection or solve is limited to 30 seconds and also respects a lower
+`CONDA_PRESTO_SOLVE_TIMEOUT_S`. One cycle stops starting work after 60 seconds.
+
 See [Presto solver backend](solver-backend.md) for the cache contract,
 [Performance](../explanation/performance.md) for lifecycle and freshness behavior,
 and [Broker-managed local service](../tutorials/broker-service.md) for the
@@ -306,8 +311,10 @@ operational workflow.
 Two variables control parallelism:
 
 `CONDA_PRESTO_CONCURRENCY`
-: Thread limiter for concurrent solve requests (default 4). Increase
-  this if the server handles many simultaneous clients.
+: Thread limiter for concurrent solve requests (default 4). The Docker image
+  and broker service set it to 1 because their persistent worker handles one
+  request at a time. Increase it only for a non-persistent HTTP server that
+  handles simultaneous clients.
 
 `CONDA_PRESTO_WORKERS`
 : Process pool size for multi-platform parallel solves within a

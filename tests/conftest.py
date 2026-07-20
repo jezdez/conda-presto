@@ -7,9 +7,39 @@ from typing import Any
 import pytest
 from conda.models.channel import Channel
 from conda.models.records import PackageRecord
+from litestar.stores.file import FileStore
+from litestar.stores.memory import MemoryStore
+from litestar.stores.redis import RedisStore
 
 from conda_presto.resolve import RepodataSnapshot, ResolvedPackage, SolveResult
 from conda_presto.solver import PrestoSolveOutcome, PrestoSolveRequest
+
+
+@pytest.fixture(params=["memory", "file", "redis"])
+def persistent_store(request, tmp_path):
+    """Return each supported Litestar store without external services."""
+    if request.param == "memory":
+        return MemoryStore()
+    if request.param == "file":
+        return FileStore(tmp_path / "persistent-store", create_directories=True)
+
+    class RedisClient:
+        def __init__(self):
+            self.data = {}
+
+        def register_script(self, _script):
+            return None
+
+        async def get(self, key):
+            return self.data.get(key)
+
+        async def set(self, key, value, *, ex=None):
+            self.data[key] = value
+
+        async def delete(self, key):
+            self.data.pop(key, None)
+
+    return RedisStore(RedisClient(), namespace="test")
 
 
 @pytest.fixture()

@@ -42,8 +42,8 @@ Server tuning:
         Optional Redis URL for a Redis-backed result cache.
     ``CONDA_PRESTO_SOLVER_CACHE_WARM_CANDIDATE_SIZE``
         Max successful cacheable foreground ``/solver/v1`` requests retained
-        for cache warming
-        (default: ``32``). Set to ``0`` to disable recording.
+        for cache warming (default: ``32``), plus the same number of
+        one-request observations. Set to ``0`` to disable recording.
     ``CONDA_PRESTO_SOLVER_CACHE_WARM_CANDIDATE_PERSIST``
         Persist candidates without detected credentials in a configured file
         or Redis result store (default: ``false``).
@@ -164,6 +164,8 @@ RESULT_CACHE_MAX_MEMORY_MB = env_int(
     "CONDA_PRESTO_RESULT_CACHE_MAX_MEMORY_MB",
     64,
 )
+if min(RESULT_CACHE_SIZE, RESULT_CACHE_MAX_MEMORY_MB) < 0:
+    raise ValueError("Result cache limits must not be negative")
 RESULT_CACHE_MAX_MEMORY_BYTES = RESULT_CACHE_MAX_MEMORY_MB * 1024 * 1024
 RESULT_CACHE_DIR = os.environ.get("CONDA_PRESTO_RESULT_CACHE_DIR") or None
 RESULT_CACHE_REDIS_URL = os.environ.get("CONDA_PRESTO_RESULT_CACHE_REDIS_URL") or None

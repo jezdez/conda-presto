@@ -67,6 +67,25 @@ uses one separate worker for requests that need a refresh. It does not expose
 recorded requests or refresh controls through HTTP. Docker deployments do not
 run this broker-only scheduler.
 
+## Keep recorded requests across restarts
+
+To retain eligible requests when the service restarts, configure a persistent
+result store and enable candidate persistence before starting the broker. For a
+file-backed store:
+
+```bash
+conda broker stop
+export CONDA_PRESTO_RESULT_CACHE_BACKEND=file
+export CONDA_PRESTO_RESULT_CACHE_DIR="$HOME/.cache/conda-presto/results"
+export CONDA_PRESTO_SOLVER_CACHE_WARM_CANDIDATE_PERSIST=true
+conda broker start conda-presto.server
+conda broker wait conda-presto.server --timeout 180
+```
+
+The same setting works with the Redis result-cache variables. Requests with
+detected channel credentials or tokenized URLs remain memory-only. Keep the
+file directory or Redis instance inside the same trust domain as the service.
+
 ## Stop the service
 
 Stop the service when the local workflow is complete:

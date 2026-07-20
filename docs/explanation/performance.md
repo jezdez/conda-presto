@@ -56,11 +56,12 @@ Scheduled solver-cache refresh
 ## Cache keys and repodata checks
 
 The result cache key is tied to the inputs that can change the response:
-normalized specs, ordered channels, target platforms, output format, relevant
-dependency versions, and markers for conda's local `repodata.json` files. A
-request bypasses a stored result when conda's effective policy requires any
-corresponding repodata metadata to refresh. If refreshed package metadata
-changes, the next `/resolve` result uses a different key. Solver final-state
+normalized specs, ordered channels, target platforms, output format, configured
+virtual-package overrides, relevant dependency versions, and markers for
+conda's local `repodata.json` files. A request bypasses a stored result when
+conda's effective policy requires any corresponding repodata metadata to
+refresh. If refreshed package metadata changes, the next `/resolve` result uses
+a different key. Solver final-state
 keys hash solve-affecting request fields, including installed records, history,
 pins, virtual packages, operation modifiers, solver settings, and channel
 definitions, along with dependency versions. They exclude the prefix path, file
@@ -116,7 +117,9 @@ Multi-platform requests run one solve per platform through a persistent process
 pool. Wall-clock time follows the slowest platform solve more closely than the
 sum of all platform solves, assuming enough workers are available. Tune the
 pool with `CONDA_PRESTO_WORKERS`; tune concurrent HTTP requests with
-`CONDA_PRESTO_CONCURRENCY`.
+`CONDA_PRESTO_CONCURRENCY` in non-persistent HTTP mode. The Docker and broker
+deployments use one persistent foreground worker and set the concurrency limit
+to 1.
 
 ## Lockfile transcoding
 

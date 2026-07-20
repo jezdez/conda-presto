@@ -14,7 +14,7 @@ CLI and the HTTP server.
 | `CONDA_PRESTO_CHANNELS` | `conda-forge` | Comma-separated default channels when none are given in a request. Also used for cache warmup on server startup. |
 | `CONDA_PRESTO_ALLOWED_CHANNELS` | value of `CONDA_PRESTO_CHANNELS` | Comma-separated channel allowlist for the HTTP server. Set to `*` only for trusted deployments that intentionally accept caller-selected channels. |
 | `CONDA_PRESTO_PLATFORMS` | `linux-64,osx-arm64,osx-64` | Comma-separated platforms to pre-warm repodata caches for on server startup. |
-| `CONDA_PRESTO_CONCURRENCY` | `4` | Maximum concurrent solve requests (thread limiter). |
+| `CONDA_PRESTO_CONCURRENCY` | `4` | Maximum concurrent solve requests (thread limiter). The Docker image and broker service set this to `1` for their persistent worker. |
 | `CONDA_PRESTO_WORKERS` | `min(4, cpu_count)` | Process pool size for multi-platform parallel solves. |
 | `CONDA_PRESTO_MAX_BODY_BYTES` | `1048576` (1 MB) | Maximum request body size in bytes. Returns HTTP 413 if exceeded. |
 | `CONDA_PRESTO_MAX_SPECS` | `200` | Maximum number of specs per request. Returns HTTP 400 if exceeded. |
