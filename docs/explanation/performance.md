@@ -43,8 +43,8 @@ Result cache
 Cache-warming candidates
 : successful cacheable foreground solver requests are recorded locally. A
   request becomes eligible for refresh after repeated use. Candidates are
-  ordered by request count and recency; background refreshes do not change
-  either value. A bounded observation tier retains requests outside the catalog,
+  ordered by request count and recency. Background refreshes do not change either
+  value. A bounded observation tier retains requests outside the catalog,
   including displaced candidates. An observation and the lowest-ranked candidate
   exchange places when the observation's count, then recency, ranks higher.
 
@@ -91,7 +91,7 @@ with different prefix histories or pins also use different keys.
 Candidate identity omits dependency versions and current repodata markers so a
 recorded request can remain eligible after metadata refreshes and compatible
 upgrades. Cache reuse still includes dependency versions and requires the
-current repodata markers to match. Candidates are local by default; persistence
+current repodata markers to match. Candidates are local by default. Persistence
 excludes requests with detected credentials.
 
 ## Multi-platform solving
