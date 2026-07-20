@@ -218,7 +218,7 @@ async def test_resolve_post_defaults(client):
 async def test_resolve_post_returns_content_addressed_location(client, monkeypatch):
     calls = 0
 
-    def fake_solve(channels, specs, platforms):
+    def fake_solve(channels, specs, platforms, **kwargs):
         nonlocal calls
         calls += 1
         return [SolveResult(platform="linux-64", packages=[])]
@@ -256,7 +256,7 @@ async def test_result_permalink_returns_stored_body_and_media_type(client, monke
     monkeypatch.setattr(
         app_module,
         "solve",
-        lambda channels, specs, platforms: [
+        lambda channels, specs, platforms, **kwargs: [
             SolveResult(platform="linux-64", packages=[])
         ],
     )
@@ -291,7 +291,7 @@ async def test_result_cache_evicts_oldest_result(client, test_app, monkeypatch):
     monkeypatch.setattr(
         app_module,
         "solve",
-        lambda channels, specs, platforms: [
+        lambda channels, specs, platforms, **kwargs: [
             SolveResult(platform="linux-64", packages=[])
         ],
     )
@@ -330,7 +330,7 @@ async def test_result_cache_uses_litestar_store_layer(monkeypatch):
     )
     calls = 0
 
-    def fake_solve(channels, specs, platforms):
+    def fake_solve(channels, specs, platforms, **kwargs):
         nonlocal calls
         calls += 1
         return [SolveResult(platform="linux-64", packages=[])]
@@ -476,7 +476,7 @@ async def test_result_cache_remember_omits_permalink_when_memory_rejects_result(
 async def test_spec_order_canonicalization_reuses_cached_result(client, monkeypatch):
     calls = 0
 
-    def fake_solve(channels, specs, platforms):
+    def fake_solve(channels, specs, platforms, **kwargs):
         nonlocal calls
         calls += 1
         return [SolveResult(platform="linux-64", packages=[])]
@@ -548,7 +548,7 @@ def test_virtual_package_overrides_produce_different_cache_keys(monkeypatch):
 async def test_resolve_get_uses_default_channels(client, monkeypatch):
     captured = {}
 
-    def capture(channels, specs, platforms):
+    def capture(channels, specs, platforms, **kwargs):
         captured["channels"] = channels
         return [SolveResult(platform="linux-64", packages=[])]
 
@@ -567,7 +567,7 @@ async def test_resolve_get_uses_default_channels(client, monkeypatch):
 async def test_resolve_post_empty_body_uses_query_params(client, monkeypatch):
     captured = {}
 
-    def capture(channels, specs, platforms):
+    def capture(channels, specs, platforms, **kwargs):
         captured["specs"] = specs
         return [SolveResult(platform="linux-64", packages=[])]
 
@@ -843,8 +843,17 @@ async def test_resolve_uses_terminable_worker_when_limiter_present(
 ):
     captured = {}
 
-    def fake_run_solve_in_process(channels, specs, platforms, format_name, timeout_s):
-        captured["args"] = channels, specs, platforms, format_name, timeout_s
+    def fake_run_solve_in_process(
+        channels, specs, platforms, format_name, deadline, captured_errors
+    ):
+        captured["args"] = (
+            channels,
+            specs,
+            platforms,
+            format_name,
+            deadline,
+            captured_errors,
+        )
         return []
 
     async def fake_run_sync(func, *args, abandon_on_cancel, limiter):
@@ -864,21 +873,65 @@ async def test_resolve_uses_terminable_worker_when_limiter_present(
 
     assert response.status_code == 200
     assert captured["limiter"] is test_app.state.solver_limiter
-    assert captured["abandon_on_cancel"] is True
-    assert captured["args"] == (
-        ["conda-forge"],
-        ["zlib"],
-        ["linux-64"],
-        None,
-        60,
-    )
+    assert captured["abandon_on_cancel"] is False
+    channels, specs, platforms, format_name, deadline, captured_errors = captured[
+        "args"
+    ]
+    assert channels == ["conda-forge"]
+    assert specs == ["zlib"]
+    assert platforms == ["linux-64"]
+    assert format_name is None
+    assert deadline > time.monotonic()
+    assert captured_errors == (Exception,)
+
+
+@pytest.mark.anyio
+async def test_resolve_worker_deadline_includes_capacity_wait(
+    client, test_app, monkeypatch
+):
+    remaining = []
+    limiter = app_module.anyio.CapacityLimiter(1)
+    occupied = app_module.anyio.Event()
+
+    async def occupy_solver():
+        async with limiter:
+            occupied.set()
+            while limiter.statistics().tasks_waiting == 0:
+                await app_module.anyio.sleep(0)
+            await app_module.anyio.sleep(0.1)
+
+    def fake_run_solve_in_process(
+        channels, specs, platforms, format_name, deadline, captured_errors
+    ):
+        remaining.append(deadline - time.monotonic())
+        return []
+
+    monkeypatch.setattr(app_module, "SOLVE_TIMEOUT_S", 0.5)
+    monkeypatch.setattr(app_module, "run_solve_in_process", fake_run_solve_in_process)
+    test_app.state.solver_limiter = limiter
+
+    async with app_module.anyio.create_task_group() as task_group:
+        task_group.start_soon(occupy_solver)
+        await occupied.wait()
+        response = await client.post(
+            "/resolve",
+            json={"specs": ["zlib"], "platforms": ["linux-64"]},
+        )
+
+    assert response.status_code == 200
+    assert len(remaining) == 1
+    assert 0 < remaining[0] < 0.45
 
 
 def test_run_solve_in_process_returns_worker_result(fake_solve_process):
     calls = fake_solve_process()
 
     result = app_module.run_solve_in_process(
-        ["conda-forge"], ["zlib"], ["linux-64"], None, 60
+        ["conda-forge"],
+        ["zlib"],
+        ["linux-64"],
+        None,
+        time.monotonic() + 60,
     )
 
     assert result == []
@@ -887,7 +940,11 @@ def test_run_solve_in_process_returns_worker_result(fake_solve_process):
 
 def test_run_solve_in_process_executes_worker():
     result = app_module.run_solve_in_process(
-        ["conda-forge"], ["zlib"], ["linux-64"], None, 60
+        ["conda-forge"],
+        ["zlib"],
+        ["linux-64"],
+        None,
+        time.monotonic() + 60,
     )
 
     assert result[0].platform == "linux-64"
@@ -899,7 +956,11 @@ def test_run_solve_in_process_kills_timed_out_worker(fake_solve_process):
 
     with pytest.raises(TimeoutError):
         app_module.run_solve_in_process(
-            ["conda-forge"], ["zlib"], ["linux-64"], None, 60
+            ["conda-forge"],
+            ["zlib"],
+            ["linux-64"],
+            None,
+            time.monotonic() + 60,
         )
 
     assert calls == [
@@ -907,7 +968,7 @@ def test_run_solve_in_process_kills_timed_out_worker(fake_solve_process):
         "sender.close",
         "receiver.close",
         "terminate",
-        "join:5",
+        "join:5.0",
         "kill",
         "join:None",
     ]
@@ -931,7 +992,11 @@ def test_run_solve_in_process_raises_worker_error(
 
     with pytest.raises(error_type):
         app_module.run_solve_in_process(
-            ["conda-forge"], ["zlib"], ["linux-64"], None, 60
+            ["conda-forge"],
+            ["zlib"],
+            ["linux-64"],
+            None,
+            time.monotonic() + 60,
         )
 
 
@@ -1035,7 +1100,7 @@ async def test_resolve_accepts_allowed_channel_url(client, monkeypatch):
     monkeypatch.setattr("conda_presto.app.CHANNEL_ALLOWLIST", ["conda-forge"])
     monkeypatch.setattr(
         "conda_presto.app.solve",
-        lambda channels, specs, platforms: [],
+        lambda channels, specs, platforms, **kwargs: [],
     )
 
     resp = await client.post(
@@ -1068,7 +1133,7 @@ async def test_resolve_get_rejects_too_many_platforms(client, monkeypatch):
 async def test_resolve_post_omitted_fields_fall_through_to_query(client, monkeypatch):
     captured = {}
 
-    def capture(channels, specs, platforms):
+    def capture(channels, specs, platforms, **kwargs):
         captured["channels"] = channels
         captured["specs"] = specs
         captured["platforms"] = platforms
@@ -1089,7 +1154,7 @@ async def test_resolve_post_omitted_fields_fall_through_to_query(client, monkeyp
 async def test_resolve_post_empty_body_array_overrides_query(client, monkeypatch):
     captured = {}
 
-    def capture(channels, specs, platforms):
+    def capture(channels, specs, platforms, **kwargs):
         captured["channels"] = channels
         captured["specs"] = specs
         captured["platforms"] = platforms
@@ -1288,10 +1353,8 @@ async def test_repair_post_returns_no_suggestions_for_a_feasible_request(
 ):
     calls = []
 
-    async def fake_run_solve(
-        request, specs, channels, platforms, format_name=None, timeout_s=None
-    ):
-        calls.append((specs, channels, platforms, timeout_s))
+    async def fake_run_solve(request, specs, channels, platforms, **kwargs):
+        calls.append((specs, channels, platforms, kwargs["timeout_s"]))
         return (
             msgspec.json.encode(
                 [SolveResult(platform=platform, packages=[]) for platform in platforms]
@@ -1316,9 +1379,7 @@ async def test_repair_post_returns_no_suggestions_for_a_feasible_request(
 async def test_repair_post_verifies_an_exact_pin_relaxation_on_every_platform(
     client, monkeypatch
 ):
-    async def fake_run_solve(
-        request, specs, channels, platforms, format_name=None, timeout_s=None
-    ):
+    async def fake_run_solve(request, specs, channels, platforms, **kwargs):
         error = "Unsatisfiable environment" if specs == ["scipy==1.5"] else None
         return (
             msgspec.json.encode(
@@ -1376,9 +1437,7 @@ async def test_repair_post_verifies_an_exact_pin_relaxation_on_every_platform(
 async def test_repair_post_does_not_relax_package_artifacts(client, monkeypatch, spec):
     calls = []
 
-    async def fake_run_solve(
-        request, specs, channels, platforms, format_name=None, timeout_s=None
-    ):
+    async def fake_run_solve(request, specs, channels, platforms, **kwargs):
         calls.append(specs)
         return (
             msgspec.json.encode(
@@ -1405,9 +1464,7 @@ async def test_repair_post_does_not_relax_package_artifacts(client, monkeypatch,
 
 @pytest.mark.anyio
 async def test_repair_post_relaxes_one_side_of_a_bounded_spec(client, monkeypatch):
-    async def fake_run_solve(
-        request, specs, channels, platforms, format_name=None, timeout_s=None
-    ):
+    async def fake_run_solve(request, specs, channels, platforms, **kwargs):
         error = None if specs == ["conda-forge::scipy[version='>=1.5']"] else "no"
         return (
             msgspec.json.encode(
@@ -1444,9 +1501,7 @@ async def test_repair_post_relaxes_one_side_of_a_bounded_spec(client, monkeypatc
 async def test_repair_post_keeps_verified_results_when_the_attempt_budget_ends(
     client, monkeypatch
 ):
-    async def fake_run_solve(
-        request, specs, channels, platforms, format_name=None, timeout_s=None
-    ):
+    async def fake_run_solve(request, specs, channels, platforms, **kwargs):
         solved = specs == ["first", "second==1"]
         return (
             msgspec.json.encode(
@@ -1478,9 +1533,7 @@ async def test_repair_post_keeps_verified_results_when_the_attempt_budget_ends(
 async def test_repair_post_applies_the_server_attempt_cap(client, monkeypatch):
     calls = 0
 
-    async def fake_run_solve(
-        request, specs, channels, platforms, format_name=None, timeout_s=None
-    ):
+    async def fake_run_solve(request, specs, channels, platforms, **kwargs):
         nonlocal calls
         calls += 1
         return (
@@ -1511,9 +1564,7 @@ async def test_repair_post_applies_the_server_attempt_cap(client, monkeypatch):
 
 @pytest.mark.anyio
 async def test_repair_post_stops_after_the_suggestion_limit(client, monkeypatch):
-    async def fake_run_solve(
-        request, specs, channels, platforms, format_name=None, timeout_s=None
-    ):
+    async def fake_run_solve(request, specs, channels, platforms, **kwargs):
         solved = specs != ["first==1", "second==1"]
         return (
             msgspec.json.encode(
@@ -1545,9 +1596,7 @@ async def test_repair_post_keeps_verified_results_when_a_candidate_times_out(
 ):
     calls = 0
 
-    async def fake_run_solve(
-        request, specs, channels, platforms, format_name=None, timeout_s=None
-    ):
+    async def fake_run_solve(request, specs, channels, platforms, **kwargs):
         nonlocal calls
         calls += 1
         if calls == 3:
@@ -1620,12 +1669,10 @@ async def test_repair_post_time_budget_includes_solver_queue(
 
 @pytest.mark.anyio
 async def test_repair_post_returns_unexpected_solver_errors(client, monkeypatch):
-    async def fake_run_solve(*args, **kwargs):
-        return app_module.Response(
-            app_module.ErrorResponse(error="Internal solver error"), status_code=500
-        )
+    def fail(*args, **kwargs):
+        raise RuntimeError("transport failed")
 
-    monkeypatch.setattr(app_module, "run_solve", fake_run_solve)
+    monkeypatch.setattr("conda_presto.resolve.run_solver", fail)
     response = await client.post("/repair", json={"specs": ["zlib"]})
 
     assert response.status_code == 500

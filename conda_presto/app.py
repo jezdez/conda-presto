@@ -135,7 +135,7 @@ from .config import (
     RESULT_CACHE_SIZE,
     SOLVE_TIMEOUT_S,
 )
-from .exceptions import UnknownFormatError
+from .exceptions import SAFE_ERROR_TYPES, UnknownFormatError
 from .exporter import OutputFormat
 from .inputs import ParsedInputFile
 from .preflight import PreflightResult
@@ -555,6 +555,7 @@ class RepairSearch:
             self.channels,
             self.platforms,
             timeout_s=timeout_s,
+            captured_errors=SAFE_ERROR_TYPES,
         )
         if isinstance(payload, Response):
             if payload.status_code == HTTP_504_GATEWAY_TIMEOUT:
@@ -954,6 +955,7 @@ async def run_solve(
     platforms: list[str] | None,
     format_name: str | None = None,
     timeout_s: float | None = None,
+    captured_errors: tuple[type[Exception], ...] = (Exception,),
 ) -> Response | tuple[bytes, str]:
     """Shared solve runner: threadpool + timeout + error sanitization.
 
@@ -964,6 +966,7 @@ async def run_solve(
     """
 
     timeout_s = SOLVE_TIMEOUT_S if timeout_s is None else timeout_s
+    deadline = time.monotonic() + timeout_s
     try:
         limiter = request.app.state.solver_limiter
         if limiter is None:
@@ -974,6 +977,7 @@ async def run_solve(
                     specs,
                     platforms,
                     format_name,
+                    captured_errors,
                     abandon_on_cancel=True,
                 )
         else:
@@ -984,8 +988,9 @@ async def run_solve(
                     specs,
                     platforms,
                     format_name,
-                    timeout_s,
-                    abandon_on_cancel=True,
+                    deadline,
+                    captured_errors,
+                    abandon_on_cancel=False,
                     limiter=limiter,
                 )
     except TimeoutError:
@@ -1025,10 +1030,16 @@ def run_solve_work(
     specs: list[str],
     platforms: list[str] | None,
     format_name: str | None,
+    captured_errors: tuple[type[Exception], ...] = (Exception,),
 ) -> list | tuple[str, str]:
     """Run the blocking solve/export path in a worker."""
     if format_name is None:
-        return solve(channels, specs, platforms)
+        return solve(
+            channels,
+            specs,
+            platforms,
+            captured_errors=captured_errors,
+        )
     envs = solve_environments(channels, specs, platforms)
     return OutputFormat.named(format_name).render(envs)
 
@@ -1038,20 +1049,30 @@ def run_solve_in_process(
     specs: list[str],
     platforms: list[str] | None,
     format_name: str | None,
-    timeout_s: float,
+    deadline: float,
+    captured_errors: tuple[type[Exception], ...] = (Exception,),
 ) -> list | tuple[str, str]:
-    """Run solve work in a child process that can be terminated on timeout."""
+    """Run solve work in a child process until the request deadline."""
+    if deadline <= time.monotonic():
+        raise TimeoutError
     ctx = multiprocessing.get_context("spawn")
     receiver, sender = ctx.Pipe(duplex=False)
     process = ctx.Process(
         target=solve_process_entrypoint,
-        args=(sender, channels, specs, platforms, format_name),
+        args=(
+            sender,
+            channels,
+            specs,
+            platforms,
+            format_name,
+            captured_errors,
+        ),
     )
     process.start()
     sender.close()
 
     try:
-        if not receiver.poll(timeout_s):
+        if not receiver.poll(max(0.0, deadline - time.monotonic())):
             raise TimeoutError
         status, payload = receiver.recv()
     except EOFError as exc:
@@ -1060,7 +1081,7 @@ def run_solve_in_process(
         receiver.close()
         if process.is_alive():
             process.terminate()
-            process.join(5)
+            process.join(max(0.0, min(5.0, deadline - time.monotonic())))
         if process.is_alive():
             process.kill()
         process.join()
@@ -1078,10 +1099,22 @@ def solve_process_entrypoint(
     specs: list[str],
     platforms: list[str] | None,
     format_name: str | None,
+    captured_errors: tuple[type[Exception], ...] = (Exception,),
 ) -> None:
     """Send a solve result from an isolated process."""
     try:
-        sender.send(("ok", run_solve_work(channels, specs, platforms, format_name)))
+        sender.send(
+            (
+                "ok",
+                run_solve_work(
+                    channels,
+                    specs,
+                    platforms,
+                    format_name,
+                    captured_errors,
+                ),
+            )
+        )
     except UnknownFormatError as exc:
         sender.send(
             (
