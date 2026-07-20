@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import threading
 import time
 from types import SimpleNamespace
 
@@ -301,6 +302,53 @@ async def test_solver_v1_cache_hit_bypasses_solver_capacity(
 
 
 @pytest.mark.anyio
+async def test_solver_v1_timeout_does_not_wait_for_cache_hit_snapshot(
+    client,
+    test_app,
+    monkeypatch,
+    presto_solver_request,
+    fresh_repodata_snapshot,
+    enabled_solver_endpoint,
+):
+    started = threading.Event()
+    release = threading.Event()
+    key = ResultCache.solver_key(presto_solver_request.cache_key())
+    test_app.state.result_cache.remember_memory(
+        key,
+        cache_module.StoredSolverResult(
+            response=PrestoSolveResponse(records=[], neutered=[]),
+            metadata_used=fresh_repodata_snapshot,
+        ),
+    )
+
+    def snapshot(_):
+        started.set()
+        release.wait(1)
+        return fresh_repodata_snapshot
+
+    monkeypatch.setattr(app_module, "SOLVE_TIMEOUT_S", 0.02)
+    monkeypatch.setattr(PrestoSolveRequest, "repodata_snapshot", snapshot)
+    test_app.state.solve_worker = SimpleNamespace(
+        solve_final_state=lambda *_: pytest.fail("cache hit must not solve")
+    )
+
+    before = time.monotonic()
+    try:
+        response = await client.post(
+            "/solver/v1",
+            content=msgspec.json.encode(presto_solver_request),
+            headers={"content-type": "application/json"},
+        )
+        elapsed = time.monotonic() - before
+    finally:
+        release.set()
+
+    assert started.is_set()
+    assert response.status_code == 504
+    assert elapsed < 0.5
+
+
+@pytest.mark.anyio
 async def test_solver_v1_timeout_includes_capacity_queue(
     client,
     test_app,
@@ -340,6 +388,90 @@ async def test_solver_v1_timeout_includes_capacity_queue(
 
     assert response.status_code == 504
     assert calls == []
+
+
+@pytest.mark.anyio
+async def test_solver_v1_timeout_does_not_wait_for_worker_cleanup(
+    client,
+    test_app,
+    monkeypatch,
+    presto_solver_request,
+    fresh_repodata_snapshot,
+    enabled_solver_endpoint,
+):
+    started = threading.Event()
+    release = threading.Event()
+
+    def solve(*_):
+        started.set()
+        release.wait(1)
+        raise TimeoutError
+
+    monkeypatch.setattr(app_module, "SOLVE_TIMEOUT_S", 0.02)
+    monkeypatch.setattr(
+        PrestoSolveRequest,
+        "repodata_snapshot",
+        lambda _: fresh_repodata_snapshot,
+    )
+    test_app.state.solve_worker = SimpleNamespace(solve_final_state=solve)
+    test_app.state.solver_limiter = anyio.CapacityLimiter(1)
+
+    before = time.monotonic()
+    response = await client.post(
+        "/solver/v1",
+        content=msgspec.json.encode(presto_solver_request),
+        headers={"content-type": "application/json"},
+    )
+    elapsed = time.monotonic() - before
+    release.set()
+
+    assert started.is_set()
+    assert response.status_code == 504
+    assert elapsed < 0.5
+
+
+@pytest.mark.anyio
+async def test_solver_v1_timeout_does_not_wait_for_publication_snapshot(
+    client,
+    test_app,
+    monkeypatch,
+    presto_solver_request,
+    presto_solver_outcome,
+    fresh_repodata_snapshot,
+    enabled_solver_endpoint,
+):
+    started = threading.Event()
+    release = threading.Event()
+
+    def snapshot(_):
+        started.set()
+        release.wait(1)
+        return fresh_repodata_snapshot
+
+    monkeypatch.setattr(app_module, "SOLVE_TIMEOUT_S", 0.02)
+    monkeypatch.setattr(PrestoSolveRequest, "repodata_snapshot", snapshot)
+    test_app.state.solve_worker = SimpleNamespace(
+        solve_final_state=lambda *_: presto_solver_outcome(
+            PrestoSolveResponse(records=[], neutered=[]),
+            fresh_repodata_snapshot,
+        )
+    )
+    test_app.state.solver_limiter = anyio.CapacityLimiter(1)
+
+    before = time.monotonic()
+    try:
+        response = await client.post(
+            "/solver/v1",
+            content=msgspec.json.encode(presto_solver_request),
+            headers={"content-type": "application/json"},
+        )
+        elapsed = time.monotonic() - before
+    finally:
+        release.set()
+
+    assert started.is_set()
+    assert response.status_code == 504
+    assert elapsed < 0.5
 
 
 @pytest.mark.anyio
@@ -1769,9 +1901,15 @@ async def test_resolve_uses_persistent_worker_when_configured(test_app):
         )
 
     assert response.status_code == 200
-    assert calls == [
-        (["conda-forge"], ["zlib"], ["linux-64"], None, 60),
-    ]
+    assert len(calls) == 1
+    channels, specs, platforms, format_name, deadline = calls[0]
+    assert (channels, specs, platforms, format_name) == (
+        ["conda-forge"],
+        ["zlib"],
+        ["linux-64"],
+        None,
+    )
+    assert deadline > time.monotonic()
 
 
 @pytest.mark.anyio
@@ -1784,6 +1922,7 @@ async def test_run_solve_passes_per_call_timeout(test_app):
 
     test_app.state.solve_worker = SimpleNamespace(solve=solve)
 
+    started = time.monotonic()
     response = await app_module.run_solve(
         SimpleNamespace(app=test_app),
         ["zlib"],
@@ -1793,9 +1932,15 @@ async def test_run_solve_passes_per_call_timeout(test_app):
     )
 
     assert response == (b"[]", "application/json")
-    assert calls == [
-        (["conda-forge"], ["zlib"], ["linux-64"], None, 0.25),
-    ]
+    assert len(calls) == 1
+    channels, specs, platforms, format_name, deadline = calls[0]
+    assert (channels, specs, platforms, format_name) == (
+        ["conda-forge"],
+        ["zlib"],
+        ["linux-64"],
+        None,
+    )
+    assert started < deadline <= time.monotonic() + 0.25
 
 
 @pytest.mark.anyio

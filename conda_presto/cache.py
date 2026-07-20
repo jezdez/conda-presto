@@ -269,7 +269,10 @@ class ResultCache:
             if not isinstance(stored, StoredSolverResult):
                 return None
             try:
-                current = request.repodata_snapshot()
+                current = await anyio.to_thread.run_sync(
+                    request.repodata_snapshot,
+                    abandon_on_cancel=True,
+                )
             except Exception:
                 log.warning("Presto solver cache metadata unavailable during lookup")
                 return None
@@ -322,7 +325,10 @@ class ResultCache:
                 store,
             )
             try:
-                current = request.repodata_snapshot()
+                current = await anyio.to_thread.run_sync(
+                    request.repodata_snapshot,
+                    abandon_on_cancel=True,
+                )
             except Exception:
                 log.warning("Presto solver cache metadata unavailable after solve")
                 return None, "publication-rejected"
@@ -408,6 +414,7 @@ class SolverResultService:
             worker.solve_final_state,
             request,
             deadline,
+            abandon_on_cancel=True,
         )
         if not isinstance(outcome, PrestoSolveOutcome):
             raise RuntimeError("Persistent solver worker returned an invalid result")

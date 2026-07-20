@@ -776,7 +776,7 @@ async def run_solve(
                     specs,
                     platforms,
                     format_name,
-                    timeout_s,
+                    deadline,
                     limiter=limiter,
                     abandon_on_cancel=True,
                 )

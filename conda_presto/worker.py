@@ -125,10 +125,10 @@ class PersistentSolveWorker:
         specs: list[str],
         platforms: list[str] | None,
         format_name: str | None,
-        timeout_s: float,
+        deadline: float,
     ) -> list | tuple[str, str]:
-        """Return a solve result, replacing the worker after a timeout."""
-        return self.execute((channels, specs, platforms, format_name), timeout_s)
+        """Return a solve result before the absolute deadline."""
+        return self.execute((channels, specs, platforms, format_name), deadline)
 
     def solve_final_state(
         self,
@@ -136,14 +136,13 @@ class PersistentSolveWorker:
         deadline: float,
     ) -> PrestoSolveOutcome:
         """Run an internal solver request in the persistent worker."""
-        timeout_s = deadline - time.monotonic()
-        if timeout_s <= 0:
-            raise TimeoutError
-        return self.execute(("solver", request), timeout_s)
+        return self.execute(("solver", request), deadline)
 
-    def execute(self, request: object, timeout_s: float) -> object:
+    def execute(self, request: object, deadline: float) -> object:
         """Exchange one request with the persistent worker process."""
         with self.operation_lock:
+            if deadline <= time.monotonic():
+                raise TimeoutError
             if self.connection is None or not self.ready:
                 self.recover_if_stopped()
                 raise RuntimeError("Persistent solve worker is unavailable")
@@ -153,7 +152,8 @@ class PersistentSolveWorker:
             except (BrokenPipeError, EOFError, OSError) as exc:
                 self.stop(restart=True)
                 raise RuntimeError("Persistent solve worker exited") from exc
-            if not self.connection.poll(timeout_s):
+            timeout_s = deadline - time.monotonic()
+            if timeout_s <= 0 or not self.connection.poll(timeout_s):
                 self.stop(restart=True)
                 raise TimeoutError
             try:
