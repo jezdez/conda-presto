@@ -136,8 +136,8 @@ curl -sS http://localhost:8000/preflight \
 ### `POST /repair`
 
 Return single-spec relaxations for an infeasible inline solve. It accepts
-`specs`, `channels`, and `platforms`; it does not parse files or change
-channels. Every returned suggestion solves on every requested platform.
+`specs`, `channels`, and `platforms`. It does not parse files or change channels.
+Every returned suggestion solves on every requested platform.
 
 The initial strategies relax an exact `==` pin or drop one side of a simple
 bounded version range. Fuzzy equality such as `python=3.12` is not rewritten.
