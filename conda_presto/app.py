@@ -508,7 +508,6 @@ class RepairSearch:
 
     def candidates(self) -> Iterator[tuple[list[str], RepairChange]]:
         """Yield deterministic single-spec relaxation candidates."""
-        seen = set()
         for position, spec in enumerate(self.match_specs):
             if spec.get_raw_value("url") or spec.get_raw_value("fn"):
                 continue
@@ -530,9 +529,6 @@ class RepairSearch:
             for version, strategy in replacements:
                 candidate_specs = list(self.specs)
                 candidate_specs[position] = str(MatchSpec(spec, version=version))
-                if tuple(candidate_specs) in seen:
-                    continue
-                seen.add(tuple(candidate_specs))
                 yield (
                     candidate_specs,
                     RepairChange(
