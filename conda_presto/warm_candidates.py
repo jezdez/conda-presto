@@ -7,11 +7,10 @@ import time
 from dataclasses import dataclass, field
 from typing import Literal
 
-import anyio
 import msgspec
-from litestar.stores.base import Store
 
 from .solver import PrestoSolveRequest
+from .storage import StoreOperationCoordinator
 
 log = logging.getLogger(__name__)
 
@@ -54,6 +53,7 @@ class SolverWarmCandidates:
     observations: dict[str, SolverWarmCandidate] = field(default_factory=dict)
     generation: int = 0
     persisted_generation: int = 0
+    store_operations: StoreOperationCoordinator | None = None
 
     def record(
         self,
@@ -118,14 +118,16 @@ class SolverWarmCandidates:
         if removed is not None:
             self.generation += 1
 
-    async def load(self, store: Store | None, now: float | None = None) -> None:
+    async def load(self, now: float | None = None) -> None:
         """Load persisted candidates without affecting readiness."""
-        if not self.persist or store is None:
+        if not self.persist or self.store_operations is None:
             return
         try:
-            with anyio.move_on_after(SOLVER_WARM_CANDIDATE_STORE_TIMEOUT_S) as scope:
-                payload = await store.get(SOLVER_WARM_CANDIDATE_STORE_KEY)
-            if scope.cancel_called:
+            completed, payload = await self.store_operations.get(
+                SOLVER_WARM_CANDIDATE_STORE_KEY,
+                timeout_s=SOLVER_WARM_CANDIDATE_STORE_TIMEOUT_S,
+            )
+            if not completed:
                 log.warning("Cache-warming candidate read timed out")
                 return
         except Exception:
@@ -137,11 +139,8 @@ class SolverWarmCandidates:
             catalog = msgspec.msgpack.decode(payload, type=StoredWarmCandidates)
         except (msgspec.DecodeError, msgspec.ValidationError):
             log.warning("Ignoring corrupt cache-warming candidates")
-            try:
-                with anyio.move_on_after(SOLVER_WARM_CANDIDATE_STORE_TIMEOUT_S):
-                    await store.delete(SOLVER_WARM_CANDIDATE_STORE_KEY)
-            except Exception:
-                log.warning("Cache-warming candidate cleanup failed")
+            self.generation += 1
+            self.persisted_generation = 0
             return
 
         now = time.time() if now is None else now
@@ -180,9 +179,9 @@ class SolverWarmCandidates:
         self.generation = 1 if filtered else 0
         self.persisted_generation = 0
 
-    async def checkpoint(self, store: Store | None, now: float | None = None) -> None:
+    async def checkpoint(self, now: float | None = None) -> None:
         """Persist candidates without detected credentials."""
-        if not self.persist or store is None:
+        if not self.persist or self.store_operations is None:
             return
         now = time.time() if now is None else now
         if self._prune(now):
@@ -200,13 +199,13 @@ class SolverWarmCandidates:
             )
         )
         try:
-            with anyio.move_on_after(SOLVER_WARM_CANDIDATE_STORE_TIMEOUT_S) as scope:
-                await store.set(
-                    SOLVER_WARM_CANDIDATE_STORE_KEY,
-                    payload,
-                    expires_in=SOLVER_WARM_CANDIDATE_MAX_AGE_S,
-                )
-            if scope.cancel_called:
+            completed = await self.store_operations.set(
+                SOLVER_WARM_CANDIDATE_STORE_KEY,
+                payload,
+                timeout_s=SOLVER_WARM_CANDIDATE_STORE_TIMEOUT_S,
+                expires_in=SOLVER_WARM_CANDIDATE_MAX_AGE_S,
+            )
+            if not completed:
                 log.warning("Cache-warming candidate write timed out")
                 return
         except Exception:

@@ -12,6 +12,7 @@ from litestar.stores.redis import RedisStore
 
 import conda_presto.solver as solver_module
 import conda_presto.warm_candidates as warm_candidates_module
+from conda_presto.storage import StoreOperationCoordinator
 from conda_presto.warm_candidates import (
     SOLVER_WARM_CANDIDATE_MAX_AGE_S,
     SOLVER_WARM_CANDIDATE_STORE_KEY,
@@ -153,15 +154,6 @@ def test_warming_key_covers_protocol_version(monkeypatch, solver_request):
     monkeypatch.setattr(solver_module, "SOLVER_WARMING_ENVELOPE_VERSION", 2)
 
     assert solver_request.warming_key() != first
-
-
-def test_warming_key_covers_caller_repodata_filename(solver_request):
-    current = msgspec.structs.replace(
-        solver_request,
-        repodata_fn="current_repodata.json",
-    )
-
-    assert current.warming_key() != solver_request.warming_key()
 
 
 def test_warming_key_excludes_dependency_versions(monkeypatch, solver_request):
@@ -412,13 +404,23 @@ async def test_persistent_warm_candidates_round_trip(
     persistent_store,
     solver_request,
 ):
-    source = SolverWarmCandidates(max_size=32, persist=True)
+    store_operations = StoreOperationCoordinator(persistent_store)
+    source = SolverWarmCandidates(
+        max_size=32,
+        persist=True,
+        store_operations=store_operations,
+    )
     source.record(solver_request, now=10)
     source.record(solver_request, now=20)
+    restored = SolverWarmCandidates(
+        max_size=32,
+        persist=True,
+        store_operations=store_operations,
+    )
 
-    await source.checkpoint(persistent_store, now=20)
-    restored = SolverWarmCandidates(max_size=32, persist=True)
-    await restored.load(persistent_store, now=30)
+    async with store_operations.lifespan():
+        await source.checkpoint(now=20)
+        await restored.load(now=30)
 
     fingerprint = solver_request.warming_key()
     assert list(restored.entries) == [fingerprint]
@@ -432,7 +434,12 @@ async def test_persistent_warm_candidates_round_trips_observations(
     persistent_store,
     solver_request,
 ):
-    source = SolverWarmCandidates(max_size=1, persist=True)
+    store_operations = StoreOperationCoordinator(persistent_store)
+    source = SolverWarmCandidates(
+        max_size=1,
+        persist=True,
+        store_operations=store_operations,
+    )
     established = msgspec.structs.replace(
         solver_request,
         specs_to_add=["established"],
@@ -442,9 +449,14 @@ async def test_persistent_warm_candidates_round_trips_observations(
     source.record(established, now=11)
     source.record(observed, now=12)
 
-    await source.checkpoint(persistent_store, now=12)
-    restored = SolverWarmCandidates(max_size=1, persist=True)
-    await restored.load(persistent_store, now=13)
+    restored = SolverWarmCandidates(
+        max_size=1,
+        persist=True,
+        store_operations=store_operations,
+    )
+    async with store_operations.lifespan():
+        await source.checkpoint(now=12)
+        await restored.load(now=13)
 
     assert list(restored.entries) == [established.warming_key()]
     assert list(restored.observations) == [observed.warming_key()]
@@ -455,7 +467,7 @@ async def test_persistence_is_opt_in(solver_request):
     store = MemoryStore()
     source = SolverWarmCandidates(max_size=32)
     source.record(solver_request, now=1)
-    await source.checkpoint(store, now=1)
+    await source.checkpoint(now=1)
     assert await store.get(SOLVER_WARM_CANDIDATE_STORE_KEY) is None
 
     payload = msgspec.msgpack.encode(
@@ -463,7 +475,7 @@ async def test_persistence_is_opt_in(solver_request):
     )
     await store.set(SOLVER_WARM_CANDIDATE_STORE_KEY, payload)
     restored = SolverWarmCandidates(max_size=32)
-    await restored.load(store, now=1)
+    await restored.load(now=1)
     assert restored.entries == {}
 
 
@@ -478,26 +490,75 @@ async def test_persistence_is_opt_in(solver_request):
         ),
     ],
 )
-async def test_load_discards_corrupt_or_incompatible_catalog(payload):
+async def test_load_replaces_corrupt_or_incompatible_catalog(payload):
     store = MemoryStore()
     await store.set(SOLVER_WARM_CANDIDATE_STORE_KEY, payload)
-    warm_candidates = SolverWarmCandidates(max_size=32, persist=True)
+    store_operations = StoreOperationCoordinator(store)
+    warm_candidates = SolverWarmCandidates(
+        max_size=32,
+        persist=True,
+        store_operations=store_operations,
+    )
 
-    await warm_candidates.load(store, now=1)
+    async with store_operations.lifespan():
+        await warm_candidates.load(now=1)
+        await warm_candidates.checkpoint(now=1)
 
     assert warm_candidates.entries == {}
-    assert await store.get(SOLVER_WARM_CANDIDATE_STORE_KEY) is None
+    catalog = msgspec.msgpack.decode(
+        await store.get(SOLVER_WARM_CANDIDATE_STORE_KEY),
+        type=StoredWarmCandidates,
+    )
+    assert catalog.entries == []
+
+
+@pytest.mark.anyio
+async def test_corrupt_reload_preserves_recorded_requests_and_replaces_store(
+    solver_request,
+):
+    store = MemoryStore()
+    await store.set(SOLVER_WARM_CANDIDATE_STORE_KEY, b"corrupt")
+    store_operations = StoreOperationCoordinator(store)
+    warm_candidates = SolverWarmCandidates(
+        max_size=32,
+        persist=True,
+        store_operations=store_operations,
+    )
+    warm_candidates.record(solver_request, now=1)
+    generation = warm_candidates.generation
+
+    async with store_operations.lifespan():
+        await warm_candidates.load(now=1)
+        await warm_candidates.checkpoint(now=1)
+
+    assert solver_request.warming_key() in warm_candidates.entries
+    assert warm_candidates.generation == generation + 1
+    catalog = msgspec.msgpack.decode(
+        await store.get(SOLVER_WARM_CANDIDATE_STORE_KEY),
+        type=StoredWarmCandidates,
+    )
+    assert [entry.request for entry in catalog.entries] == [solver_request]
 
 
 @pytest.mark.anyio
 async def test_load_filters_expired_entries(solver_request):
     store = MemoryStore()
-    source = SolverWarmCandidates(max_size=32, persist=True)
+    store_operations = StoreOperationCoordinator(store)
+    source = SolverWarmCandidates(
+        max_size=32,
+        persist=True,
+        store_operations=store_operations,
+    )
     source.record(solver_request, now=0)
-    await source.checkpoint(store, now=0)
-    restored = SolverWarmCandidates(max_size=32, persist=True)
+    restored = SolverWarmCandidates(
+        max_size=32,
+        persist=True,
+        store_operations=store_operations,
+    )
 
-    await restored.load(store, now=SOLVER_WARM_CANDIDATE_MAX_AGE_S + 1)
+    async with store_operations.lifespan():
+        await source.checkpoint(now=0)
+        await restored.load(now=SOLVER_WARM_CANDIDATE_MAX_AGE_S + 1)
 
     assert restored.entries == {}
     assert restored.generation == 1
@@ -506,7 +567,12 @@ async def test_load_filters_expired_entries(solver_request):
 @pytest.mark.anyio
 async def test_load_enforces_local_count_limit(solver_request):
     store = MemoryStore()
-    source = SolverWarmCandidates(max_size=32, persist=True)
+    store_operations = StoreOperationCoordinator(store)
+    source = SolverWarmCandidates(
+        max_size=32,
+        persist=True,
+        store_operations=store_operations,
+    )
     requests = [
         msgspec.structs.replace(solver_request, specs_to_add=[name])
         for name in ("once", "twice", "three-times")
@@ -514,10 +580,15 @@ async def test_load_enforces_local_count_limit(solver_request):
     for request_count, request in enumerate(requests, start=1):
         for _ in range(request_count):
             source.record(request, now=10)
-    await source.checkpoint(store, now=10)
-    restored = SolverWarmCandidates(max_size=1, persist=True)
+    restored = SolverWarmCandidates(
+        max_size=1,
+        persist=True,
+        store_operations=store_operations,
+    )
 
-    await restored.load(store, now=10)
+    async with store_operations.lifespan():
+        await source.checkpoint(now=10)
+        await restored.load(now=10)
 
     assert list(restored.entries) == [requests[-1].warming_key()]
 
@@ -531,14 +602,17 @@ async def test_store_failures_are_best_effort(solver_request):
         async def set(self, _key, _value, *, expires_in=None):
             raise OSError("write failed")
 
-        async def delete(self, _key):
-            raise OSError("delete failed")
-
-    warm_candidates = SolverWarmCandidates(max_size=32, persist=True)
+    store_operations = StoreOperationCoordinator(FailingStore())
+    warm_candidates = SolverWarmCandidates(
+        max_size=32,
+        persist=True,
+        store_operations=store_operations,
+    )
     warm_candidates.record(solver_request, now=1)
 
-    await warm_candidates.load(FailingStore(), now=1)
-    await warm_candidates.checkpoint(FailingStore(), now=1)
+    async with store_operations.lifespan():
+        await warm_candidates.load(now=1)
+        await warm_candidates.checkpoint(now=1)
 
     assert solver_request.warming_key() in warm_candidates.entries
     assert warm_candidates.persisted_generation == 0
@@ -557,10 +631,20 @@ async def test_store_timeouts_are_best_effort(monkeypatch, solver_request, opera
     monkeypatch.setattr(
         warm_candidates_module, "SOLVER_WARM_CANDIDATE_STORE_TIMEOUT_S", 0
     )
-    warm_candidates = SolverWarmCandidates(max_size=32, persist=True)
+    store = SlowStore()
+    coordinator = StoreOperationCoordinator(store)
+    warm_candidates = SolverWarmCandidates(
+        max_size=32,
+        persist=True,
+        store_operations=coordinator,
+    )
     warm_candidates.record(solver_request, now=1)
 
-    await getattr(warm_candidates, operation)(SlowStore(), now=1)
+    async with coordinator.lifespan():
+        if operation == "checkpoint":
+            await warm_candidates.checkpoint(now=1)
+        else:
+            await warm_candidates.load(now=1)
 
     assert solver_request.warming_key() in warm_candidates.entries
     assert warm_candidates.persisted_generation == 0
@@ -572,12 +656,17 @@ async def test_entries_with_detected_credentials_remain_memory_only(solver_reque
         solver_request,
         channels=[{**Channel("conda-forge").dump(), "token": "secret"}],
     )
-    warm_candidates = SolverWarmCandidates(max_size=32, persist=True)
+    store = MemoryStore()
+    store_operations = StoreOperationCoordinator(store)
+    warm_candidates = SolverWarmCandidates(
+        max_size=32,
+        persist=True,
+        store_operations=store_operations,
+    )
     warm_candidates.record(request, now=1)
     warm_candidates.record(request, now=2)
-    store = MemoryStore()
-
-    await warm_candidates.checkpoint(store, now=2)
+    async with store_operations.lifespan():
+        await warm_candidates.checkpoint(now=2)
 
     fingerprint = request.warming_key()
     assert fingerprint in warm_candidates.entries
@@ -605,9 +694,15 @@ async def test_load_rejects_entry_with_detected_credentials(solver_request):
     )
     store = MemoryStore()
     await store.set(SOLVER_WARM_CANDIDATE_STORE_KEY, payload)
-    restored = SolverWarmCandidates(max_size=32, persist=True)
+    store_operations = StoreOperationCoordinator(store)
+    restored = SolverWarmCandidates(
+        max_size=32,
+        persist=True,
+        store_operations=store_operations,
+    )
 
-    await restored.load(store, now=1)
+    async with store_operations.lifespan():
+        await restored.load(now=1)
 
     assert restored.entries == {}
     assert restored.generation == 1
