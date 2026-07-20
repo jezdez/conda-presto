@@ -120,6 +120,7 @@ def make_presto_solver_request():
             "prune": False,
             "command": "install",
             "repodata_fn": "repodata.json",
+            "local_repodata_ttl": 300,
             "offline": False,
             "channel_priority": "strict",
             "use_only_tar_bz2": False,

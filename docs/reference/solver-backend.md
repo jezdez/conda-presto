@@ -8,8 +8,9 @@ broker-managed `conda-presto.server` service.
 
 The backend calls `Broker.current().service("conda-presto.server")` and requires
 its default endpoint to be ready. It accepts only an HTTP endpoint whose URL host
-is `localhost`, `127.0.0.1`, or `::1`, and the handler accepts only loopback
-clients. It never starts, stops, or configures the broker service.
+is `localhost` or an IP address classified as loopback, including the full
+`127.0.0.0/8` range and `::1`. The handler also accepts only loopback clients.
+It never starts, stops, or configures the broker service.
 The client disables HTTP redirects and environment proxy handling so the
 serialized solve state is sent directly to that loopback endpoint only.
 
@@ -29,9 +30,11 @@ Only the conda `Solver.solve_final_state()` operation is delegated. The client
 serializes installed package records, history, pins, virtual packages,
 requested specs, channel definitions, and the effective channel-priority,
 package-format, implicit Python `pip` dependency, dependency-cycle,
-free-channel, repodata-shard, and index-cache settings. The service reconstructs
-that state with private `conda-rattler-solver` APIs and forces its `rattler`
-backend. Packages-not-found, unsatisfiable, and pin conflict errors are
+free-channel, repodata-shard, index-cache, and local repodata TTL settings. The
+effective repodata filename selected by the client remains authoritative in the
+service. The service reconstructs that state with private
+`conda-rattler-solver` APIs and forces its `rattler` backend. Packages-not-found,
+unsatisfiable, and pin conflict errors are
 reconstructed in the client as their conda exception categories so conda's
 retry and error handling still applies.
 
@@ -59,12 +62,14 @@ on-disk repodata cache. Before constructing a state-specific rattler index, the
 its optional persistent file or Redis store, under a private `solver-v1:`
 namespace. A hit skips index construction and SAT solving.
 
-The solver cache key hashes the serialized request fields, the effective
-repodata filename, the operation identifier, and the conda-presto, conda,
-conda-rattler-solver, and py-rattler versions. Prefix paths and file inventories
-are not included. Changed installed records, history, pins, virtual packages,
-requested specs, settings, channels, or dependency versions select a different
-entry.
+The solver cache key hashes the solve-affecting serialized request fields, the
+effective repodata filename, the operation identifier, and the conda-presto,
+conda, conda-rattler-solver, and py-rattler versions. Prefix paths, file
+inventories, and the local repodata TTL are not included. The TTL is applied to
+every freshness check, so callers with different TTLs can share an entry only
+while its repodata markers are fresh for the current caller. Changed installed
+records, history, pins, virtual packages, requested specs, settings, channels,
+or dependency versions select a different entry.
 
 Each entry stores the successful response and the repodata cache-file markers
 recorded by the worker after index collection: channel URL, selected JSON or
@@ -88,10 +93,12 @@ contain package metadata from credentialed channels.
 ## Internal protocol
 
 The broker child enables `POST /solver/v1` through
-`CONDA_PRESTO_SOLVER_ENDPOINT=1`. The handler is absent from the public
-OpenAPI contract and requires the broker's persistent worker. The Docker server
-does not enable it. Request and response logging excludes this route so channel
-credentials and installed-prefix state are not written to broker logs.
+`CONDA_PRESTO_SOLVER_ENDPOINT=1` and its `CONDA_BROKER_SERVICE_NAME` identity.
+Both must identify the `conda-presto.server` broker child. The handler is absent
+from the public OpenAPI contract and requires the broker's persistent worker.
+The Docker server does not enable it. Request and response logging excludes this
+route so channel credentials and installed-prefix state are not written to
+broker logs.
 
 `/solver/v1` is a private implementation detail, not an HTTP API to integrate
 against. Its message format and behavior may change or be removed without a

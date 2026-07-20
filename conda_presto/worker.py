@@ -133,9 +133,12 @@ class PersistentSolveWorker:
     def solve_final_state(
         self,
         request: PrestoSolveRequest,
-        timeout_s: float,
+        deadline: float,
     ) -> PrestoSolveOutcome:
         """Run an internal solver request in the persistent worker."""
+        timeout_s = deadline - time.monotonic()
+        if timeout_s <= 0:
+            raise TimeoutError
         return self.execute(("solver", request), timeout_s)
 
     def execute(self, request: object, timeout_s: float) -> object:

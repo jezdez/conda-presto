@@ -31,7 +31,7 @@ from conda.models.match_spec import MatchSpec
 from conda.models.records import PackageRecord, PrefixRecord
 from conda_broker import Broker
 from conda_rattler_solver.exceptions import RattlerUnsatisfiableError
-from conda_rattler_solver.solver import RattlerSolver, maybe_ignore_current_repodata
+from conda_rattler_solver.solver import RattlerSolver
 from conda_rattler_solver.state import SolverInputState, SolverOutputState
 
 from .config import SOLVE_TIMEOUT_S
@@ -39,7 +39,7 @@ from .resolve import RepodataSnapshot, platform_lock
 
 log = logging.getLogger(__name__)
 
-SOLVER_CACHE_ENVELOPE_VERSION = 2
+SOLVER_CACHE_ENVELOPE_VERSION = 3
 SOLVER_CACHE_DEPENDENCY_PACKAGES = (
     "conda-presto",
     "conda",
@@ -167,6 +167,7 @@ class PrestoSolveRequest(msgspec.Struct):
     prune: bool
     command: str | None
     repodata_fn: str
+    local_repodata_ttl: int
     offline: bool
     channel_priority: str
     use_only_tar_bz2: bool
@@ -235,6 +236,7 @@ class PrestoSolveRequest(msgspec.Struct):
                 input_state._command if isinstance(input_state._command, str) else None
             ),
             repodata_fn=solver._repodata_fn,
+            local_repodata_ttl=int(context.local_repodata_ttl),
             offline=context.offline,
             channel_priority=context.channel_priority.value,
             use_only_tar_bz2=bool(context.use_only_tar_bz2),
@@ -262,7 +264,9 @@ class PrestoSolveRequest(msgspec.Struct):
             except Exception:
                 versions[package] = "unknown"
         request = msgspec.to_builtins(self)
-        request["repodata_fn"] = self.effective_repodata_fn()
+        # TTL controls freshness checks but not the final state for matching
+        # repodata markers, so callers with different TTLs can share an entry.
+        del request["local_repodata_ttl"]
         envelope = {
             "version": SOLVER_CACHE_ENVELOPE_VERSION,
             "operation": "solver/v1",
@@ -301,6 +305,7 @@ class PrestoSolveRequest(msgspec.Struct):
                 ("_restore_free_channel", self.restore_free_channel),
                 ("repodata_use_shards", self.repodata_use_shards),
                 ("use_index_cache", self.use_index_cache),
+                ("local_repodata_ttl", self.local_repodata_ttl),
                 ("_subdir", self.target_subdir()),
             ):
                 overrides.enter_context(context._override(key, value))
@@ -311,30 +316,30 @@ class PrestoSolveRequest(msgspec.Struct):
         return RepodataSnapshot.capture(
             channels,
             [self.target_subdir()],
-            repodata_fn=self.effective_repodata_fn(),
+            repodata_fn=self.repodata_fn,
             use_shards=self.repodata_use_shards,
             use_index_cache=self.use_index_cache,
         )
 
-    def effective_repodata_fn(self) -> str:
-        """Return the repodata filename the server backend will use."""
-        return maybe_ignore_current_repodata(self.repodata_fn)
-
     def rattler_solver(self) -> RattlerSolver:
         """Restore the rattler backend captured by this request."""
         backend = context.plugin_manager.get_solver_backend("rattler")
-        return backend(
+        solver = backend(
             prefix="/conda-presto/solver",
             channels=[Channel(**channel) for channel in self.channels],
             subdirs=self.subdirs,
             specs_to_add=self.specs_to_add,
             specs_to_remove=self.specs_to_remove,
-            repodata_fn=self.effective_repodata_fn(),
+            repodata_fn=self.repodata_fn,
             command=self.command if self.command is not None else NULL,
             build_repodata_subset=(
                 build_repodata_subset if self.repodata_use_shards else None
             ),
         )
+        # The client captured its already-effective filename. The rattler
+        # constructor must not replace it using the worker's configuration.
+        solver._repodata_fn = self.repodata_fn
+        return solver
 
     def target_subdir(self) -> str:
         """Return the single target subdir accepted by this private protocol."""

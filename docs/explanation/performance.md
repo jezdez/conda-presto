@@ -35,9 +35,10 @@ Result cache
   share a bounded in-process LRU. Resolve responses use content-addressed keys;
   solver final states use keys derived from serialized request fields and
   dependency versions. Each solver entry also records repodata cache-file
-  markers. A hit skips solving and serialization; solver hits also skip
-  state-specific index construction. The LRU can be backed by a persistent file
-  or Redis store, which lets cached results survive server restarts.
+  markers. A solver hit skips state-specific index construction and SAT solving,
+  but the cached response is still encoded by the service and decoded by the
+  client. The LRU can be backed by a persistent file or Redis store, which lets
+  cached results survive server restarts.
 
 ## Cache keys and repodata checks
 
@@ -47,14 +48,15 @@ dependency versions, and markers for conda's local `repodata.json` files. A
 request bypasses a stored result when conda's effective policy requires any
 corresponding repodata metadata to refresh. If refreshed package metadata
 changes, the next `/resolve` result uses a different key. Solver final-state
-keys hash the serialized request fields, including installed records, history,
+keys hash solve-affecting request fields, including installed records, history,
 pins, virtual packages, operation modifiers, solver settings, and channel
 definitions, along with dependency versions. They exclude the prefix path, file
-inventory, and repodata markers, allowing the same request fields at different
-paths to use one entry. The stored value includes the URL, selected source, file
-size, modification time, and freshness state recorded for each repodata cache
-file. A lookup returns the entry only when conda considers the current files
-fresh and their markers match.
+inventory, local repodata TTL, and repodata markers, allowing the same
+solve-affecting request fields at different paths or TTLs to use one entry. The
+stored value includes the URL, selected source, file size, modification time,
+and freshness state recorded for each repodata cache file. A lookup returns the
+entry only when conda considers the current files fresh under the caller's TTL
+and their markers match.
 
 Private channels and credentialed channel URLs should use an isolated
 deployment until the cache model has an explicit private-channel policy.

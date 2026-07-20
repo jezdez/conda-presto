@@ -158,26 +158,24 @@ def test_solver_cache_key_preserves_channel_order(solver_request):
 
 def test_solver_cache_key_covers_protocol_version(monkeypatch, solver_request):
     first = solver_request.cache_key()
-    monkeypatch.setattr(solver_module, "SOLVER_CACHE_ENVELOPE_VERSION", 3)
+    monkeypatch.setattr(solver_module, "SOLVER_CACHE_ENVELOPE_VERSION", 4)
 
     assert solver_request.cache_key() != first
 
 
-def test_solver_cache_key_covers_effective_repodata_filename(
-    monkeypatch,
-    solver_request,
-):
-    monkeypatch.setattr(
-        solver_module,
-        "maybe_ignore_current_repodata",
-        lambda value: value,
-    )
+def test_solver_cache_key_covers_effective_repodata_filename(solver_request):
     changed = msgspec.structs.replace(
         solver_request,
         repodata_fn="current_repodata.json",
     )
 
     assert changed.cache_key() != solver_request.cache_key()
+
+
+def test_solver_cache_key_is_shared_across_repodata_ttls(solver_request):
+    changed = msgspec.structs.replace(solver_request, local_repodata_ttl=0)
+
+    assert changed.cache_key() == solver_request.cache_key()
 
 
 def test_solver_cache_key_is_stable_across_repodata(
@@ -292,7 +290,7 @@ def test_solver_cache_key_covers_dependency_versions(
     assert solver_request.cache_key() != first
 
 
-def test_solver_uses_server_effective_repodata_fn(monkeypatch, solver_request):
+def test_solver_preserves_client_effective_repodata_fn(monkeypatch, solver_request):
     captured = {}
     request = msgspec.structs.replace(
         solver_request,
@@ -304,23 +302,50 @@ def test_solver_uses_server_effective_repodata_fn(monkeypatch, solver_request):
         captured.update(kwargs)
         return RepodataSnapshot((), False)
 
-    monkeypatch.setattr(
-        solver_module,
-        "maybe_ignore_current_repodata",
-        lambda _: "repodata.json",
-    )
+    monkeypatch.setattr(solver_module.context, "collect_all", lambda: {})
     monkeypatch.setattr(solver_module.RepodataSnapshot, "capture", capture)
 
     request.repodata_snapshot()
 
-    assert captured["repodata_fn"] == "repodata.json"
+    assert captured["repodata_fn"] == "current_repodata.json"
+    assert request.rattler_solver()._repodata_fn == "current_repodata.json"
     assert (
         request.cache_key()
-        == msgspec.structs.replace(
+        != msgspec.structs.replace(
             request,
             repodata_fn="repodata.json",
         ).cache_key()
     )
+
+
+@pytest.mark.parametrize(
+    ("ttl", "expected_stale"),
+    [
+        pytest.param(0, True, id="always-refresh"),
+        pytest.param(3600, False, id="fresh-for-one-hour"),
+    ],
+)
+def test_solver_snapshot_restores_client_repodata_ttl(
+    monkeypatch,
+    solver_request,
+    ttl,
+    expected_stale,
+):
+    observed = []
+
+    def capture(*_args, **_kwargs):
+        observed.append(context.local_repodata_ttl)
+        return RepodataSnapshot((), context.local_repodata_ttl == 0)
+
+    monkeypatch.setattr(solver_module.RepodataSnapshot, "capture", capture)
+
+    snapshot = msgspec.structs.replace(
+        solver_request,
+        local_repodata_ttl=ttl,
+    ).repodata_snapshot()
+
+    assert snapshot.stale is expected_stale
+    assert observed == [ttl]
 
 
 @pytest.mark.parametrize(
@@ -450,6 +475,7 @@ def test_presto_request_omits_prefix_file_inventory():
         context._override("_restore_free_channel", True),
         context._override("repodata_use_shards", False),
         context._override("use_index_cache", True),
+        context._override("local_repodata_ttl", 42),
     ):
         request = PrestoSolveRequest.from_solver(solver, input_state)
 
@@ -473,6 +499,7 @@ def test_presto_request_omits_prefix_file_inventory():
     assert request.restore_free_channel is True
     assert request.repodata_use_shards is False
     assert request.use_index_cache is True
+    assert request.local_repodata_ttl == 42
 
 
 @pytest.mark.parametrize(
@@ -555,6 +582,7 @@ def test_presto_request_uses_rattler_backend(
                         "restore_free_channel": context._restore_free_channel,
                         "repodata_use_shards": context.repodata_use_shards,
                         "use_index_cache": context.use_index_cache,
+                        "local_repodata_ttl": context.local_repodata_ttl,
                         "subdir": context.subdir,
                         "repodata_fn": solver._repodata_fn,
                     }
@@ -593,6 +621,7 @@ def test_presto_request_uses_rattler_backend(
         restore_free_channel=True,
         repodata_use_shards=False,
         use_index_cache=True,
+        local_repodata_ttl=42,
         repodata_fn="current_repodata.json",
     )
     outcome = request.solve()
@@ -606,7 +635,7 @@ def test_presto_request_uses_rattler_backend(
         "https://conda.anaconda.org/conda-forge"
     ]
     assert calls[0]["subdirs"] == ["linux-64", "noarch"]
-    assert calls[0]["repodata_fn"] == "repodata.json"
+    assert calls[0]["repodata_fn"] == "current_repodata.json"
     assert calls[1] == {
         "offline": False,
         "channel_priority": "disabled",
@@ -616,8 +645,9 @@ def test_presto_request_uses_rattler_backend(
         "restore_free_channel": True,
         "repodata_use_shards": False,
         "use_index_cache": True,
+        "local_repodata_ttl": 42,
         "subdir": "linux-64",
-        "repodata_fn": "repodata.json",
+        "repodata_fn": "current_repodata.json",
     }
 
 

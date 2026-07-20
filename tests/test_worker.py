@@ -142,6 +142,35 @@ def test_persistent_solve_worker_returns_result(persistent_solve_worker):
     ]
 
 
+def test_persistent_solve_worker_uses_remaining_deadline(monkeypatch):
+    calls = []
+    worker = worker_module.PersistentSolveWorker([], [])
+    monkeypatch.setattr(worker_module.time, "monotonic", lambda: 10.0)
+    monkeypatch.setattr(
+        worker,
+        "execute",
+        lambda request, timeout_s: calls.append((request, timeout_s)) or "result",
+    )
+
+    result = worker.solve_final_state("request", 12.5)
+
+    assert result == "result"
+    assert calls == [(("solver", "request"), 2.5)]
+
+
+def test_persistent_solve_worker_rejects_expired_deadline(monkeypatch):
+    worker = worker_module.PersistentSolveWorker([], [])
+    monkeypatch.setattr(worker_module.time, "monotonic", lambda: 10.0)
+    monkeypatch.setattr(
+        worker,
+        "execute",
+        lambda *_: pytest.fail("expired request must not reach worker"),
+    )
+
+    with pytest.raises(TimeoutError):
+        worker.solve_final_state("request", 10.0)
+
+
 def test_persistent_solve_worker_start_is_idempotent(persistent_solve_worker):
     worker, calls = persistent_solve_worker([("ready", None)])
 

@@ -13,7 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Register `conda-presto.server` as a manual, loopback-only conda-broker service.
 - Require `conda-broker` and document how to run the local service.
 - Run the Docker server in persistent-worker mode without starting conda-broker.
-- Add the internal `conda --solver=presto` backend through the broker-managed loopback service.
+- Add internal `conda --solver=presto`, fixed to the rattler backend and served through the broker-managed loopback service.
 - Cache successful `/solver/v1` final states by serialized solver request fields and dependency versions, with repodata cache-file markers recorded by the worker.
 
 ### Fixed
