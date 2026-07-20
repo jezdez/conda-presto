@@ -4,13 +4,7 @@ on:
   pull_request:
     paths:
       - .github/workflows/solver-smoke.yml
-      - conda_presto/app.py
-      - conda_presto/broker.py
-      - conda_presto/cache.py
-      - conda_presto/config.py
-      - conda_presto/plugin.py
-      - conda_presto/resolve.py
-      - conda_presto/solver.py
+      - conda_presto/**
       - pyproject.toml
       - pixi.lock
   workflow_dispatch:

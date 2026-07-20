@@ -305,11 +305,11 @@ When `CONDA_PRESTO_RESULT_CACHE_DIR` or
 `CONDA_PRESTO_RESULT_CACHE_REDIS_URL` is set, conda-presto also checks
 a file-backed or Redis-backed persistent store using the same
 `resolve-v1:<sha256>` CAS key. The hash key includes the normalized
-specs, ordered channels, platforms, output format, conda-presto and
-solver/exporter dependency versions, and metadata from conda's local
-repodata cache files. Expired repodata bypasses a cached result, and changed
-metadata produces a new key. A future sharded repodata index can replace the file
-metadata marker with exact shard or sparse-index digests.
+specs, ordered channels, platforms, output format, configured virtual-package
+overrides, conda-presto and solver/exporter dependency versions, and metadata
+from conda's local repodata cache files. Expired repodata bypasses a cached
+result, and changed metadata produces a new key. A future sharded repodata index
+can replace the file metadata marker with exact shard or sparse-index digests.
 
 ---
 

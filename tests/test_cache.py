@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from types import SimpleNamespace
-
 import anyio
 import msgspec
 import pytest
@@ -15,41 +13,20 @@ import conda_presto.cache as cache_module
 from conda_presto.cache import ResultCache
 from conda_presto.resolve import RepodataSnapshot
 from conda_presto.solver import PrestoSolveRequest, PrestoSolveResponse
-
-
-def test_result_cache_uses_lifespan_store_without_registry_fallback():
-    store = MemoryStore()
-    request = SimpleNamespace(
-        app=SimpleNamespace(
-            state=SimpleNamespace(result_store=store),
-            stores=SimpleNamespace(
-                get=lambda _name: pytest.fail("store registry fallback was used")
-            ),
-        )
-    )
-
-    assert ResultCache(max_size=1, store_name="results").store_from(request) is store
+from conda_presto.storage import StoreOperationCoordinator
 
 
 @pytest.mark.anyio
-@pytest.mark.parametrize(
-    "backend",
-    [pytest.param("memory", id="memory"), pytest.param("file", id="file")],
-)
 async def test_solver_cache_replaces_one_persistent_entry(
     monkeypatch,
-    tmp_path,
     presto_solver_request,
     presto_solver_outcome,
     fresh_repodata_snapshot,
-    backend,
+    persistent_store,
 ):
-    store = (
-        MemoryStore()
-        if backend == "memory"
-        else FileStore(tmp_path, create_directories=True)
-    )
-    cache = ResultCache(max_size=256)
+    store = persistent_store
+    store_operations = StoreOperationCoordinator(store)
+    cache = ResultCache(max_size=256, store_operations=store_operations)
     previous = fresh_repodata_snapshot
     stale = RepodataSnapshot(previous.records, True)
     current = RepodataSnapshot(
@@ -63,23 +40,22 @@ async def test_solver_cache_replaces_one_persistent_entry(
         lambda _: next(snapshots),
     )
 
-    first, first_status = await cache.publish_solver(
-        presto_solver_request,
-        presto_solver_outcome(
-            PrestoSolveResponse(records=[{"name": "old"}], neutered=[]),
-            previous,
-        ),
-        store,
-    )
-    second, second_status = await cache.publish_solver(
-        presto_solver_request,
-        presto_solver_outcome(
-            PrestoSolveResponse(records=[{"name": "new"}], neutered=[]),
-            stale,
-            current,
-        ),
-        store,
-    )
+    async with store_operations.lifespan():
+        first, first_status = await cache.publish_solver(
+            presto_solver_request,
+            presto_solver_outcome(
+                PrestoSolveResponse(records=[{"name": "old"}], neutered=[]),
+                previous,
+            ),
+        )
+        second, second_status = await cache.publish_solver(
+            presto_solver_request,
+            presto_solver_outcome(
+                PrestoSolveResponse(records=[{"name": "new"}], neutered=[]),
+                stale,
+                current,
+            ),
+        )
 
     key = ResultCache.solver_key(presto_solver_request.cache_key())
     payload = await store.get(key)
@@ -126,24 +102,248 @@ async def test_solver_cache_keeps_matching_entry_during_publication(
 
 
 @pytest.mark.anyio
-async def test_solver_cache_rejects_corrupt_typed_envelope(presto_solver_request):
-    store = MemoryStore()
-    cache = ResultCache(max_size=256)
+async def test_solver_cache_reports_required_persistence_failure(
+    monkeypatch,
+    presto_solver_request,
+    presto_solver_outcome,
+):
+    class RecoveringStore(MemoryStore):
+        attempts = 0
+
+        async def set(self, key, value, expires_in=None):
+            self.attempts += 1
+            if self.attempts == 1:
+                raise RuntimeError("store unavailable")
+            await super().set(key, value, expires_in)
+
+    repodata = RepodataSnapshot(
+        (("https://conda.example/linux-64", "repodata.json", 10, 1),),
+        False,
+    )
+    current = cache_module.StoredSolverResult(
+        response=PrestoSolveResponse(records=[{"name": "current"}], neutered=[]),
+        metadata_used=repodata,
+    )
+    store = RecoveringStore()
+    store_operations = StoreOperationCoordinator(store)
+    cache = ResultCache(max_size=256, store_operations=store_operations)
     key = ResultCache.solver_key(presto_solver_request.cache_key())
-    await store.set(
-        key,
-        msgspec.msgpack.encode(
-            {
-                "response": {"records": "not-a-list", "neutered": []},
-                "metadata_used": {"records": [], "stale": False},
-            }
-        ),
+    cache.remember_memory(key, current)
+    monkeypatch.setattr(
+        PrestoSolveRequest,
+        "repodata_snapshot",
+        lambda _: repodata,
     )
 
-    stored = await cache.get_solver_result(presto_solver_request, store)
+    outcome = presto_solver_outcome(
+        PrestoSolveResponse(records=[{"name": "late"}], neutered=[]),
+        repodata,
+    )
+    async with store_operations.lifespan():
+        stored, status = await cache.publish_solver(
+            presto_solver_request,
+            outcome,
+            require_persistent=True,
+        )
+        retained = key in cache.entries
+        recovered = await cache_module.SolverResultService(
+            cache=cache,
+            require_persistent=True,
+        ).inspect(presto_solver_request)
+
+    assert stored is current
+    assert status == "persistent-failed"
+    assert retained
+    assert recovered.cached
+    assert cache.entries[key].response.records == [{"name": "current"}]
+    assert store.attempts == 2
+
+
+@pytest.mark.anyio
+async def test_result_cache_isolates_persistent_read_and_write_errors():
+    class FailingStore:
+        async def get(self, _key):
+            raise RuntimeError("store unavailable")
+
+        async def set(self, _key, _value, expires_in=None):
+            raise RuntimeError("store unavailable")
+
+    store_operations = StoreOperationCoordinator(FailingStore())
+    cache = ResultCache(max_size=1, store_operations=store_operations)
+
+    async with store_operations.lifespan():
+        missing = await cache.get_response("missing", location="/r/missing")
+        retention = await cache.store_entry(
+            "public",
+            cache_module.StoredResult(b"body", "text/plain"),
+        )
+
+    assert missing is None
+    assert retention.retained
+    assert retention.persistent_failed
+
+
+@pytest.mark.anyio
+async def test_result_cache_discards_a_wrong_typed_memory_entry():
+    cache = ResultCache(max_size=8)
+    stored = cache_module.StoredSolverResult(
+        response=PrestoSolveResponse(records=[], neutered=[]),
+        metadata_used=RepodataSnapshot((), False),
+    )
+    cache.remember_memory("key", stored)
+
+    assert await cache.get_response("key", location="/r/key") is None
+    assert cache.entries == {}
+    assert cache.current_bytes == 0
+
+
+@pytest.mark.anyio
+async def test_result_cache_persistent_read_has_a_caller_deadline(monkeypatch):
+    started = anyio.Event()
+    release = anyio.Event()
+
+    class SlowStore:
+        async def get(self, _key):
+            started.set()
+            await release.wait()
+
+        async def set(self, _key, _value, expires_in=None):
+            return None
+
+    monkeypatch.setattr(cache_module, "RESULT_CACHE_STORE_TIMEOUT_S", 0.01)
+    store = SlowStore()
+    store_operations = StoreOperationCoordinator(store)
+    cache = ResultCache(max_size=8, store_operations=store_operations)
+
+    async with store_operations.lifespan():
+        assert await cache.get_response("key", location="/r/key") is None
+        await started.wait()
+        release.set()
+
+
+@pytest.mark.anyio
+async def test_solver_cache_advisory_read_keeps_newer_memory_entry(
+    monkeypatch,
+    presto_solver_request,
+):
+    previous = RepodataSnapshot(
+        (("https://conda.example/linux-64", "repodata.json", 10, 1),),
+        False,
+    )
+    current = RepodataSnapshot(
+        (("https://conda.example/linux-64", "repodata.json", 20, 2),),
+        False,
+    )
+    old = cache_module.StoredSolverResult(
+        response=PrestoSolveResponse(records=[{"name": "old"}], neutered=[]),
+        metadata_used=previous,
+    )
+    new = cache_module.StoredSolverResult(
+        response=PrestoSolveResponse(records=[{"name": "new"}], neutered=[]),
+        metadata_used=current,
+    )
+    started = anyio.Event()
+    release = anyio.Event()
+
+    class Store:
+        async def get(self, _key):
+            started.set()
+            await release.wait()
+            return msgspec.msgpack.encode(old)
+
+    store_operations = StoreOperationCoordinator(Store())
+    cache = ResultCache(max_size=256, store_operations=store_operations)
+    key = ResultCache.solver_key(presto_solver_request.cache_key())
+    monkeypatch.setattr(
+        PrestoSolveRequest,
+        "repodata_snapshot",
+        lambda _: current,
+    )
+    states = []
+
+    async def inspect():
+        states.append(await cache.inspect_solver_result(presto_solver_request))
+
+    async with store_operations.lifespan():
+        async with anyio.create_task_group() as tasks:
+            tasks.start_soon(inspect)
+            await started.wait()
+            cache.remember_memory(key, new)
+            release.set()
+
+    assert states[0].cached
+    assert cache.entries[key] is new
+
+
+@pytest.mark.anyio
+async def test_solver_cache_persists_current_entry_not_retained_in_memory(
+    monkeypatch,
+    presto_solver_request,
+):
+    class CountingStore(MemoryStore):
+        writes = 0
+
+        async def set(self, key, value, expires_in=None):
+            self.writes += 1
+            await super().set(key, value, expires_in)
+
+    repodata = RepodataSnapshot(
+        (("https://conda.example/linux-64", "repodata.json", 10, 1),),
+        False,
+    )
+    stored = cache_module.StoredSolverResult(
+        response=PrestoSolveResponse(records=[{"name": "python"}], neutered=[]),
+        metadata_used=repodata,
+    )
+    store = CountingStore()
+    key = ResultCache.solver_key(presto_solver_request.cache_key())
+    await store.set(key, msgspec.msgpack.encode(stored))
+    store.writes = 0
+    store_operations = StoreOperationCoordinator(store)
+    cache = ResultCache(
+        max_size=8,
+        max_bytes=1,
+        store_operations=store_operations,
+    )
+    monkeypatch.setattr(
+        PrestoSolveRequest,
+        "repodata_snapshot",
+        lambda _request: repodata,
+    )
+
+    async with store_operations.lifespan():
+        probe = await cache_module.SolverResultService(
+            cache,
+            require_persistent=True,
+        ).inspect(presto_solver_request)
+
+    assert probe.cached
+    assert not probe.persistence_failed
+    assert store.writes == 1
+    assert cache.entries == {}
+
+
+@pytest.mark.anyio
+async def test_solver_cache_rejects_corrupt_typed_envelope(
+    presto_solver_request,
+):
+    store = MemoryStore()
+    store_operations = StoreOperationCoordinator(store)
+    cache = ResultCache(max_size=256, store_operations=store_operations)
+    key = ResultCache.solver_key(presto_solver_request.cache_key())
+    payload = msgspec.msgpack.encode(
+        {
+            "response": {"records": "not-a-list", "neutered": []},
+            "metadata_used": {"records": [], "stale": False},
+        }
+    )
+    await store.set(key, payload)
+
+    async with store_operations.lifespan():
+        stored = await cache.get_solver_result(presto_solver_request)
 
     assert stored is None
-    assert await store.get(key) is None
+    assert await store.get(key) == payload
 
 
 @pytest.mark.anyio
@@ -174,14 +374,15 @@ async def test_solver_cache_serializes_persistent_read_and_publication(
             await release.wait()
             return self.value
 
-        async def set(self, key, value):
+        async def set(self, key, value, expires_in=None):
             self.value = value
 
         async def delete(self, key):
             self.value = None
 
     store = Store()
-    cache = ResultCache(max_size=256)
+    store_operations = StoreOperationCoordinator(store)
+    cache = ResultCache(max_size=256, store_operations=store_operations)
     monkeypatch.setattr(
         PrestoSolveRequest,
         "repodata_snapshot",
@@ -190,7 +391,7 @@ async def test_solver_cache_serializes_persistent_read_and_publication(
     publication = []
 
     async def read():
-        await cache.get_solver_result(presto_solver_request, store)
+        await cache.get_solver_result(presto_solver_request)
 
     async def publish():
         publication.append(
@@ -201,16 +402,16 @@ async def test_solver_cache_serializes_persistent_read_and_publication(
                     stale,
                     current,
                 ),
-                store,
             )
         )
 
-    async with anyio.create_task_group() as tasks:
-        tasks.start_soon(read)
-        await started.wait()
-        tasks.start_soon(publish)
-        await anyio.sleep(0)
-        release.set()
+    async with store_operations.lifespan():
+        async with anyio.create_task_group() as tasks:
+            tasks.start_soon(read)
+            await started.wait()
+            tasks.start_soon(publish)
+            await anyio.sleep(0)
+            release.set()
 
     key = ResultCache.solver_key(presto_solver_request.cache_key())
     assert publication[0][1] == "published"
@@ -229,35 +430,35 @@ async def test_solver_cache_serializes_persistent_read_and_publication(
         pytest.param("redis", RedisStore, id="redis"),
     ],
 )
-def test_result_cache_stores_for_config_registers_backend(
+def test_result_cache_store_for_config_returns_store(
     tmp_path,
     backend,
     expected_type,
 ):
-    stores = ResultCache.stores_for_config(
+    store = ResultCache.store_for_config(
         backend,
         str(tmp_path) if backend == "file" else None,
         "redis://localhost:6379/0" if backend == "redis" else None,
         "conda-presto-test",
     )
 
-    assert isinstance(stores[cache_module.RESULT_CACHE_STORE_NAME], expected_type)
+    assert isinstance(store, expected_type)
 
 
 @pytest.mark.parametrize(
-    ("backend", "error"),
+    "backend, error",
     [
         pytest.param("file", "CONDA_PRESTO_RESULT_CACHE_DIR", id="file-dir"),
         pytest.param("sqlite", "Unsupported result cache backend", id="unknown"),
     ],
 )
-def test_result_cache_stores_for_config_rejects_invalid_config(backend, error):
+def test_result_cache_store_for_config_rejects_invalid_config(backend, error):
     with pytest.raises(ValueError, match=error):
-        ResultCache.stores_for_config(backend, None, None, "conda-presto")
+        ResultCache.store_for_config(backend, None, None, "conda-presto")
 
 
 @pytest.mark.parametrize(
-    ("max_bytes", "writes", "expected_retained", "expected_keys", "expected_bytes"),
+    "max_bytes, writes, expected_retained, expected_keys, expected_bytes",
     [
         pytest.param(
             30,
@@ -331,17 +532,21 @@ async def test_result_cache_remember_omits_permalink_when_memory_rejects_result(
 
 
 @pytest.mark.anyio
-async def test_result_cache_ignores_failed_corrupt_entry_cleanup():
+async def test_result_cache_ignores_corrupt_persistent_entry():
     class Store:
+        value = b"corrupt"
+
         async def get(self, key):
-            return b"corrupt"
+            return self.value
 
-        async def delete(self, key):
-            raise RuntimeError("store unavailable")
+    store = Store()
+    store_operations = StoreOperationCoordinator(store)
+    cache = ResultCache(max_size=10, store_operations=store_operations)
 
-    cache = ResultCache(max_size=10)
+    async with store_operations.lifespan():
+        assert await cache.get_response("key", location="/r/key") is None
 
-    assert await cache.get_response("key", Store(), location="/r/key") is None
+    assert store.value == b"corrupt"
 
 
 def test_different_output_formats_produce_different_cache_keys():

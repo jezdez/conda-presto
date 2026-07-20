@@ -30,9 +30,9 @@ Only the conda `Solver.solve_final_state()` operation is delegated. The client
 serializes installed package records, history, pins, virtual packages,
 requested specs, channel definitions, and the effective channel-priority,
 package-format, implicit Python `pip` dependency, dependency-cycle,
-free-channel, repodata-shard, index-cache, and local repodata TTL settings. The
-effective repodata filename selected by the client remains authoritative in the
-service. The service reconstructs that state with private
+repodata-shard, index-cache, and local repodata TTL settings. The effective
+repodata filename selected by the client remains authoritative in the service.
+The service reconstructs that state with private
 `conda-rattler-solver` APIs and forces its `rattler` backend. Packages-not-found,
 unsatisfiable, and pin conflict errors are
 reconstructed in the client as their conda exception categories so conda's
@@ -102,14 +102,26 @@ outside the candidate catalog. An observation and the lowest-ranked candidate
 exchange places when the observation's request count, then recency, ranks
 higher, without discarding either request's accumulated count.
 
+In the broker child, scheduled refresh checks recorded candidates and
+recomputes missing or stale entries in a separate worker. It starts no replay
+while foreground work is active or waiting. Repodata invalidation uses the same
+freshness and cache-file marker checks as foreground solves.
+Solver errors remove a candidate until another successful foreground request
+records it. Timeouts and infrastructure failures leave it for the next cycle.
+
+The timing and batch settings are documented in
+[Configuration](configuration.md). Freshness and foreground trade-offs are
+covered in [Performance](../explanation/performance.md).
+
 ## Internal protocol
 
 The broker child enables `POST /solver/v1` through its
 `CONDA_BROKER_SERVICE_NAME` identity. It must identify the
 `conda-presto.server` broker child. The handler is absent from the public OpenAPI
 contract and requires the broker's persistent worker. The Docker server does not
-enable it. Request and response logging excludes this route so channel
-credentials and installed-prefix state are not written to broker logs.
+enable it or run scheduled solver-cache refresh.
+Request and response logging excludes this route so channel credentials and
+installed-prefix state are not written to broker logs.
 
 `/solver/v1` is a private implementation detail, not an HTTP API to integrate
 against. Its message format and behavior may change or be removed without a

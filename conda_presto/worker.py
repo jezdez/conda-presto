@@ -32,11 +32,15 @@ class PersistentSolveWorker:
         *,
         restart_on_failure: bool = True,
         startup_timeout_s: float = PERSISTENT_WORKER_STARTUP_TIMEOUT_S,
+        warmup_on_start: bool = True,
+        log_worker_errors: bool = True,
     ) -> None:
         self.channels = channels
         self.platforms = platforms
         self.restart_on_failure = restart_on_failure
         self.startup_timeout_s = startup_timeout_s
+        self.warmup_on_start = warmup_on_start
+        self.log_worker_errors = log_worker_errors
         self.connection: Any | None = None
         self.process: Any | None = None
         self.restart_thread: threading.Thread | None = None
@@ -68,7 +72,13 @@ class PersistentSolveWorker:
             try:
                 process = context.Process(
                     target=persistent_solve_worker_entrypoint,
-                    args=(child, self.channels, self.platforms),
+                    args=(
+                        child,
+                        self.channels,
+                        self.platforms,
+                        self.warmup_on_start,
+                        self.log_worker_errors,
+                    ),
                 )
                 process.start()
             except BaseException:
@@ -243,15 +253,18 @@ def persistent_solve_worker_entrypoint(
     connection: Any,
     warmup_channels: list[str],
     warmup_platforms: list[str],
+    warmup_on_start: bool = True,
+    log_worker_errors: bool = True,
 ) -> None:
     """Serve solve requests while retaining the normal process pool."""
-    try:
-        warmup(warmup_channels, warmup_platforms)
-    except Exception:
-        log.exception("Persistent solve worker startup failed")
-        connection.send(("startup-failed", None))
-        connection.close()
-        return
+    if warmup_on_start:
+        try:
+            warmup(warmup_channels, warmup_platforms)
+        except Exception:
+            log.exception("Persistent solve worker startup failed")
+            connection.send(("startup-failed", None))
+            connection.close()
+            return
 
     connection.send(("ready", None))
     try:
@@ -289,7 +302,8 @@ def persistent_solve_worker_entrypoint(
                     )
                 )
             except Exception:
-                log.exception("Persistent solve worker failed")
+                if log_worker_errors:
+                    log.exception("Persistent solve worker failed")
                 connection.send(("error", None))
             else:
                 connection.send(("ok", result))

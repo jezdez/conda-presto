@@ -221,6 +221,13 @@ def test_solver_cache_key_is_stable_across_repodata(
             id="stale-refreshed",
         ),
         pytest.param(
+            RepodataSnapshot((("channel", "repodata.json", 10, 1),), True),
+            RepodataSnapshot((("channel", "repodata.json", 10, 1),), False),
+            RepodataSnapshot((("channel", "repodata.json", 10, 1),), False),
+            True,
+            id="stale-unchanged",
+        ),
+        pytest.param(
             RepodataSnapshot((("channel", "repodata.json", 10, 1),), False),
             RepodataSnapshot((("channel", "repodata.json", 10, 1),), False),
             RepodataSnapshot((("channel", "repodata.json", 20, 2),), False),

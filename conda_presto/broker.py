@@ -41,7 +41,9 @@ def conda_broker_services():
                 "CONDA_PRESTO_CONCURRENCY": "1",
                 "CONDA_PRESTO_RATE_LIMIT": "0",
                 "CONDA_PRESTO_PERSISTENT_WORKER": "1",
+                "CONDA_NO_LOCK": "false",
             },
+            grace_period_s=75,
         ),
     )
 

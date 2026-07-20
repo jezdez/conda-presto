@@ -39,7 +39,7 @@ docker run ghcr.io/jezdez/conda-presto:cli -f environment.yml -p linux-64
 |---|---|---|
 | `latest` | Server | Most recent server release |
 | `<version>` | Server | Specific release (e.g. `0.6.0`) |
-| `<major>.<minor>` | Server | Latest patch for a minor (e.g. `0.5`) |
+| `<major>.<minor>` | Server | Latest patch for a minor (e.g. `0.6`) |
 | `<major>` | Server | Latest minor for a major (e.g. `0`) |
 | `cli` | CLI | Most recent CLI release |
 | `<version>-cli` | CLI | Specific CLI release (e.g. `0.6.0-cli`) |
@@ -201,6 +201,10 @@ export CONDA_PRESTO_CHANNELS="conda-forge,bioconda"
 export CONDA_PRESTO_PLATFORMS="linux-64,osx-arm64"
 ```
 
+This generic startup warmup belongs to the foreground worker. Scheduled refresh
+replays recorded solver requests. Its dedicated worker does not pre-build the
+configured default channel/platform combinations.
+
 ### Broker-managed local service
 
 conda-presto registers `conda-presto.server` with
@@ -217,7 +221,8 @@ See the [broker-managed local service tutorial](../tutorials/broker-service.md)
 for the start, wait, and endpoint commands.
 
 The Docker image leaves the internal Presto solver endpoint disabled and is not
-a `conda --solver=presto` target.
+a `conda --solver=presto` target. It does not run scheduled solver-cache
+refreshes.
 
 ### Result cache
 
@@ -250,9 +255,10 @@ survive server restarts. Redis support is included in the published Docker
 server image. Other Python environments require the `redis` optional dependency.
 
 The `/resolve` key includes the normalized specs, ordered channels, target
-platforms, output format, conda-presto and solver versions, and local repodata
-cache-file markers. See the [Presto solver reference](solver-backend.md) for the
-internal solver cache key and invalidation rules.
+platforms, output format, configured virtual-package overrides, conda-presto and
+solver versions, and local repodata cache-file markers. See the
+[Presto solver reference](solver-backend.md) for the internal solver cache key
+and invalidation rules.
 
 ### Cache-warming candidates
 
@@ -268,21 +274,47 @@ then its most recent request time, ranks higher. The displaced candidate keeps
 its accumulated count, and the highest-ranked observation fills a catalog slot
 when one becomes vacant.
 
-Candidates are process-local and are not served through HTTP or included in
-logs. Persistence is disabled by default because requests can contain installed
-package and channel state. To persist requests without detected credentials,
+Candidates are process-local and are not served through HTTP. Logs do not
+include recorded request contents. Persistence is disabled by default because
+requests can contain installed package and channel state. To persist requests
+without detected credentials,
 configure a file or Redis result-cache backend and set
 `CONDA_PRESTO_SOLVER_CACHE_WARM_CANDIDATE_PERSIST=true`. Requests with detected
 channel credentials or tokenized URLs remain memory-only. Redis deployments do
 not merge candidate lists across service processes.
+
+### Scheduled solver-cache refresh
+
+Scheduled refresh runs only when `CONDA_BROKER_SERVICE_NAME` identifies the
+`conda-presto.server` broker child and `CONDA_PRESTO_PERSISTENT_WORKER=true`.
+Normal HTTP servers and the Docker image do not run it.
+
+`CONDA_PRESTO_SOLVER_CACHE_WARM_INTERVAL_S`
+: Seconds between refresh cycles (default 300). Set to `0` to disable scheduled
+  refresh.
+
+`CONDA_PRESTO_SOLVER_CACHE_WARM_BATCH_SIZE`
+: Maximum cache-warming candidates checked per cycle (default 8). For a
+  memory-only cache, this is capped by the in-process result-cache entry limit.
+
+The first cycle starts 30 seconds after the broker child becomes ready. Each
+inspection or solve is limited to 30 seconds and also respects a lower
+`CONDA_PRESTO_SOLVE_TIMEOUT_S`. One cycle stops starting work after 60 seconds.
+
+See [Presto solver backend](solver-backend.md) for the cache contract,
+[Performance](../explanation/performance.md) for lifecycle and freshness behavior,
+and [Broker-managed local service](../tutorials/broker-service.md) for the
+operational workflow.
 
 ### Concurrency tuning
 
 Two variables control parallelism:
 
 `CONDA_PRESTO_CONCURRENCY`
-: Thread limiter for concurrent solve requests (default 4). Increase
-  this if the server handles many simultaneous clients.
+: Thread limiter for concurrent solve requests (default 4). The Docker image
+  and broker service set it to 1 because their persistent worker handles one
+  request at a time. Increase it only for a non-persistent HTTP server that
+  handles simultaneous clients.
 
 `CONDA_PRESTO_WORKERS`
 : Process pool size for multi-platform parallel solves within a

@@ -28,11 +28,14 @@ def persistent_solve_worker(monkeypatch):
         terminate_stops=True,
         kill_stops=True,
         restart_on_failure=True,
+        warmup_on_start=True,
+        log_worker_errors=True,
         process_create_error: Exception | None = None,
         process_start_error: Exception | None = None,
         startup_timeout_s=worker_module.PERSISTENT_WORKER_STARTUP_TIMEOUT_S,
     ):
         calls = []
+        process_args = []
         restart_targets = []
         alive = {"value": True}
         received = iter(messages)
@@ -92,9 +95,10 @@ def persistent_solve_worker(monkeypatch):
             join=lambda timeout=None: calls.append(("process", f"join:{timeout}")),
         )
 
-        def create_process(**_):
+        def create_process(**kwargs):
             if process_create_error is not None:
                 raise process_create_error
+            process_args.append(kwargs["args"])
             return process
 
         context = SimpleNamespace(Pipe=lambda: (parent, child), Process=create_process)
@@ -115,10 +119,13 @@ def persistent_solve_worker(monkeypatch):
             ["linux-64"],
             restart_on_failure=restart_on_failure,
             startup_timeout_s=startup_timeout_s,
+            warmup_on_start=warmup_on_start,
+            log_worker_errors=log_worker_errors,
         )
         if start:
             worker.start()
         worker.restart_targets = restart_targets
+        worker.process_args = process_args
         return worker, calls
 
     return create
@@ -202,6 +209,21 @@ def test_persistent_solve_worker_start_is_idempotent(persistent_solve_worker):
     worker.start()
 
     assert calls == [("process", "start"), ("child", "close")]
+
+
+def test_persistent_solve_worker_passes_entrypoint_options(persistent_solve_worker):
+    worker, _ = persistent_solve_worker(
+        [("ready", None)],
+        warmup_on_start=False,
+        log_worker_errors=False,
+    )
+
+    assert worker.process_args[0][1:] == (
+        ["conda-forge"],
+        ["linux-64"],
+        False,
+        False,
+    )
 
 
 def test_persistent_solve_worker_closes_pipes_when_process_start_fails(
@@ -624,6 +646,70 @@ def test_persistent_solve_worker_entrypoint_handles_native_requests(monkeypatch)
         (["conda-forge"], ["zlib"], platforms),
         "shutdown",
     ]
+
+
+def test_persistent_solve_worker_entrypoint_can_skip_generic_warmup(monkeypatch):
+    sent = []
+    calls = []
+    requests = iter([None])
+    connection = SimpleNamespace(
+        recv=lambda: next(requests),
+        send=sent.append,
+        close=lambda: sent.append("closed"),
+    )
+    monkeypatch.setattr(
+        worker_module,
+        "warmup",
+        lambda *_: pytest.fail("dedicated worker must not prewarm"),
+    )
+    monkeypatch.setattr(
+        worker_module,
+        "shutdown_process_pool",
+        lambda: calls.append("shutdown"),
+    )
+
+    worker_module.persistent_solve_worker_entrypoint(
+        connection,
+        [],
+        [],
+        warmup_on_start=False,
+    )
+
+    assert sent == [("ready", None), "closed"]
+    assert calls == ["shutdown"]
+
+
+def test_persistent_solve_worker_entrypoint_can_suppress_errors(monkeypatch, caplog):
+    sent = []
+    calls = []
+    solve_request = SimpleNamespace(
+        solve=lambda: (_ for _ in ()).throw(RuntimeError("secret request data"))
+    )
+    requests = iter([("solver", solve_request), None])
+    connection = SimpleNamespace(
+        recv=lambda: next(requests),
+        send=sent.append,
+        close=lambda: sent.append("closed"),
+    )
+    monkeypatch.setattr(
+        worker_module,
+        "shutdown_process_pool",
+        lambda: calls.append("shutdown"),
+    )
+
+    with caplog.at_level("ERROR", logger="conda_presto.worker"):
+        worker_module.persistent_solve_worker_entrypoint(
+            connection,
+            [],
+            [],
+            warmup_on_start=False,
+            log_worker_errors=False,
+        )
+
+    assert sent == [("ready", None), ("error", None), "closed"]
+    assert calls == ["shutdown"]
+    assert "secret request data" not in caplog.text
+    assert not caplog.records
 
 
 def test_persistent_solve_worker_entrypoint_captures_platform_errors(monkeypatch):

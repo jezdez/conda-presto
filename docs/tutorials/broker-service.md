@@ -46,6 +46,46 @@ not authenticate local operating-system users. See the
 [security and trust model](../explanation/security.md)
 before using private channels or a persistent result cache.
 
+## Tune scheduled cache refresh
+
+Repeated successful `conda --solver=presto` requests become eligible for
+scheduled cache refresh. Configure the interval and cycle batch
+before starting the broker. conda-broker captures these variables when its
+daemon starts. Restarting only `conda-presto.server` retains the daemon's old
+environment. If the broker is already running, stop it first:
+
+```bash
+conda broker stop
+export CONDA_PRESTO_SOLVER_CACHE_WARM_INTERVAL_S=300
+export CONDA_PRESTO_SOLVER_CACHE_WARM_BATCH_SIZE=8
+conda broker start conda-presto.server
+```
+
+Set the interval to `0` to disable scheduled refresh. The service waits until
+no foreground solve is active or waiting, checks current cache entries, and
+uses one separate worker for requests that need a refresh. It does not expose
+recorded requests or refresh controls through HTTP. Docker deployments do not
+run this broker-only scheduler.
+
+## Keep recorded requests across restarts
+
+To retain eligible requests when the service restarts, configure a persistent
+result store and enable candidate persistence before starting the broker. For a
+file-backed store:
+
+```bash
+conda broker stop
+export CONDA_PRESTO_RESULT_CACHE_BACKEND=file
+export CONDA_PRESTO_RESULT_CACHE_DIR="$HOME/.cache/conda-presto/results"
+export CONDA_PRESTO_SOLVER_CACHE_WARM_CANDIDATE_PERSIST=true
+conda broker start conda-presto.server
+conda broker wait conda-presto.server --timeout 180
+```
+
+The same setting works with the Redis result-cache variables. Requests with
+detected channel credentials or tokenized URLs remain memory-only. Keep the
+file directory or Redis instance inside the same trust domain as the service.
+
 ## Stop the service
 
 Stop the service when the local workflow is complete:

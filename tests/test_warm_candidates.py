@@ -6,9 +6,7 @@ import anyio
 import msgspec
 import pytest
 from conda.models.channel import Channel
-from litestar.stores.file import FileStore
 from litestar.stores.memory import MemoryStore
-from litestar.stores.redis import RedisStore
 
 import conda_presto.solver as solver_module
 import conda_presto.warm_candidates as warm_candidates_module
@@ -43,32 +41,6 @@ def solver_request(make_presto_solver_request):
         aggressive_updates=["openssl"],
         always_update=["ca-certificates"],
     )
-
-
-@pytest.fixture(params=["memory", "file", "redis"])
-def persistent_store(request, tmp_path):
-    if request.param == "memory":
-        return MemoryStore()
-    if request.param == "file":
-        return FileStore(tmp_path / "warm-candidates", create_directories=True)
-
-    class RedisClient:
-        def __init__(self):
-            self.data = {}
-
-        def register_script(self, _script):
-            return None
-
-        async def get(self, key):
-            return self.data.get(key)
-
-        async def set(self, key, value, *, ex=None):
-            self.data[key] = value
-
-        async def delete(self, key):
-            self.data.pop(key, None)
-
-    return RedisStore(RedisClient(), namespace="test")
 
 
 @pytest.mark.parametrize(

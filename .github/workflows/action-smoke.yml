@@ -5,6 +5,7 @@ on:
     paths:
       - action.yml
       - .github/workflows/action-smoke.yml
+      - conda_presto/**
       - pyproject.toml
       - pixi.lock
       - tests/test_action.py

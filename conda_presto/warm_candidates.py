@@ -119,6 +119,18 @@ class SolverWarmCandidates:
             if entry.eligible(now)
         )[:limit]
 
+    def candidate(
+        self,
+        fingerprint: str,
+        now: float | None = None,
+    ) -> SolverWarmCandidate | None:
+        """Return one eligible current entry for a scheduler recheck."""
+        now = time.time() if now is None else now
+        entry = self.entries.get(fingerprint)
+        if entry is None or not entry.eligible(now):
+            return None
+        return msgspec.structs.replace(entry)
+
     def discard(self, fingerprint: str) -> None:
         """Discard one request that cannot produce a cacheable result."""
         removed = self.entries.pop(fingerprint, None)

@@ -14,7 +14,7 @@ CLI and the HTTP server.
 | `CONDA_PRESTO_CHANNELS` | `conda-forge` | Comma-separated default channels when none are given in a request. Also used for cache warmup on server startup. |
 | `CONDA_PRESTO_ALLOWED_CHANNELS` | value of `CONDA_PRESTO_CHANNELS` | Comma-separated channel allowlist for the HTTP server. Set to `*` only for trusted deployments that intentionally accept caller-selected channels. |
 | `CONDA_PRESTO_PLATFORMS` | `linux-64,osx-arm64,osx-64` | Comma-separated platforms to pre-warm repodata caches for on server startup. |
-| `CONDA_PRESTO_CONCURRENCY` | `4` | Maximum concurrent solve requests (thread limiter). |
+| `CONDA_PRESTO_CONCURRENCY` | `4` | Maximum concurrent solve requests (thread limiter). The Docker image and broker service set this to `1` for their persistent worker. |
 | `CONDA_PRESTO_WORKERS` | `min(4, cpu_count)` | Process pool size for multi-platform parallel solves. |
 | `CONDA_PRESTO_MAX_BODY_BYTES` | `1048576` (1 MB) | Maximum request body size in bytes. Returns HTTP 413 if exceeded. |
 | `CONDA_PRESTO_MAX_SPECS` | `200` | Maximum number of specs per request. Returns HTTP 400 if exceeded. |
@@ -35,8 +35,10 @@ CLI and the HTTP server.
 | `CONDA_PRESTO_RESULT_CACHE_DIR` | unset | Directory for the `file` result cache backend. Public resolve and private solver entries use separate key namespaces. |
 | `CONDA_PRESTO_RESULT_CACHE_REDIS_URL` | unset | Redis URL for the `redis` result cache backend. If `CONDA_PRESTO_RESULT_CACHE_BACKEND=redis` is set without this value, `redis://localhost:6379/0` is used. |
 | `CONDA_PRESTO_RESULT_CACHE_REDIS_NAMESPACE` | `conda-presto` | Redis key namespace for result cache entries. |
-| `CONDA_PRESTO_SOLVER_CACHE_WARM_CANDIDATE_SIZE` | `32` | Maximum cache-warming candidates retained for `/solver/v1`. Up to the same number of observations awaiting admission are retained. Set to `0` to disable recording. |
+| `CONDA_PRESTO_SOLVER_CACHE_WARM_CANDIDATE_SIZE` | `32` | Maximum cache-warming candidates retained for `/solver/v1`. Up to the same number of requests outside the candidate catalog are retained. Set to `0` to disable recording. |
 | `CONDA_PRESTO_SOLVER_CACHE_WARM_CANDIDATE_PERSIST` | `false` | Persist candidates without detected credentials in a configured file or Redis result store. Requires a persistent result-cache backend. |
+| `CONDA_PRESTO_SOLVER_CACHE_WARM_INTERVAL_S` | `300` | Seconds between solver-cache refresh cycles. Set to `0` to disable scheduled refresh. |
+| `CONDA_PRESTO_SOLVER_CACHE_WARM_BATCH_SIZE` | `8` | Maximum cache-warming candidates considered in one refresh cycle. |
 | `CONDA_PRESTO_RATE_LIMIT` | `300` | Maximum requests per minute per client IP. Set to `0` to disable. Behind a reverse proxy, start uvicorn with `--forwarded-allow-ips` so the rate-limit key is the real client IP, not the proxy. |
 | `CONDA_PRESTO_CORS_ORIGINS` | disabled | Comma-separated allowed CORS origins. |
 | `CONDA_PRESTO_LOG_LEVEL` | `INFO` | Application log level (`DEBUG`, `INFO`, `WARNING`, `ERROR`). |
@@ -81,7 +83,9 @@ in the conda-presto pixi workspace.
 
 These are configured in the `[tool.pixi.activation.env]` section of
 `pyproject.toml`. You can override any of them in your shell before
-running conda-presto.
+running conda-presto. The conda-broker child overrides `CONDA_NO_LOCK=false`
+because its foreground and cache-refresh worker processes can access the shared
+repodata cache concurrently.
 
 ## See also
 

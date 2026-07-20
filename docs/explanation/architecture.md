@@ -111,6 +111,17 @@ Result cache
   refresh or the current markers differ. A retained result after refresh
   replaces the existing entry for that request key.
 
+Cache-warming candidates and scheduled refresh
+: successful foreground `/solver/v1` requests are recorded in a process-local
+  catalog. The broker child checks eligible candidates and
+  refreshes missing or stale final-state entries in a dedicated worker without
+  borrowing the foreground limiter or worker. Ordered Litestar lifespan
+  context managers own solver resources first and the scheduler task group
+  second. The resource lifespan enters the result store before its foreground
+  worker and owns one serialized store-operation queue. Shutdown unwinds the
+  scheduler, drains admitted reads and writes, stops the worker, and then closes
+  the store.
+
 ## HTTP layer
 
 The HTTP API is a Litestar app served by uvicorn. The server adds compression,

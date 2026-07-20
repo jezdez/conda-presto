@@ -6,13 +6,18 @@ on:
       - main
     paths:
       - ".github/workflows/docs.yml"
+      - "CHANGELOG.md"
       - "conda_presto/**"
       - "docs/**"
       - "pyproject.toml"
+      - "pixi.lock"
   pull_request:
     paths:
       - ".github/workflows/docs.yml"
+      - "CHANGELOG.md"
       - "docs/**"
+      - "pyproject.toml"
+      - "pixi.lock"
   workflow_dispatch:
 
 permissions:
