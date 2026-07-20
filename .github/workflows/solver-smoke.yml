@@ -11,6 +11,8 @@ on:
       - conda_presto/plugin.py
       - conda_presto/resolve.py
       - conda_presto/solver.py
+      - conda_presto/storage.py
+      - conda_presto/warm_candidates.py
       - pyproject.toml
       - pixi.lock
   workflow_dispatch:
