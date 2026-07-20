@@ -1680,16 +1680,59 @@ async def test_repair_post_returns_unexpected_solver_errors(client, monkeypatch)
 
 
 @pytest.mark.anyio
-async def test_repair_post_rejects_invalid_requests(client):
-    unknown = await client.post("/repair", json={"specs": ["zlib"], "unknown": True})
-    malformed = await client.post("/repair", json={"specs": ["not[build=]"]})
-    invalid_limit = await client.post(
-        "/repair?max_attempts=0", json={"specs": ["zlib"]}
-    )
+@pytest.mark.parametrize(
+    ("path", "body", "expected"),
+    [
+        pytest.param(
+            "/repair",
+            {"specs": ["zlib"], "unknown": True},
+            {
+                "status_code": 400,
+                "detail": "Validation failed for POST /repair",
+                "extra": [
+                    {
+                        "message": "Object contains unknown field `unknown`",
+                        "key": "data",
+                        "source": "body",
+                    }
+                ],
+            },
+            id="unknown-body-field",
+        ),
+        pytest.param(
+            "/repair",
+            {"specs": ["not[build=]"]},
+            {
+                "error": (
+                    "Invalid spec 'not[build=]': key-value mismatch in brackets; "
+                    "a key or a value is missing"
+                )
+            },
+            id="malformed-match-spec",
+        ),
+        pytest.param(
+            "/repair?max_attempts=0",
+            {"specs": ["zlib"]},
+            {
+                "status_code": 400,
+                "detail": "Validation failed for POST /repair?max_attempts=0",
+                "extra": [
+                    {
+                        "message": "Expected `int` >= 1",
+                        "key": "max_attempts",
+                        "source": "query",
+                    }
+                ],
+            },
+            id="attempt-limit-below-minimum",
+        ),
+    ],
+)
+async def test_repair_post_rejects_invalid_requests(client, path, body, expected):
+    response = await client.post(path, json=body)
 
-    assert unknown.status_code == 400
-    assert malformed.status_code == 400
-    assert invalid_limit.status_code == 400
+    assert response.status_code == 400
+    assert response.json() == expected
 
 
 @pytest.mark.anyio

@@ -83,7 +83,7 @@ from collections.abc import Iterator
 from dataclasses import dataclass, field, replace
 from importlib.metadata import version as pkg_version
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Literal
 
 import anyio
 import msgspec
@@ -465,7 +465,11 @@ class RepairChange(msgspec.Struct, rename={"from_": "from"}):
 
     from_: str
     to: str
-    strategy: str
+    strategy: Literal[
+        "relax_exact_pin",
+        "drop_upper_bound",
+        "drop_lower_bound",
+    ]
 
 
 class RepairSuggestion(msgspec.Struct):
@@ -479,7 +483,7 @@ class RepairSuggestion(msgspec.Struct):
 class RepairDiagnosis(msgspec.Struct):
     """Solver error from the original request."""
 
-    kind: str
+    kind: Literal["solver_conflict"]
     summary: str
 
 
@@ -489,7 +493,13 @@ class RepairResult(msgspec.Struct):
     feasible: bool
     diagnosis: RepairDiagnosis | None
     suggestions: list[RepairSuggestion]
-    completion_reason: str
+    completion_reason: Literal[
+        "feasible",
+        "exhausted",
+        "suggestion_limit",
+        "attempt_limit",
+        "time_limit",
+    ]
 
 
 @dataclass
@@ -563,7 +573,12 @@ class RepairSearch:
     def result(
         self,
         diagnosis: RepairDiagnosis,
-        completion_reason: str,
+        completion_reason: Literal[
+            "exhausted",
+            "suggestion_limit",
+            "attempt_limit",
+            "time_limit",
+        ],
     ) -> RepairResult:
         """Build the repair result from the completed search state."""
         return RepairResult(
@@ -1761,8 +1776,6 @@ async def formats() -> dict[str, list[str]]:
 @get("/platforms")
 async def platforms() -> dict[str, list[str]]:
     """Return the known conda platform subdirectory names."""
-    from conda.base.constants import KNOWN_SUBDIRS
-
     return {"platforms": sorted(KNOWN_SUBDIRS)}
 
 
