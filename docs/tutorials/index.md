@@ -1,56 +1,51 @@
 # Tutorials
 
-Step-by-step guides to get you started with conda-presto.
+Tutorials are guided learning paths. Start with the shortest path that matches
+the interface you want to understand.
 
-::::{grid} 2
+::::{grid} 1 1 2 2
 :gutter: 3
 
-:::{grid-item-card} {octicon}`terminal` CLI resolve
+:::{grid-item-card} {octicon}`terminal` Create a multi-platform lockfile
 :link: cli-resolve
 :link-type: doc
 
-Resolve package specs and environment files from the command line.
-Covers output formats, multi-platform solves, and pipeline workflows.
+Resolve an environment file, inspect native JSON, and export two lockfile
+formats.
 :::
 
-:::{grid-item-card} {octicon}`globe` HTTP API
+:::{grid-item-card} {octicon}`globe` Resolve through the HTTP API
 :link: http-api
 :link-type: doc
 
-Use the HTTP API to resolve environments programmatically.
-File uploads, JSON requests, output format conversion, and more.
+Start a local server, submit a solve, follow a result location, and upload a
+file.
 :::
 
-:::{grid-item-card} {octicon}`server` Broker-managed local service
-:link: broker-service
+:::{grid-item-card} {octicon}`checklist` Review and repair an environment
+:link: review-and-repair
 :link-type: doc
 
-Run the optional loopback service with conda-broker for repeated HTTP requests.
+Use preflight, repair, diff, and explain as one review workflow.
 :::
 
-:::{grid-item-card} {octicon}`beaker` Presto solver
-:link: solver-backend
+:::{grid-item-card} {octicon}`server` Use the local solver service
+:link: local-service
 :link-type: doc
 
-Use the broker-managed local service as an internal conda solver backend.
-:::
-
-:::{grid-item-card} {octicon}`play` CI pipeline
-:link: ci-pipeline
-:link-type: doc
-
-Run conda-presto in GitHub Actions. Local mode runs the checked-out
-action on the runner; remote mode calls a hosted deployment.
+Start the broker service, call its HTTP API, and run a dry-run conda operation
+through the Presto solver.
 :::
 
 ::::
+
+For a specific operational task, use {doc}`../how-to/index` instead.
 
 ```{toctree}
 :hidden:
 
 cli-resolve
 http-api
-broker-service
-solver-backend
-ci-pipeline
+review-and-repair
+local-service
 ```

@@ -21,9 +21,10 @@ without installing anything.
 ## Options
 
 `-c`, `--channel`
-: Channel to search. Can be repeated to search multiple channels in
-  priority order. When omitted, falls back to
-  `CONDA_PRESTO_CHANNELS` (default: `conda-forge`).
+: Additional channel to search. Can be repeated. Conda also includes channels
+  from `.condarc` unless `--override-channels` is present. When the effective
+  conda context has no channels or only `defaults`, conda-presto uses channels
+  from input files, then `CONDA_PRESTO_CHANNELS`.
 
   ```bash
   conda presto -c conda-forge -c bioconda python=3.12
@@ -39,10 +40,12 @@ without installing anything.
   ```
 
 `-f`, `--file`
-: Path to an environment file. Accepts `.yml`, `.yaml`, `.toml`,
-  `.txt`, `.lock`, and `.json` files. Can be repeated; specs from all
-  files are merged into a single solve together with any positional
-  specs.
+: Path to an environment file. Can be repeated. Each file is selected and
+  parsed through conda's installed environment-specifier plugins. The base
+  installation supports environment YAML and requirements files, while the
+  required conda-lockfiles package adds conda-lock and rattler-lock formats.
+  The adapter does not accept conda's explicit-file specifier as input. Specs
+  from all files are merged with positional specs.
 
   ```bash
   conda presto -f environment.yml -f extra-deps.yml -p linux-64
@@ -57,13 +60,42 @@ without installing anything.
   conda presto --format explicit -c conda-forge -p linux-64 zlib
   ```
 
-`--override-channels`
+`-O`, `--override-channels`
 : Ignore channels configured in `.condarc` and use only the channels
   given via `-c`.
 
 `--solver`
-: Solver backend to use. Default: `rattler` (via `conda-rattler-solver`).
-  Can also be set globally with `CONDA_SOLVER`.
+: Standard conda parser option. Direct `conda presto` resolves always use
+  rattler through conda-rattler-solver, so this option does not select a
+  different engine for the subcommand. To delegate a conda transaction to the
+  broker-backed Presto solver, use `conda --solver=presto ...` instead.
+
+`--use-local`
+: Add conda's local build channel. Equivalent to `-c local`.
+
+`--repodata-fn`
+: Select a repodata filename. Can be repeated. Conda adds `repodata.json` as a
+  final fallback.
+
+`--experimental {jlap,lock}`
+: Deprecated option inherited from conda's networking parser. Both choices are
+  no longer supported and the option has no conda-presto-specific behavior.
+
+`--repodata-use-zst`, `--no-repodata-use-zst`
+: Enable or disable compressed `repodata.json.zst` metadata.
+
+`--repodata-use-shards`, `--no-repodata-use-shards`
+: Enable or disable sharded repodata where a channel provides it.
+
+`-C`, `--use-index-cache`
+: Accept cached channel metadata even when its normal time-to-live has expired.
+
+`-k`, `--insecure`
+: Disable TLS certificate verification for channel access.
+
+`--no-lock`
+: Disable conda locking while reading or updating the repodata cache. Avoid
+  this when another conda process can use the same package cache.
 
 `--offline`
 : Run without network access. Only packages already present in the
@@ -123,10 +155,10 @@ Start the HTTP server on a custom port:
 conda presto --serve --host 0.0.0.0 --port 9000
 ```
 
-Use a specific solver backend:
+Use the broker-backed Presto solver for a conda transaction:
 
 ```bash
-conda presto --solver libmamba -c conda-forge -p linux-64 numpy
+conda create --dry-run --solver presto -n demo -c conda-forge numpy
 ```
 
 Offline solve using only cached repodata:
@@ -145,6 +177,7 @@ conda presto --offline -c conda-forge -p linux-64 zlib
 
 ## See also
 
-- [HTTP API reference](http-api.md)
-- [Output formats](output-formats.md)
-- [Environment variables](environment-variables.md)
+- {doc}`http-api`
+- {doc}`output-formats`
+- {doc}`solver-backend`
+- {doc}`environment-variables`

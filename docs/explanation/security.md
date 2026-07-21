@@ -37,6 +37,12 @@ Rate limiting and CORS
 : rate limiting is enabled by default per client IP. CORS is disabled unless
   `CONDA_PRESTO_CORS_ORIGINS` explicitly lists the expected frontend origins.
 
+Access logging
+: public access logs contain the request path, method, content type, and
+  response status. They omit headers, cookies, query parameters, and bodies.
+  The private solver route is excluded entirely. The convenience server also
+  disables uvicorn's separate access log.
+
 Dry-run package access
 : conda-presto reads channel metadata and package records but does not download
   or extract package payloads as part of a solve.
@@ -52,12 +58,29 @@ When the service uses private channels, keep its credentials, repodata, and
 persistent result cache inside that same trust boundary. conda-broker manages
 the service lifecycle. It does not add authentication to conda-presto's HTTP API.
 
+The private solver request contains installed records, history, pins, effective
+virtual packages, channel definitions, and requested changes. It does not send
+the prefix path or prefix file inventory. The client disables environment proxy
+handling and redirects, and both sides require a loopback connection.
+
+## Docker boundary
+
+The server image exposes only the public API. It does not start conda-broker,
+enable `/solver/v1`, or run scheduled solver-cache refresh. Binding a published
+container port to `127.0.0.1` keeps it local to the Docker host. Publishing it
+on all interfaces expands the trust boundary and requires the same reverse
+proxy, TLS, and access-control decisions as any other HTTP deployment.
+
+The persistent server worker and its parent share conda's package cache. The
+server image therefore keeps conda filesystem locking enabled.
+
 ## Result cache boundary
 
 HTTP `/resolve` responses can be stored under content-addressed `/r/<hash>`
-permalinks. The cache key includes the normalized request, output format,
-dependency versions, and local repodata cache file markers. Expired repodata
-bypasses the stored result, and changed package metadata produces a new key.
+permalinks. A new resolve request checks metadata freshness before reuse.
+Fetching an existing permalink returns that stored snapshot without repeating
+the freshness check. A newer resolve can therefore use another address while
+the older value remains available until eviction or store removal.
 
 The shared cache is currently appropriate for public-channel solves. Avoid
 using a shared public deployment for private channels or credential-bearing
@@ -72,22 +95,22 @@ serialized solver requests, but excludes requests with detected channel
 credentials or tokenized URLs. Treat the file or Redis store as service data
 and keep it inside the deployment trust domain.
 
-## Production deployment
+The exact cache identities, freshness rules, and persistence failure behavior
+are documented in {doc}`../reference/cache`.
 
-Run the HTTP server behind a reverse proxy that terminates TLS and sets
-forwarded client IP headers. Start uvicorn with `--forwarded-allow-ips` so rate
-limits are keyed by the real client address.
+## Deployment responsibility
 
-For public internet deployments, review these variables before exposing the
-service:
+conda-presto does not terminate TLS or authenticate callers. CORS limits which
+browsers can read responses, and rate limiting bounds request volume per
+client address. Neither is an access-control mechanism.
 
-- `CONDA_PRESTO_RATE_LIMIT`
-- `CONDA_PRESTO_CORS_ORIGINS`
-- `CONDA_PRESTO_MAX_BODY_BYTES`
-- `CONDA_PRESTO_MAX_SPECS`
-- `CONDA_PRESTO_MAX_PLATFORMS`
-- `CONDA_PRESTO_SOLVE_TIMEOUT_S`
-- `CONDA_PRESTO_RESULT_CACHE_BACKEND`
+A network deployment therefore needs an explicit admission boundary. A reverse
+proxy can supply TLS and authentication, but the application must trust only
+that proxy's forwarded client addresses. Cache storage and channel credentials
+must remain inside the same trust domain as the service that uses them.
+
+Follow {doc}`../how-to/deploy-securely` for a production configuration and
+go-live checklist.
 
 ## Future trust work
 
@@ -96,4 +119,6 @@ predicate design are tracked as roadmap issues. Those features should make
 solved results verifiable by downstream tools instead of inventing a separate
 installation path.
 
-See the [roadmap](../proposals.md) for the current issue links.
+See {doc}`../proposals` for the current issue links,
+{doc}`deployment-models` for the execution boundaries of each interface, and
+{doc}`../how-to/deploy-securely` for deployment steps.

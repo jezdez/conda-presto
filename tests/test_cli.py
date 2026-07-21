@@ -253,11 +253,13 @@ def test_cmd_serve(monkeypatch):
     called = []
     monkeypatch.setattr(
         "uvicorn.run",
-        lambda app, host, port: called.append((app, host, port)),
+        lambda app, host, port, access_log: called.append(
+            (app, host, port, access_log)
+        ),
     )
     args = argparse.Namespace(host="0.0.0.0", port=9000)
     cmd_serve(args)
-    assert called == [("conda_presto.app:app", "0.0.0.0", 9000)]
+    assert called == [("conda_presto.app:app", "0.0.0.0", 9000, False)]
 
 
 def test_cmd_solve_unknown_format_exits(run_cli, monkeypatch, capsys):

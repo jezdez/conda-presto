@@ -18,8 +18,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Record successful cacheable foreground `/solver/v1` requests as cache-warming candidates.
 - Check recorded solver requests and refresh missing or stale cache entries when no foreground solve is active or waiting.
 
+### Changed
+
+- Reorganize the documentation into tutorials, how-to guides, reference, and explanation pages covering the 0.7 service, solver, cache, and repair features.
+
 ### Fixed
 
+- Limit public HTTP access logs to request metadata and response status, and disable uvicorn's raw access log so solve inputs and credentials are not recorded.
+- Keep conda filesystem locking enabled in the persistent Docker server.
 - Refresh loaded solver indexes when conda considers their repodata stale, and key cached results by the repodata cache files used.
 - Restart failed persistent workers in Docker while conda-broker restarts its server process.
 - Bypass cached solver results when py-rattler or repodata cache-file markers change, skip retention across ambiguous metadata transitions, and replace an existing solver cache entry after refresh.

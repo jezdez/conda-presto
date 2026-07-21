@@ -1,17 +1,14 @@
-# Output formats
+# Output format reference
 
-conda-presto can emit solve results in several formats. The default is
-a structured JSON array. All other formats are provided by conda
-exporter plugins (shipped with `conda-lockfiles`) and are selected
-with `--format` on the CLI or `?format=` on the HTTP API.
+Without `--format` or `?format=`, conda-presto writes its native JSON result.
+Every named format is discovered through conda's environment-exporter plugin
+registry. The base dependencies supply conda's built-in exporters and
+conda-lockfiles exporters. Other installed plugins can add names and aliases.
 
-Any additional formats registered by other installed exporter plugins
-are picked up automatically.
+## Native JSON
 
-## Default JSON
-
-When no `--format` / `?format=` is specified, the output is a JSON
-array of `SolveResult` objects, one per requested platform.
+The native response is a JSON array with one `SolveResult` per requested
+platform. This is the default for the CLI and both `/resolve` methods.
 
 ```json
 [
@@ -26,11 +23,12 @@ array of `SolveResult` objects, one per requested platform.
         "channel": "conda-forge",
         "subdir": "linux-64",
         "url": "https://conda.anaconda.org/conda-forge/linux-64/zlib-1.3.2-h25fd6f3_2.conda",
-        "sha256": "245c9ee8d688...",
-        "md5": "c2a01a08fc99...",
+        "sha256": "245c9ee8d688e23661b95e3c6dd7272ca936fabc03d423cdb3cdee1bbcf9f2f2",
+        "md5": "c2a01a08fc991620a74b32420e97868a",
         "size": 95931,
         "depends": ["__glibc >=2.17,<3.0.a0", "libzlib 1.3.2 h25fd6f3_2"],
-        "constrains": []
+        "constrains": [],
+        "manager": "conda"
       }
     ],
     "error": null
@@ -38,72 +36,97 @@ array of `SolveResult` objects, one per requested platform.
 ]
 ```
 
-Each entry has three fields:
+The selected versions and hashes depend on current repodata. The fields do not.
 
 `platform`
-: The platform subdir this result was solved for.
+: Target conda subdirectory.
 
 `packages`
-: A list of fully pinned packages with metadata (name, version, build,
-  channel, URL, hashes, dependencies).
+: Selected package records. Each record contains `name`, `version`, `build`,
+  `build_number`, `channel`, `subdir`, `url`, `sha256`, `md5`, `size`,
+  `depends`, `constrains`, and `manager`.
 
 `error`
-: `null` on success, or a string describing the solver failure for
-  this platform. Partial failures are reported per-platform so one
-  bad solve does not prevent results from other platforms.
+: `null` after a successful platform solve. A captured solver failure produces
+  an empty package list and a safe error string for that platform. Other
+  platforms in the same request can still succeed.
+
+## Registered exporter names
+
+With the dependency versions required by this release, these exporters are
+registered:
+
+| Primary name | Aliases | Category | Media type | Multiple platforms in one document |
+|---|---|---|---|:---:|
+| `explicit` | None | Lockfile | `text/plain; charset=utf-8` | No |
+| `environment-yaml` | `yaml`, `yml`, `env.yml` | Environment | `application/yaml` | No |
+| `environment-json` | `json` | Environment | `application/json` | No |
+| `requirements` | `reqs`, `txt` | Environment | `text/plain; charset=utf-8` | No |
+| `conda-lock-v1` | `conda-lock` | Lockfile | `application/yaml` | Yes |
+| `rattler-lock-v6` | `pixi`, `pixi-lock-v6` | Lockfile | `application/yaml` | Yes |
+
+For an exporter without a multiplatform entry point, conda-presto renders each
+platform separately and joins the texts with a newline. Use a single platform
+for `environment-json` when the output must be one valid JSON document. The
+lockfile exporters with a multiplatform entry point produce one document for
+all requested platforms.
+
+An installed plugin can change the available set. Use `GET /formats` to read
+the names in the running server.
 
 ## `explicit`
 
-The conda `@EXPLICIT` format: one URL per line, with an `#md5` suffix.
-This is the same format produced by `conda list --explicit`.
+Conda's CEP 23 explicit format contains one exact package URL per line after an
+`@EXPLICIT` marker. The current conda exporter does not append package hashes
+to those URLs.
 
 ```bash
 conda presto --format explicit -c conda-forge -p linux-64 zlib
 ```
 
 ```text
+# This file may be used to create an environment using:
+# $ conda create --name <env> --file <this file>
+# platform: linux-64
+# created-by: conda 26.5.3
 @EXPLICIT
-https://conda.anaconda.org/conda-forge/linux-64/libgcc-14.2.0-h77fa898_1.conda#3cb76c3f10d3bc7f1571e53f0bd7be21
-https://conda.anaconda.org/conda-forge/linux-64/libzlib-1.3.2-h25fd6f3_2.conda#e5db7304860e47218f312ddfab574c92
-https://conda.anaconda.org/conda-forge/linux-64/zlib-1.3.2-h25fd6f3_2.conda#c2a01a08fc991620a74b32420e97868a
+https://conda.anaconda.org/conda-forge/linux-64/libzlib-1.3.2-h25fd6f3_2.conda
+https://conda.anaconda.org/conda-forge/linux-64/zlib-1.3.2-h25fd6f3_2.conda
 ```
+
+The `created-by` version follows the installed conda version.
 
 ## `environment-yaml`
 
-Aliases: `yaml`, `yml`, `env.yml`
-
-A conda `environment.yml` file with pinned dependencies.
+This exporter writes a conda environment document with pinned package
+dependencies selected by the solve.
 
 ```bash
-conda presto --format yaml -c conda-forge -p linux-64 zlib
+conda presto --format environment-yaml -c conda-forge -p linux-64 zlib
 ```
 
 ```yaml
-name: ""
-channels:
-  - conda-forge
+name:
 dependencies:
-  - libgcc=14.2.0=h77fa898_1
   - libzlib=1.3.2=h25fd6f3_2
   - zlib=1.3.2=h25fd6f3_2
 ```
 
+The solved `Environment` has no target prefix name or configured channel list,
+so those values are absent or null. Exact package URLs retain channel identity.
+
 ## `environment-json`
 
-Alias: `json`
-
-A JSON representation of the environment spec.
+This exporter writes the same conda environment model as JSON.
 
 ```bash
-conda presto --format json -c conda-forge -p linux-64 zlib
+conda presto --format environment-json -c conda-forge -p linux-64 zlib
 ```
 
 ```json
 {
-  "name": "",
-  "channels": ["conda-forge"],
+  "name": null,
   "dependencies": [
-    "libgcc=14.2.0=h77fa898_1",
     "libzlib=1.3.2=h25fd6f3_2",
     "zlib=1.3.2=h25fd6f3_2"
   ]
@@ -112,78 +135,60 @@ conda presto --format json -c conda-forge -p linux-64 zlib
 
 ## `requirements`
 
-Aliases: `reqs`, `txt`
+:::{warning}
+Conda registers this CEP 23 MatchSpec exporter, but it requires an
+`Environment` with requested packages. conda-presto's solved environments hold
+explicit selected package records instead. The current exporter therefore
+rejects this format on a normal solve. Use `explicit`, `environment-yaml`, or
+`environment-json` for a text representation of a solved environment.
+:::
 
-A pip-style `requirements.txt` with conda package pins. Useful as a
-human-readable pinned list, though not directly installable with pip.
-
-```bash
-conda presto --format txt -c conda-forge -p linux-64 zlib
-```
-
-```text
-libgcc==14.2.0
-libzlib==1.3.2
-zlib==1.3.2
-```
+The name remains visible through `GET /formats` because that endpoint reports
+the conda registry, not a conda-presto allowlist.
 
 ## `conda-lock-v1`
 
-A multi-platform `conda-lock.yml` file compatible with
-[conda-lock](https://github.com/conda/conda-lock).
+The conda-lockfiles plugin writes one multi-platform `conda-lock.yml` document.
 
 ```bash
-conda presto --format conda-lock-v1 -c conda-forge -p linux-64 zlib
+conda presto --format conda-lock-v1 \
+  -c conda-forge \
+  -p linux-64 \
+  -p osx-arm64 \
+  zlib > conda-lock.yml
 ```
 
-```yaml
-version: 1
-metadata:
-  channels:
-    - url: conda-forge
-  platforms:
-    - linux-64
-package:
-  - name: zlib
-    version: 1.3.2
-    manager: conda
-    platform: linux-64
-    url: https://conda.anaconda.org/conda-forge/linux-64/zlib-1.3.2-h25fd6f3_2.conda
-    hash:
-      md5: c2a01a08fc991620a74b32420e97868a
-      sha256: 245c9ee8d688...
-```
+The document records exact package URLs and hashes for each platform. Its
+metadata identifies the conda-lockfiles version that created it.
 
 ## `rattler-lock-v6`
 
-Alias: `pixi-lock-v6`
-
-A `pixi.lock` file in rattler-lock v6 format, compatible with
-[pixi](https://pixi.sh/) and `conda env create -f pixi.lock`.
+The conda-lockfiles plugin writes one multi-platform rattler-lock v6 document,
+normally named `pixi.lock`.
 
 ```bash
-conda presto --format pixi-lock-v6 -c conda-forge -p linux-64 zlib
+conda presto --format pixi-lock-v6 \
+  -c conda-forge \
+  -p linux-64 \
+  -p osx-arm64 \
+  zlib > pixi.lock
 ```
 
-```yaml
-version: 6
-environments:
-  default:
-    channels:
-      - url: https://conda.anaconda.org/conda-forge/
-    packages:
-      linux-64:
-        - conda: https://conda.anaconda.org/conda-forge/linux-64/zlib-1.3.2-h25fd6f3_2.conda
-```
+`rattler-lock-v6`, `pixi`, and `pixi-lock-v6` select the same exporter.
 
-## Format discovery
+## Failure behavior
 
-Formats are registered through conda's exporter plugin system. Run
-`conda presto --serve` and query `GET /formats` to see all available
-formats in your installation, or pass an invalid `--format` name to
-get the list in the error message.
+The exporter path requires every platform solve to succeed. The CLI exits with
+status 1 when a solve or exporter fails. HTTP `/resolve?format=<name>` returns
+HTTP 500 for those failures because an exporter cannot represent the native
+per-platform error shape.
+
+An unknown name returns the sorted registry names in the error. Additional
+exporter plugins are accepted without conda-presto-specific dispatch code.
 
 ## See also
 
-- [CLI reference](cli.md)
-- [HTTP API reference](http-api.md)
+- {doc}`cli`
+- {doc}`http-api`
+- {doc}`github-action`
+- {doc}`../how-to/transcode-lockfiles`

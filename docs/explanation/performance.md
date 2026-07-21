@@ -1,142 +1,132 @@
 # Performance
 
-conda-presto is optimized for repeated dry-run solves: CI jobs, server-backed
-tools, and workflows that need lockfiles without creating environments. The
-main performance question is whether the request can reuse warmed metadata,
-indexes, or a full cached response.
+conda-presto is intended for solve-only work where creating a prefix would be
+unnecessary. Latency depends more on process state, repodata freshness, and
+cache identity than on the number of requested package names alone.
 
-## Where time goes
+## Cost model
 
-A solve has four broad costs:
+A direct solve can pay for:
 
-1. Parse input into conda specs and channels.
-2. Load or refresh channel repodata.
-3. Build or reuse the solver index for each channel/platform pair.
-4. Run SAT solving and serialize the response.
+1. Python startup and conda imports.
+2. Input parsing and normalization.
+3. Repodata download or freshness checks.
+4. Solver index construction or refresh.
+5. SAT solving.
+6. Result conversion, export, and serialization.
 
-For small environments, Python startup and conda imports can dominate CLI
-latency. In server mode those costs are paid once at process startup, so warm
-requests spend most of their time in the solver and exporter.
+Network state and repodata dominate many cold runs. Once metadata and indexes
+are available, SAT solving and process overhead become more visible.
 
-## Cache layers
+## Execution mode changes the baseline
 
-On-disk repodata cache
-: conda downloads channel metadata into its normal local cache. This cache is
-  shared with other conda commands and is controlled by conda's repodata TTL
-  settings.
+One-shot CLI
+: Pays process startup and imports on every command. Conda's on-disk repodata
+  cache can survive between commands.
 
-In-memory solver index cache
-: each process keeps a `RattlerIndexHelper` per `(channels, platform)` key.
-  Reuse follows conda's repodata freshness policy. When repodata expires or a
-  cache file changes, the existing index reloads those channels before solving.
+Ordinary HTTP server
+: Keeps the web application and result cache alive. Startup primes conda's
+  on-disk repodata cache. Each uncached request runs in an isolated child
+  process, so an in-memory rattler index is not reused by later requests.
 
-Result cache
-: successful HTTP `/resolve` responses and internal `/solver/v1` final states
-  share a bounded in-process LRU. Resolve responses use content-addressed keys.
-  Solver final states use keys derived from serialized request fields and
-  dependency versions. Each solver entry also records repodata cache-file
-  markers. A solver hit skips state-specific index construction and SAT solving,
-  but the cached response is still encoded by the service and decoded by the
-  client. The LRU can be backed by a persistent file or Redis store, which lets
-  cached results survive server restarts.
+Docker server
+: Adds a persistent foreground worker that retains loaded solver state and
+  indexes. Requests are serialized through that worker.
 
-Cache-warming candidates
-: successful cacheable foreground solver requests are recorded locally. A
-  request becomes eligible for refresh after repeated use. Candidates are
-  ordered by request count and recency. Background refreshes do not change either
-  value. A bounded observation tier retains requests outside the catalog,
-  including displaced candidates. An observation and the lowest-ranked candidate
-  exchange places when the observation's count, then recency, ranks higher.
+Broker-managed service
+: Uses the same persistent-worker model and can also serve the internal Presto
+  solver. Scheduled refresh runs only in this mode.
 
-Scheduled solver-cache refresh
-: the broker child periodically checks selected cache-warming candidates against
-  current repodata. A missing or stale entry can be recomputed in one separate
-  worker. Normal and Docker servers do not run this scheduler.
+Comparisons must name the mode. A cold CLI invocation and a warm broker request
+measure different work even when their package specs match.
 
-## Cache keys and repodata checks
+## Metadata and index reuse
 
-The result cache key is tied to the inputs that can change the response:
-normalized specs, ordered channels, target platforms, output format, configured
-virtual-package overrides, relevant dependency versions, and markers for
-conda's local `repodata.json` files. A request bypasses a stored result when
-conda's effective policy requires any corresponding repodata metadata to
-refresh. If refreshed package metadata changes, the next `/resolve` result uses
-a different key. Solver final-state
-keys hash solve-affecting request fields, including installed records, history,
-pins, virtual packages, operation modifiers, solver settings, and channel
-definitions, along with dependency versions. They exclude the prefix path, file
-inventory, local repodata TTL, and repodata markers, allowing the same
-solve-affecting request fields at different paths or TTLs to use one entry. The
-stored value includes the URL, selected source, file size, modification time,
-and freshness state recorded for each repodata cache file. A lookup returns the
-entry only when conda considers the current files fresh under the caller's TTL
-and their markers match.
+Conda's on-disk repodata cache removes repeat downloads while the metadata is
+acceptable under the effective policy. Ordinary HTTP startup fetches or
+validates the configured repodata in that disk cache, but it does not leave a
+reusable rattler index in the per-request solve processes. Only a persistent
+worker retains a rattler index for the same channel and platform combination
+across requests.
 
-Private channels and credentialed channel URLs should use an isolated
-deployment until the cache model has an explicit private-channel policy.
+When metadata becomes stale or its cache-file markers change, conda-presto
+reloads affected index data before solving. Persistent-worker startup shifts
+both initial repodata and index work into service readiness. Ordinary HTTP
+startup shifts only repodata work. Neither mode precomputes arbitrary solve
+results.
 
-## First solve vs. warm solve
+## Full result cache hits
 
-The first request for a new channel/platform combination pays the repodata and
-index-build costs. Later requests in the same process reuse the in-memory
-index. Server startup can pre-warm expected channel/platform combinations using
-`CONDA_PRESTO_CHANNELS` and `CONDA_PRESTO_PLATFORMS`, shifting that cost from
-the first user request to startup.
+A retained `/resolve` response can skip solving and serialization work after a
+freshness-qualified key lookup. The key includes current repodata markers, so a
+metadata refresh can lead to a new content address.
 
-The result cache adds a store lookup and freshness check on each HTTP solve
-request. On a solver miss, conda-presto captures metadata immediately before
-and after worker index collection, then compares the current cache-file markers
-before replacing the existing solver entry. The number of checks scales with
-the number of channel/platform repodata files.
+A private solver final-state hit skips state-specific index construction and SAT
+solving. It still pays for the loopback request, decoding, and repodata marker
+checks. The key includes installed records, history, pins, virtual packages,
+requested changes, and solver settings. A repeated dry-run with unchanged
+prefix state can hit. A completed transaction usually changes the next key.
 
-The final-state cache has narrower reuse than `/resolve`: repeated dry-runs,
-retries, creates, and cloned prefix states can hit, while a completed transaction
-normally changes the installed records and therefore the next key. Requests
-with different prefix histories or pins also use different keys.
+This makes solver-cache reuse workload-dependent. Repeated CI-like dry-runs,
+retries, and cloned prefix states have more reuse than a sequence of distinct
+updates to one changing prefix.
 
-Candidate identity omits dependency versions and current repodata markers so a
-recorded request can remain eligible after metadata refreshes and compatible
-upgrades. Cache reuse still includes dependency versions and requires the
-current repodata markers to match. Candidates are local by default. Persistence
-excludes requests with detected credentials.
+There is currently no response header or CLI field that identifies a private
+solver cache hit. Do not infer a hit from one timing sample.
 
-Scheduled refresh replays the recorded request with its channel order, subdirs,
-repodata mode, and `use_index_cache` setting. A remote repodata update can affect
-the cache after conda marks the local metadata stale and a later refresh cycle
-completes.
+## Scheduled refresh
 
-The refresh worker does not use the foreground worker or concurrency limiter.
-No replay starts while foreground work is active or waiting. Foreground work
-arriving during a replay prevents another candidate from starting. The current
-replay finishes or reaches its timeout. The broker child keeps conda filesystem
-locking enabled because both workers may access the same repodata cache.
+Scheduled refresh moves selected cache-miss work away from a later foreground
+request. It does not make every recorded request current at all times.
+
+The broker considers only requests that were used repeatedly and still fit its
+bounded catalog. It checks a limited batch per cycle and gives foreground work
+priority. A replay worker exists only while a cycle needs it. This bounds idle
+resource use but means a large catalog can take several cycles to inspect.
+
+Refresh consumes CPU, memory, repodata I/O, and persistent-store capacity. The
+interval and batch size should reflect how often repodata changes, how expensive
+misses are, and how much idle capacity the host has.
+
+## Solver improvements and cached workloads
+
+A faster rattler implementation improves cache misses and background refreshes.
+It also narrows the relative latency difference between a miss and a full
+final-state hit. Cache hits still avoid solver work entirely, so they continue
+to benefit workloads with stable request identity.
+
+Classic conda, libmamba, rattler, and the Presto service cannot be compared from
+one number. A useful comparison controls channels, repodata state, target
+platform, prefix state, operation modifiers, process warmth, and whether the
+Presto result cache is a hit or a miss.
 
 ## Multi-platform solving
 
-Multi-platform requests run one solve per platform through a persistent process
-pool. Wall-clock time follows the slowest platform solve more closely than the
-sum of all platform solves, assuming enough workers are available. Tune the
-pool with `CONDA_PRESTO_WORKERS`; tune concurrent HTTP requests with
-`CONDA_PRESTO_CONCURRENCY` in non-persistent HTTP mode. The Docker and broker
-deployments use one persistent foreground worker and set the concurrency limit
-to 1.
+Direct multi-platform requests dispatch one solve per platform. With enough
+workers, wall time approaches the slowest platform more closely than the sum of
+all platform times. Each worker has its own Python process and index memory, so
+increasing `CONDA_PRESTO_WORKERS` trades memory for parallelism.
 
-## Lockfile transcoding
+The Docker and broker deployments accept one foreground request at a time, but
+a multi-platform request can still use the worker's internal process pool.
 
-Lockfile-to-lockfile conversion is the fastest path because it does not invoke
-the solver. When the requested platforms already exist in the input lockfile,
-conda-presto reuses those package records and renders them through the target
-lockfile exporter.
+## Lockfile conversion
 
-## Benchmarking
+Covered lockfile conversion is usually the smallest work path. It parses
+existing records and renders another lockfile format without channel access or
+SAT solving. If requested platforms are missing or the request adds specs or
+channel overrides, conda-presto refuses transcode rather than silently solving.
 
-The repository keeps benchmark inputs and historical result snapshots under
-`benchmarks/`. Rerun them with:
+## Measure your workload
 
-```bash
-pixi run bench
-```
+There is no single representative conda solve. Measurements are meaningful
+only when they distinguish process startup, repodata state, retained indexes,
+and full result-cache hits. The repository does not commit historical result
+snapshots or define a service-level performance guarantee.
 
-Treat benchmark snapshots as local measurements, not service-level guarantees.
-They depend on machine size, network state, conda's repodata cache, selected
-channels, and whether the process has already built solver indexes.
+Use {doc}`../how-to/benchmark-performance` to run the repository benchmarks and
+compare controlled HTTP profiles. Record enough context for another person to
+reproduce the same cache and process state.
+
+The cache contracts behind these effects are described in
+{doc}`caching-and-freshness` and {doc}`../reference/cache`.

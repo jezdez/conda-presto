@@ -1,93 +1,130 @@
-# Environment variables
+# Environment variable reference
 
-conda-presto reads two groups of environment variables: application
-variables that control its own behavior, and conda tuning variables
-that optimize conda for a solve-only workload.
+conda-presto reads these settings when its configuration module is imported.
+The scope column distinguishes direct solves, public HTTP servers, and the
+broker-only solver service.
 
-## Application variables
+## Direct solve settings
 
-These variables configure conda-presto itself. They apply to both the
-CLI and the HTTP server.
+These settings affect `conda presto` and public HTTP resolve operations. The
+internal `conda --solver=presto` path captures effective state from the calling
+conda process instead.
+
+| Variable | Default | Scope | Purpose |
+|---|---|---|---|
+| `CONDA_PRESTO_CHANNELS` | `conda-forge` | Direct CLI and HTTP | HTTP fallback when no request or input file supplies channels. CLI fallback when conda's effective channels are empty or only `defaults` and no file supplies channels. Also used for server startup warmup. |
+| `CONDA_PRESTO_WORKERS` | `min(4, cpu_count)` | Direct multi-platform solves | Process-pool size for platforms within one request. |
+| `CONDA_PRESTO_MAX_INDEX_CACHE_ENTRIES` | `128` | Direct solve processes | Maximum retained rattler indexes. Set to `0` to disable index retention. |
+| `CONDA_PRESTO_GLIBC_VERSION` | `2.17` | Direct Linux solves | Injected virtual `__glibc` version. |
+| `CONDA_PRESTO_LINUX_VERSION` | `5.15` | Direct Linux solves | Injected virtual `__linux` version. |
+| `CONDA_PRESTO_OSX_VERSION` | `11.0` | Direct macOS solves | Injected virtual `__osx` version. |
+| `CONDA_PRESTO_WIN_VERSION` | `0` | Direct Windows solves | Injected virtual `__win` version. |
+
+Direct CLI and public HTTP solves apply these target-model overrides for every
+Linux, macOS, or Windows target, including the host's native subdir. They do
+not reuse host-detected virtual packages. The internal Presto solver does not
+use these four defaults. It serializes and restores the calling conda process's
+effective virtual package records, including overrides such as CUDA. Those
+records also participate in private solver cache identity.
+
+## HTTP server settings
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `CONDA_PRESTO_CHANNELS` | `conda-forge` | Comma-separated default channels when none are given in a request. Also used for cache warmup on server startup. |
-| `CONDA_PRESTO_ALLOWED_CHANNELS` | value of `CONDA_PRESTO_CHANNELS` | Comma-separated channel allowlist for the HTTP server. Set to `*` only for trusted deployments that intentionally accept caller-selected channels. |
-| `CONDA_PRESTO_PLATFORMS` | `linux-64,osx-arm64,osx-64` | Comma-separated platforms to pre-warm repodata caches for on server startup. |
-| `CONDA_PRESTO_CONCURRENCY` | `4` | Maximum concurrent solve requests (thread limiter). The Docker image and broker service set this to `1` for their persistent worker. |
-| `CONDA_PRESTO_WORKERS` | `min(4, cpu_count)` | Process pool size for multi-platform parallel solves. |
-| `CONDA_PRESTO_MAX_BODY_BYTES` | `1048576` (1 MB) | Maximum request body size in bytes. Returns HTTP 413 if exceeded. |
-| `CONDA_PRESTO_MAX_SPECS` | `200` | Maximum number of specs per request. Returns HTTP 400 if exceeded. |
-| `CONDA_PRESTO_MAX_CHANNELS` | `8` | Maximum number of channels per request. Returns HTTP 400 if exceeded. |
-| `CONDA_PRESTO_MAX_PLATFORMS` | `8` | Maximum number of platforms per request. Returns HTTP 400 if exceeded. |
-| `CONDA_PRESTO_MAX_REPAIR_SUGGESTIONS` | `5` | Maximum returned repair suggestions per request. |
-| `CONDA_PRESTO_MAX_REPAIR_ATTEMPTS` | `20` | Maximum repair candidates evaluated per request. |
-| `CONDA_PRESTO_MAX_REPAIR_TIME_BUDGET_MS` | `5000` | Maximum repair search wall-clock budget in milliseconds. |
-| `CONDA_PRESTO_MAX_INDEX_CACHE_ENTRIES` | `128` | Maximum number of in-process solver index cache entries. Set to `0` to disable index caching. |
-| `CONDA_PRESTO_SOLVE_TIMEOUT_S` | `60` | Per-request solve timeout in seconds. Returns HTTP 504 if exceeded. |
-| `CONDA_PRESTO_PARSE_TIMEOUT_S` | `10` | Per-request file parsing timeout in seconds. Returns HTTP 504 if exceeded. |
-| `CONDA_PRESTO_HOST` | `127.0.0.1` | Default bind address for `--serve` / `--host`. |
-| `CONDA_PRESTO_PORT` | `8000` | Default port for `--serve` / `--port`. |
-| `CONDA_PRESTO_PERSISTENT_WORKER` | `false` | Run HTTP solves in one worker that retains loaded repodata and indexes between requests. Set by the broker provider and the Docker server image. Normal servers should leave it disabled. |
-| `CONDA_PRESTO_RESULT_CACHE_SIZE` | `256` | Maximum total content-addressed `/resolve` responses and private solver cache entries retained by the in-process result cache. |
-| `CONDA_PRESTO_RESULT_CACHE_MAX_MEMORY_MB` | `64` | Maximum total payload megabytes retained by the in-process result cache. Set to `0` to disable the byte cap. |
-| `CONDA_PRESTO_RESULT_CACHE_BACKEND` | auto | Result cache backend: `memory`, `file`, or `redis`. Defaults to `redis` when `CONDA_PRESTO_RESULT_CACHE_REDIS_URL` is set, `file` when `CONDA_PRESTO_RESULT_CACHE_DIR` is set, otherwise `memory`. |
-| `CONDA_PRESTO_RESULT_CACHE_DIR` | unset | Directory for the `file` result cache backend. Public resolve and private solver entries use separate key namespaces. |
-| `CONDA_PRESTO_RESULT_CACHE_REDIS_URL` | unset | Redis URL for the `redis` result cache backend. If `CONDA_PRESTO_RESULT_CACHE_BACKEND=redis` is set without this value, `redis://localhost:6379/0` is used. |
-| `CONDA_PRESTO_RESULT_CACHE_REDIS_NAMESPACE` | `conda-presto` | Redis key namespace for result cache entries. |
-| `CONDA_PRESTO_SOLVER_CACHE_WARM_CANDIDATE_SIZE` | `32` | Maximum cache-warming candidates retained for `/solver/v1`. Up to the same number of requests outside the candidate catalog are retained. Set to `0` to disable recording. |
-| `CONDA_PRESTO_SOLVER_CACHE_WARM_CANDIDATE_PERSIST` | `false` | Persist candidates without detected credentials in a configured file or Redis result store. Requires a persistent result-cache backend. |
-| `CONDA_PRESTO_SOLVER_CACHE_WARM_INTERVAL_S` | `300` | Seconds between solver-cache refresh cycles. Set to `0` to disable scheduled refresh. |
-| `CONDA_PRESTO_SOLVER_CACHE_WARM_BATCH_SIZE` | `8` | Maximum cache-warming candidates considered in one refresh cycle. |
-| `CONDA_PRESTO_RATE_LIMIT` | `300` | Maximum requests per minute per client IP. Set to `0` to disable. Behind a reverse proxy, start uvicorn with `--forwarded-allow-ips` so the rate-limit key is the real client IP, not the proxy. |
-| `CONDA_PRESTO_CORS_ORIGINS` | disabled | Comma-separated allowed CORS origins. |
-| `CONDA_PRESTO_LOG_LEVEL` | `INFO` | Application log level (`DEBUG`, `INFO`, `WARNING`, `ERROR`). |
-| `CONDA_PRESTO_GLIBC_VERSION` | `2.17` | Virtual `__glibc` version injected for cross-platform Linux solves. |
-| `CONDA_PRESTO_LINUX_VERSION` | `5.15` | Virtual `__linux` version injected for cross-platform Linux solves. |
-| `CONDA_PRESTO_OSX_VERSION` | `11.0` | Virtual `__osx` version injected for cross-platform macOS solves. |
-| `CONDA_PRESTO_WIN_VERSION` | `0` | Virtual `__win` version injected for cross-platform Windows solves. |
+| `CONDA_PRESTO_PLATFORMS` | `linux-64,osx-arm64,osx-64` | Platforms whose configured channels are warmed before readiness. This is not the default platform list for a request. |
+| `CONDA_PRESTO_ALLOWED_CHANNELS` | value of `CONDA_PRESTO_CHANNELS` | Accepted HTTP request channels. `*` permits any channel. |
+| `CONDA_PRESTO_CONCURRENCY` | `4` | Maximum simultaneous foreground solve requests. Docker and the broker provider set `1`. |
+| `CONDA_PRESTO_MAX_BODY_BYTES` | `1048576` | Maximum HTTP request body. Excess returns HTTP 413. |
+| `CONDA_PRESTO_MAX_SPECS` | `200` | Maximum specs in one request. |
+| `CONDA_PRESTO_MAX_CHANNELS` | `8` | Maximum channels in one request. |
+| `CONDA_PRESTO_MAX_PLATFORMS` | `8` | Maximum platforms in one request. |
+| `CONDA_PRESTO_MAX_REPAIR_SUGGESTIONS` | `5` | Server ceiling for returned repair suggestions. |
+| `CONDA_PRESTO_MAX_REPAIR_ATTEMPTS` | `20` | Server ceiling for evaluated repair candidates. |
+| `CONDA_PRESTO_MAX_REPAIR_TIME_BUDGET_MS` | `5000` | Server ceiling for repair wall time in milliseconds. |
+| `CONDA_PRESTO_SOLVE_TIMEOUT_S` | `60` | HTTP solve timeout. Also sets the internal solver client and scheduled refresh ceiling where lower than their fixed limits. |
+| `CONDA_PRESTO_PARSE_TIMEOUT_S` | `10` | HTTP file-parse timeout. |
+| `CONDA_PRESTO_HOST` | `127.0.0.1` | Default for the `--host` server flag. The Docker command fixes `0.0.0.0`, and the broker provider fixes `127.0.0.1`. |
+| `CONDA_PRESTO_PORT` | `8000` | Default for the `--port` server flag. The broker assigns it. The Docker health check remains fixed to port 8000. |
+| `CONDA_PRESTO_PERSISTENT_WORKER` | `false` | Route HTTP solves through one worker that retains loaded repodata and indexes. Set by Docker and the broker provider. |
+| `CONDA_PRESTO_RATE_LIMIT` | `300` | Requests per minute per client IP. Set to `0` to disable. The broker provider sets `0`. |
+| `CONDA_PRESTO_CORS_ORIGINS` | unset | Comma-separated browser origins. CORS middleware is absent when unset. |
+| `CONDA_PRESTO_LOG_LEVEL` | `INFO` | Application logger level: `DEBUG`, `INFO`, `WARNING`, or `ERROR`. |
 
-### Virtual package overrides
+Request-cap violations return HTTP 400 unless the body limit applies. Repair
+query values below the configured ceilings narrow one request. Values above the
+ceilings are clamped.
 
-When solving for a foreign platform (e.g. `linux-64` from macOS),
-conda needs virtual packages (`__glibc`, `__linux`, `__osx`, `__win`)
-to be present for the target. conda-presto automatically injects
-sensible defaults via `context.override_virtual_packages`:
+## Result cache settings
 
-- Linux targets: `__glibc` at 2.17 (the conda-forge baseline) and
-  `__linux` at 5.15
-- macOS targets: `__osx` at 11.0 (Big Sur, the conda-forge arm64
-  baseline)
-- Windows targets: `__win` at 0 (usually unversioned on conda-forge)
+These settings apply to any HTTP application process, including Docker and the
+broker service. One-shot CLI output does not use the HTTP result cache.
 
-Override these defaults with the `CONDA_PRESTO_GLIBC_VERSION`,
-`CONDA_PRESTO_LINUX_VERSION`, `CONDA_PRESTO_OSX_VERSION`, and
-`CONDA_PRESTO_WIN_VERSION` variables.
-
-## Conda tuning variables
-
-The following conda environment variables are set via pixi activation
-to optimize for a solve-only workload. They apply to all environments
-in the conda-presto pixi workspace.
-
-| Variable | Value | Purpose |
+| Variable | Default | Purpose |
 |---|---|---|
-| `CONDA_SOLVER` | `rattler` | Use the fast rattler solver backend. |
-| `CONDA_CHANNEL_PRIORITY` | `strict` | Skip lower-priority channels early during solving. |
-| `CONDA_NO_LOCK` | `true` | Skip filesystem locking (safe for single-writer processes). |
-| `CONDA_UNSATISFIABLE_HINTS` | `false` | Skip expensive hint generation on solver failures. |
-| `CONDA_NUMBER_CHANNEL_NOTICES` | `0` | Suppress channel notices. |
-| `CONDA_AGGRESSIVE_UPDATE_PACKAGES` | `""` | Disable forced package updates. |
-| `CONDA_LOCAL_REPODATA_TTL` | `300` | Reuse downloaded repodata for 5 minutes before re-fetching. |
-| `CONDA_JSON` | `true` | Suppress progress bars and human-readable output. |
+| `CONDA_PRESTO_RESULT_CACHE_SIZE` | `256` | Combined in-process entry limit for public resolve responses and private solver final states. |
+| `CONDA_PRESTO_RESULT_CACHE_MAX_MEMORY_MB` | `64` | Combined encoded payload limit in MiB. Set to `0` to remove the byte cap. |
+| `CONDA_PRESTO_RESULT_CACHE_BACKEND` | automatic | `memory`, `file`, or `redis`. |
+| `CONDA_PRESTO_RESULT_CACHE_DIR` | unset | Directory required by the file backend. Selecting no backend but setting this value selects file storage. |
+| `CONDA_PRESTO_RESULT_CACHE_REDIS_URL` | unset | Redis URL. Selecting Redis without a URL uses `redis://localhost:6379/0`. Setting this value selects Redis when no backend is explicit. |
+| `CONDA_PRESTO_RESULT_CACHE_REDIS_NAMESPACE` | `conda-presto` | Redis key namespace. |
 
-These are configured in the `[tool.pixi.activation.env]` section of
-`pyproject.toml`. You can override any of them in your shell before
-running conda-presto. The conda-broker child overrides `CONDA_NO_LOCK=false`
-because its foreground and cache-refresh worker processes can access the shared
-repodata cache concurrently.
+Negative entry or memory limits are rejected. File storage without a directory
+and unknown backend names are also rejected. See {doc}`cache` for key and
+retention behavior.
+
+## Broker-only refresh settings
+
+These settings are loaded by every server process, but scheduled refresh is
+enabled only for the persistent `conda-presto.server` broker child.
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `CONDA_PRESTO_SOLVER_CACHE_WARM_CANDIDATE_SIZE` | `32` | Maximum recorded requests in the candidate catalog, plus the same observation capacity. Set to `0` to disable recording. |
+| `CONDA_PRESTO_SOLVER_CACHE_WARM_CANDIDATE_PERSIST` | `false` | Best-effort checkpointing of requests without detected credentials. Requires file or Redis storage. |
+| `CONDA_PRESTO_SOLVER_CACHE_WARM_INTERVAL_S` | `300` | Seconds between scheduled cycles. Set to `0` to disable scheduling. |
+| `CONDA_PRESTO_SOLVER_CACHE_WARM_BATCH_SIZE` | `8` | Maximum eligible requests considered per cycle. Must be positive. |
+
+The first cycle has a fixed 30-second delay. Fixed per-operation and cycle
+budgets are documented in {doc}`cache`.
+
+## Broker-injected variables
+
+conda-broker supplies these values to the service child. They are integration
+state, not normal user configuration.
+
+| Variable | Value | Consumer |
+|---|---|---|
+| `CONDA_BROKER_SERVICE_NAME` | `conda-presto.server` | Enables the guarded private solver route and scheduled refresh. |
+| `CONDA_PRESTO_URL` | Allocated loopback endpoint | Broker health-check command and service consumers. |
+| `CONDA_PRESTO_PORT` | Allocated port | Uvicorn bind configuration. |
+
+The provider also overrides host, concurrency, rate limiting,
+persistent-worker mode, and conda file locking. See {doc}`broker-service`.
+
+## Pixi activation settings
+
+The repository's Pixi environments set these conda variables for solve-only
+workloads:
+
+| Variable | Value | Effect |
+|---|---|---|
+| `CONDA_SOLVER` | `rattler` | Select rattler in conda context before conda-presto applies its direct-engine requirement. |
+| `CONDA_CHANNEL_PRIORITY` | `strict` | Prefer higher-priority channels. |
+| `CONDA_NO_LOCK` | `true` | Disable conda filesystem locking in the shared Pixi activation. The Docker server and broker child override this to `false`. |
+| `CONDA_UNSATISFIABLE_HINTS` | `false` | Disable conda's additional unsatisfiable hint generation. |
+| `CONDA_NUMBER_CHANNEL_NOTICES` | `0` | Suppress channel notices. |
+| `CONDA_AGGRESSIVE_UPDATE_PACKAGES` | empty | Disable forced aggressive updates. |
+| `CONDA_LOCAL_REPODATA_TTL` | `300` | Reuse local repodata under conda's effective cache policy. |
+| `CONDA_JSON` | `true` | Suppress progress-oriented conda output. |
+
+The Docker server applies `CONDA_NO_LOCK=false` after its Pixi shell hook, and
+the broker child injects the same value. Their persistent worker processes
+share conda's package cache. The one-shot CLI image keeps the Pixi activation
+default.
 
 ## See also
 
-- [CLI reference](cli.md)
-- [Configuration](configuration.md)
+- {doc}`configuration`
+- {doc}`cache`
+- {doc}`broker-service`
+- {doc}`solver-backend`

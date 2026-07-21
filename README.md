@@ -1,76 +1,90 @@
 # conda-presto
 
-A fast conda solve engine with a dry-run CLI and HTTP API. Given package specs
-or an environment file (`environment.yml`,
-`pixi.toml`, `pyproject.toml`, `requirements.txt`, conda-lock,
-pixi-lock, …), it resolves fully pinned packages for one or more
-platforms — without downloading or installing anything — and emits
-the result as native JSON or any conda exporter format
-(`pixi.lock`, `conda-lock.yml`, environment YAML, explicit file, …).
+conda-presto resolves conda package specifications without creating or changing an environment. It accepts inline specs or environment files, selects fully pinned packages for one or more platforms, and writes native JSON or a conda exporter format.
 
-The optional internal `conda --solver=presto` plugin delegates only final-state
-solving to the local broker service. For commands without `--dry-run`, conda
-still performs its normal package download and prefix transaction locally.
+The same solve engine is available through the `conda presto` CLI, a Litestar HTTP API, a GitHub Action, and an internal broker-backed `conda --solver=presto` plugin. The internal solver delegates only final-state selection. Conda still owns package downloads and prefix transactions locally.
 
-## Highlights
+## Capabilities
 
-- Resolve inline specs or any environment file format
-- Full package metadata: sha256, md5, urls, sizes, depends
-- Cross-platform solving with automatic virtual package injection
-- Multi-platform parallel solves via `ProcessPoolExecutor`
-- Output as JSON or any conda exporter format (`--format` / `?format=`)
-- Lockfile-to-lockfile transcode path that skips solving when possible
-- Review proposed environments with `/preflight`, `/diff`, and `/explain`
-- Content-addressed HTTP result cache with `/r/<sha256>` lookups and optional file or Redis backing
-- HTTP API with interactive docs (Scalar UI), compression, rate limiting
-- Optional broker-managed local service for repeated local HTTP solves
-- Internal `conda --solver=presto` backend with cached final-state solves through that local service
-- GitHub Action for CI pipelines (local CLI and hosted API modes)
-- Docker images for server and CLI deployment
-- Uses `conda-rattler-solver` for fast SAT solving
+- Resolve inline specs or supported environment and lockfile inputs selected through conda environment specifier plugins
+- Solve several target platforms with deterministic target virtual-package defaults
+- Write native package metadata or any installed conda exporter format
+- Convert covered lockfiles through `/transcode` without solving
+- Parse and review inputs through `/parse`, `/preflight`, `/repair`, `/diff`, and `/explain`
+- Retain HTTP results under content-addressed `/r/<hash>` locations with memory, file, or Redis storage
+- Run a persistent public HTTP worker in the server container
+- Run an opt-in broker-managed loopback service for repeated local work
+- Delegate internal conda final-state solves through `conda --solver=presto`
+- Record repeated solver requests and refresh missing or stale private final states during broker idle time
+- Resolve environments in GitHub Actions through local CLI or remote HTTP modes
+- Select packages with `conda-rattler-solver`
 
 ## Quick start
 
 ```bash
-pixi global install --git https://github.com/jezdez/conda-presto.git
-conda presto -c conda-forge -p linux-64 python=3.12 numpy
+conda create --name conda-presto \
+  --override-channels \
+  --channel conda-forge \
+  python=3.13 \
+  'conda>=26.5,<27' \
+  'conda-rattler-solver>=0.1.1,<0.2' \
+  'conda-lockfiles>=0.2.1' \
+  pip
+conda activate conda-presto
+python -m pip install conda-presto
+conda presto -c conda-forge -p linux-64 python=3.13 numpy
 ```
 
-## Run a server
+conda-presto is installed from PyPI into a conda environment that supplies conda and its solver plugins. It is not currently published as a conda package. See the [quick start](https://jezdez.github.io/conda-presto/quickstart/) for the current-main and source-checkout paths, file inputs, lockfile output, and the local HTTP server.
+
+The PyPI command installs the latest released version. The broker service, internal Presto solver, repair endpoint, and scheduled solver-cache refresh are currently unreleased on `main`. Use the current-main installation from the quick start until 0.7.0 is published.
+
+## Run the HTTP server
 
 ```bash
-docker run --rm -p 8000:8000 ghcr.io/jezdez/conda-presto:latest
-curl http://localhost:8000/health
+docker build -f docker/Dockerfile \
+  --target server \
+  --build-arg PIXI_ENV=prod \
+  --build-arg CONDA_PRESTO_VERSION=0.7.0.dev0 \
+  -t conda-presto-server:main .
+docker run --rm -p 127.0.0.1:8000:8000 conda-presto-server:main
+curl http://127.0.0.1:8000/health
 ```
 
-Pin a versioned image tag for deployments. See the [container configuration reference](https://jezdez.github.io/conda-presto/reference/configuration/) for server tuning and Redis result-cache setup.
+This builds the unreleased 0.7 server from the current checkout. After 0.7.0 is published, use the immutable `ghcr.io/jezdez/conda-presto:0.7.0` tag. The server image listens on port 8000 inside the container and runs one persistent foreground worker. It does not start conda-broker, expose the internal solver route, or run scheduled solver-cache refresh.
 
-The server image runs HTTP solves through one persistent worker. The worker
-retains loaded repodata and indexes between requests. The container does not
-start conda-broker.
+See [Run conda-presto with Docker](https://jezdez.github.io/conda-presto/how-to/run-with-docker/) and the [Docker image reference](https://jezdez.github.io/conda-presto/reference/docker-images/).
 
-## Run a broker-managed local service
+## Run the broker-managed service
 
-conda-presto registers a manual, loopback-only service with conda-broker. It
-does not start automatically or change normal `conda presto` commands. See the
-[broker-managed local service tutorial](https://jezdez.github.io/conda-presto/tutorials/broker-service/)
-to start the service and find its endpoint.
+conda-presto registers the manual `conda-presto.server` service with conda-broker. The service binds to a broker-assigned loopback port and keeps its foreground solver worker loaded between requests.
 
-The service can also back the internal `conda --solver=presto` backend. It
-remains loopback-only and is not available through the Docker server image. See
-the [Presto solver tutorial](https://jezdez.github.io/conda-presto/tutorials/solver-backend/).
+```bash
+conda broker start conda-presto.server
+conda broker wait conda-presto.server --timeout 180
+conda broker endpoint conda-presto.server
+```
+
+See [Run the broker-managed service](https://jezdez.github.io/conda-presto/how-to/run-broker-service/) for lifecycle, configuration capture, logs, and trust boundaries.
+
+## Use the internal Presto solver
+
+After the broker service is ready, select the internal backend for one conda operation:
+
+```bash
+conda create --dry-run --solver=presto -n demo -c conda-forge python=3.13
+```
+
+The backend is local-only and tied to the broker service. It is not a remote solver protocol and is not available through the Docker server image. See [Use the Presto solver](https://jezdez.github.io/conda-presto/how-to/use-presto-solver/) and the [solver reference](https://jezdez.github.io/conda-presto/reference/solver-backend/).
 
 ## Documentation
 
-Full documentation is available at the [conda-presto docs site](https://jezdez.github.io/conda-presto/):
-
-- [Quick start](https://jezdez.github.io/conda-presto/quickstart/) — install and first resolve
-- [CLI tutorial](https://jezdez.github.io/conda-presto/tutorials/cli-resolve/) — in-depth CLI usage
-- [HTTP API tutorial](https://jezdez.github.io/conda-presto/tutorials/http-api/) — HTTP workflows
-- [CI pipeline](https://jezdez.github.io/conda-presto/tutorials/ci-pipeline/) — GitHub Action setup
-- [Reference](https://jezdez.github.io/conda-presto/reference/) — CLI flags, endpoints, formats, env vars
-- [Architecture](https://jezdez.github.io/conda-presto/explanation/architecture/) — how it works
-- [Roadmap](https://jezdez.github.io/conda-presto/proposals/) — shipped foundations and linked future work
+- [Tutorials](https://jezdez.github.io/conda-presto/tutorials/) for guided CLI, HTTP, review, and local-service workflows
+- [How-to guides](https://jezdez.github.io/conda-presto/how-to/) for Docker, broker, cache, monitoring, troubleshooting, and CI tasks
+- [Reference](https://jezdez.github.io/conda-presto/reference/) for exact interfaces, service contracts, cache behavior, and configuration
+- [Explanation](https://jezdez.github.io/conda-presto/explanation/) for architecture, deployment models, review semantics, caching, performance, and security
+- [Roadmap](https://jezdez.github.io/conda-presto/proposals/) for shipped streams and linked future work
+- [Changelog](https://jezdez.github.io/conda-presto/changelog/) for release history
 
 ## Development
 
@@ -78,12 +92,12 @@ Full documentation is available at the [conda-presto docs site](https://jezdez.g
 git clone https://github.com/jezdez/conda-presto.git
 cd conda-presto
 pixi install
-pixi run lint        # ruff check
-pixi run format      # ruff format
-pixi run test        # pytest
-pixi run bench       # pytest-benchmark
-pixi run serve       # uvicorn with --reload
-pixi run -e docs docs  # build documentation
+pixi run lint
+pixi run format
+pixi run -e test test
+pixi run -e test bench
+pixi run serve
+pixi run -e docs docs
 ```
 
 ## License

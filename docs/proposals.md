@@ -1,8 +1,8 @@
 # Roadmap
 
-Detailed future design records live in GitHub issues so discussion, ownership,
-labels, and status changes stay in one place. This page is the compact roadmap
-index.
+Detailed design records live in GitHub issues so discussion and ownership stay
+with the work. This page is the compact release-status index for the current
+codebase.
 
 ## Status legend
 
@@ -22,36 +22,21 @@ index.
 
 | Issue | Status | Summary |
 |---|:---:|---|
-| [Preflight validation](https://github.com/jezdez/conda-presto/issues/16) | {bdg-success}`shipped` | Fast local validation and lint-style findings |
+| [Preflight validation](https://github.com/jezdez/conda-presto/issues/16) | {bdg-success}`shipped` | Deterministic local input checks and lint-style findings |
 | [Environment / lockfile diff](https://github.com/jezdez/conda-presto/issues/14) | {bdg-success}`shipped` | Platform-aware comparisons between resolved environments and covered lockfiles |
 | [Explain package inclusion](https://github.com/jezdez/conda-presto/issues/15) | {bdg-success}`shipped` | Bounded dependency-chain explanations for successful single-platform solves |
 
-## Upcoming streams
-
-`````{tab-set}
-
-````{tab-item} Capability
-
-New solver-facing verbs and review surfaces.
+## v0.7 repair and solver service
 
 | Issue | Status | Summary |
 |---|:---:|---|
-| [Repair suggestions](https://github.com/jezdez/conda-presto/issues/13) | {bdg-warning}`in progress` | Single-spec relaxations for infeasible solves |
-````
+| [Repair suggestions](https://github.com/jezdez/conda-presto/issues/13) | {bdg-success}`shipped` | Tested single-spec relaxations for infeasible solves |
+| [Broker-managed local service](https://github.com/jezdez/conda-presto/issues/39) | {bdg-success}`shipped` | Manual loopback HTTP service with a persistent solver worker |
+| [Internal conda solver backend](https://github.com/jezdez/conda-presto/issues/40) | {bdg-success}`shipped` | Local final-state delegation through the broker service |
+| [Recorded solver requests](https://github.com/jezdez/conda-presto/issues/77) | {bdg-success}`shipped` | Bounded request catalog for scheduled solver-cache refresh |
+| [Scheduled solver-cache refresh](https://github.com/jezdez/conda-presto/issues/78) | {bdg-success}`shipped` | Foreground-aware refresh of missing or stale private final states |
 
-````{tab-item} Integration
-
-Long-lived local service and conda solver integration.
-
-| Issue | Status | Summary |
-|---|:---:|---|
-| [Broker-managed local service](https://github.com/jezdez/conda-presto/issues/39) | {bdg-warning}`in progress` | Broker-managed loopback HTTP service that retains loaded repodata and indexes between requests |
-| [Internal conda solver backend](https://github.com/jezdez/conda-presto/issues/40) | {bdg-warning}`in progress` | Broker-only loopback delegation and caching of final-state solves through private rattler APIs |
-| [Solver requests for cache warming](https://github.com/jezdez/conda-presto/issues/77) | {bdg-warning}`in progress` | Record successful cacheable foreground requests for scheduled cache refreshes |
-| [Refresh cached solver results in the broker](https://github.com/jezdez/conda-presto/issues/78) | {bdg-warning}`in progress` | Replay recorded requests for missing or stale entries when no foreground solve is active or waiting |
-````
-
-````{tab-item} Trust
+## Future work
 
 Provenance, attestation serving, admission control, and CEP alignment.
 
@@ -62,23 +47,20 @@ Provenance, attestation serving, admission control, and CEP alignment.
 | [Serving solve attestations](https://github.com/jezdez/conda-presto/issues/22) | {bdg-secondary}`proposed` | Durable `/r/<hash>/attestation` URL and `Link` header |
 | [Policy and admission engine](https://github.com/jezdez/conda-presto/issues/23) | {bdg-secondary}`proposed` | Policy checks over solved artifacts before installation |
 | [CEP draft: solve attestation predicate](https://github.com/jezdez/conda-presto/issues/24) | {bdg-secondary}`proposed` | Draft CEP text for a solve attestation predicate |
-````
-
-`````
 
 ## Dependency graph
 
 ```{mermaid}
 graph TD
     T["transcode\n(shipped)"] --> PF["preflight + lint\n(shipped)"]
-    T --> RPR["repair suggestions"]
+    T --> RPR["repair suggestions\n(shipped)"]
     T --> D["diff\n(shipped)"]
     T --> E["explain\n(shipped)"]
     P["result cache + permalink\n(shipped)"] --> PV["provenance fields"]
-    P --> B["broker-managed local service"]
-    B --> FS["internal Presto solver backend"]
-    FS --> WC["recorded solver requests"]
-    WC --> CW["solver cache warming"]
+    P --> B["broker-managed local service\n(shipped)"]
+    B --> FS["internal Presto solver backend\n(shipped)"]
+    FS --> WC["recorded solver requests\n(shipped)"]
+    WC --> CW["scheduled solver-cache refresh\n(shipped)"]
     PF --> RPR
     E --> RPR
     PV --> A["signed provenance"]
@@ -90,7 +72,7 @@ graph TD
     GH --> D
 
     classDef shipped fill:#e6f4ea,stroke:#1e7e34,color:#0b3d1f;
-    class T,P,GH,PF,D,E shipped;
+    class T,P,GH,PF,D,E,RPR,B,FS,WC,CW shipped;
 ```
 
 Diff and explain can use existing lockfile records when the requested platform
@@ -106,9 +88,9 @@ lowest-ranked candidate.
 
 ## Conventions
 
-- One issue per proposal.
-- Keep the issue body as the complete design record.
-- Status updates happen in this index and on the linked issue.
-- Proposal status and stream live as issue labels.
+- Use one issue per planned change.
+- Keep the issue body as the complete design record while work is active.
+- Use this page for shipped status and release grouping.
+- Treat closed issues as historical design and discussion records.
 - No marketing in proposals. Each issue must justify itself in its own problem
   statement.

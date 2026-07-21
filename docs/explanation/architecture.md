@@ -1,150 +1,125 @@
 # How conda-presto works
 
-The `conda presto` command and HTTP API are a solve-only bridge between conda
-input formats and conda output formats. They read specs or environment files,
-resolve fully pinned package records for one or more platforms, and write JSON
-or a conda exporter format without creating prefixes or installing packages.
+conda-presto is a solve-only bridge around conda. It reads package specs or
+environment files, selects package records for one or more platforms, and emits
+native JSON or a conda exporter format. It does not download package payloads,
+create prefixes, or run installation transactions.
 
-The optional internal `conda --solver=presto` plugin uses the same solve engine
-through the local broker service. The service returns only a final package
-state. conda computes and executes any requested prefix transaction locally.
+The internal `conda --solver=presto` plugin adds a separate local path. It
+delegates final-state selection to the broker service, then returns control to
+the calling conda process for transaction planning and execution.
 
-## Data flow
+## Public resolve flow
 
 ```{mermaid}
 flowchart LR
-    A["Request\n(specs or file)"] --> B["Input parser\n(env-spec plugin)"]
-    B --> C{"Lockfile fast path?"}
-    C -->|"yes"| D["Reuse package records\nfrom input lockfile"]
-    C -->|"no"| E["Solve\n(conda-rattler-solver)"]
-    E --> F["Result cache\n/r/<hash>"]
-    D --> G["Exporter or\nnative JSON"]
-    F --> G
-    G --> H["CLI stdout or\nHTTP response"]
+    A["Request\n(specs or file)"] --> B["Input adapter\n(conda env-spec registry)"]
+    B --> C{"Operation"}
+    C -->|"resolve"| D["Rattler solve"]
+    C -->|"covered lockfile"| E["Reuse package records"]
+    D --> F["Native JSON or\nconda exporter"]
+    E --> F
+    F --> G["CLI output or\nHTTP response"]
 ```
 
-The `/transcode` endpoint and the CLI lockfile-to-lockfile path take the fast
-branch only when the input is already a lockfile, the requested platforms are
-present in that lockfile, the requested output format is also a lockfile, and
-the request does not add specs or override channels. Everything else is a solve.
+`/transcode` and the CLI lockfile conversion path reuse records only when the
+input is a lockfile, every requested platform is present, the output is another
+lockfile format, and no extra specs or channel overrides require a solve.
+`/diff` and `/explain` can also use covered lockfile records.
 
-## Input
+## Input adapters
 
-Input parsing is delegated to conda's env-spec plugin registry. That keeps
-conda-presto out of the business of hand-parsing every file format. Installed
-env-spec plugins decide how to read files such as:
+File detection and parsing are delegated to conda's environment specifier
+registry. The supported adapters cover environment YAML, requirements files,
+and the conda-lock and rattler-lock formats supplied by conda-lockfiles. Other
+installed plugins can participate when they return conda's `Environment` model
+or the multi-platform lockfile interface used by the adapter.
 
-- `environment.yml`
-- `pixi.toml`
-- `pyproject.toml`
-- `requirements.txt`
-- `conda-lock.yml`
-- `pixi.lock`
+Conda's explicit-file specifier does not expose that multi-platform lockfile
+interface, so explicit files are not accepted as input. The explicit exporter
+remains available as an output format.
 
-Inline command-line specs and HTTP query/body specs skip file parsing and go
-straight into the solve request.
+The CLI and HTTP layer turn parsed files and inline arguments into the same
+spec, channel, and platform inputs. HTTP raw uploads use Litestar's parsed media
+type plus an optional filename hint to select the file adapter.
 
-## Inspecting environments
+## Review operations
 
-The inspection endpoints separate questions that can be answered from input
-alone from questions that need selected package records. `/preflight` parses
-and applies deterministic local checks without contacting a channel or running
-the solver. A successful preflight therefore says that the input is well
-formed; it does not establish that the environment is satisfiable.
+The review endpoints are separate from resolve because each one has a different
+evidence boundary.
 
-`/diff` and `/explain` operate on resolved packages. Diff compares two
-environments per platform and can reuse records from a lockfile that already
-covers the requested platform; other inputs require a solve. Explain is
-single-platform because it traces dependency edges from the requested specs to
-one selected package. Its traversal is bounded, and `complete: false` signals
-that the local package metadata could not account for every edge.
+- `/parse` extracts specs and channels from a file.
+- `/preflight` applies deterministic local checks without channel access.
+- `/repair` runs a bounded search over supported single-spec relaxations.
+- `/diff` compares selected package records for two inputs.
+- `/explain` walks dependency chains in one selected package state.
 
-## Solving
+Repair, diff, and explain can invoke the same solver path as resolve. Preflight
+cannot establish satisfiability because it deliberately avoids channels and the
+solver. See {doc}`environment-review` for the complete model.
 
-Solving is handled by `conda-rattler-solver`. For multi-platform requests,
-conda-presto dispatches each target platform through a persistent
-`ProcessPoolExecutor`. Each worker retains loaded repodata and indexes across
-requests.
+## Direct solve engine
 
-Cross-platform solving relies on virtual package injection. When solving for a
-foreign target such as `linux-64` from macOS, conda-presto sets the target
-subdir and virtual package values (`__glibc`, `__linux`, `__osx`, `__win`) on
-conda's context before constructing the solver input.
+Direct CLI and public HTTP solves use `conda-rattler-solver`. conda-presto sets
+the target platform and deterministic target virtual-package overrides on
+conda's context before building the solver input, including for the host's
+native subdir. The direct engine is fixed to the rattler backend.
 
-The default HTTP and CLI output path returns lightweight `msgspec.Struct`
-objects. The exporter path returns conda `Environment` objects because conda
-exporter plugins consume that model directly.
+Multi-platform requests dispatch one solve per platform. A process pool keeps
+platform work isolated from conda's process-global context. Persistent server
+modes also retain loaded repodata and solver indexes between requests.
 
-## Output
+The native output path converts selected records into lightweight msgspec
+structures. The exporter path keeps conda `Environment` objects because conda
+exporter plugins consume that model.
 
-Without `--format` or `?format=`, conda-presto emits native JSON: one
-`SolveResult` per requested platform, each containing resolved package records
-or a per-platform error string.
+## Internal solver delegation
 
-With `--format` or `?format=`, conda-presto routes successful solved
-environments through conda's exporter plugin registry. This exposes built-in
-formats such as `explicit` and plugin-provided formats such as `conda-lock-v1`
-and `pixi-lock-v6` without separate output implementations.
+```{mermaid}
+sequenceDiagram
+    participant C as Calling conda
+    participant B as conda-broker
+    participant P as conda-presto service
+    C->>B: Discover ready conda-presto.server
+    C->>P: POST private solver state to /solver/v1
+    P->>P: Check final-state cache or solve with rattler
+    P-->>C: Return final package records
+    C->>C: Compute and execute local transaction
+```
 
-## Caching
+The solver client serializes the state that affects final package selection,
+including installed records, history, pins, requested changes, channel order,
+settings, and the caller's effective virtual packages. It omits the prefix path
+and file inventory.
 
-conda-presto has three caching layers:
+The service reconstructs the rattler input state and returns package records.
+Only the broker-managed loopback service enables this private route. The public
+server and Docker image do not.
 
-On-disk repodata cache
-: conda's standard cache for channel metadata. It is shared with other conda
-  tools and expires according to conda's repodata TTL settings.
+## Cache and process ownership
 
-In-memory solver index cache
-: a `RattlerIndexHelper` is cached by `(channels, platform)` inside each
-  process. Repeated solves reuse it until conda's repodata policy requires a
-  refresh, at which point the cached index reloads its channels before solving.
+The HTTP application owns the bounded result cache and any configured Litestar
+file or Redis store. Its foreground solver resources start before the optional
+scheduled refresh task and stop after that task has drained.
 
-Result cache
-: successful HTTP `/resolve` responses and internal `/solver/v1` final states
-  share a bounded in-process LRU backed optionally by Litestar file or Redis
-  stores. Resolve entries use content-addressed `resolve-v1:` keys and public
-  `/r/<hash>` permalinks. Solver entries use private `solver-v1:` keys with no
-  public retrieval route. A solver key hashes serialized request fields and
-  dependency versions. Its value includes the repodata cache-file URL, source,
-  size, modification-time, and freshness markers recorded by the worker after
-  index collection. Cache reuse is bypassed when conda requires a metadata
-  refresh or the current markers differ. A retained result after refresh
-  replaces the existing entry for that request key.
+The broker service owns one persistent foreground worker. Scheduled refresh
+creates a separate worker only when a cycle needs to recompute a recorded
+request, reuses it within that cycle, and stops it at the end of the cycle.
 
-Cache-warming candidates and scheduled refresh
-: successful foreground `/solver/v1` requests are recorded in a process-local
-  catalog. The broker child checks eligible candidates and
-  refreshes missing or stale final-state entries in a dedicated worker without
-  borrowing the foreground limiter or worker. Ordered Litestar lifespan
-  context managers own solver resources first and the scheduler task group
-  second. The resource lifespan enters the result store before its foreground
-  worker and owns one serialized store-operation queue. Shutdown unwinds the
-  scheduler, drains admitted reads and writes, stops the worker, and then closes
-  the store.
+The Docker server also owns one persistent foreground worker, but it restarts a
+failed worker itself and never starts the broker-only scheduler.
 
-## HTTP layer
-
-The HTTP API is a Litestar app served by uvicorn. The server adds compression,
-CORS handling, rate limiting, request body limits, a solve timeout, startup
-cache warmup, a health endpoint, OpenAPI, and interactive API documentation.
-
-The server is optional. The same core parsing, solving, transcode, and export
-helpers are used by the `conda presto` CLI path.
+See {doc}`caching-and-freshness` for the freshness model and
+{doc}`deployment-models` for mode boundaries.
 
 ## Plugin integration
 
-conda-presto registers as a conda subcommand. Normal one-shot use is:
+conda-presto registers three integrations:
 
-```bash
-conda presto -f environment.yml -p linux-64 --format pixi-lock-v6
-```
+- `conda presto` through conda's subcommand plugin hook
+- `presto` through conda's solver plugin hook
+- `conda-presto.server` through conda-broker's service provider hook
 
-Server use is:
-
-```bash
-conda presto --serve
-```
-
-The project also relies on conda's env-spec and exporter plugin registries, so
-new parser or exporter plugins become available without conda-presto-specific
-registration code.
+It also consumes conda's environment specifier and exporter registries. New
+installed parser and exporter plugins become available without adding a
+conda-presto-specific format implementation.

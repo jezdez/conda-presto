@@ -36,8 +36,11 @@ ENTRYPOINT ["/app/entrypoint.sh", "conda", "presto"]
 
 FROM production AS server
 
-ENV CONDA_PRESTO_CONCURRENCY=1 \
+ENV CONDA_NO_LOCK=false \
+    CONDA_PRESTO_CONCURRENCY=1 \
     CONDA_PRESTO_PERSISTENT_WORKER=1
+
+ENTRYPOINT ["/app/entrypoint.sh", "env", "CONDA_NO_LOCK=false", "conda", "presto"]
 
 EXPOSE 8000
 

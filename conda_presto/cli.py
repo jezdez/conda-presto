@@ -66,9 +66,9 @@ def configure_parser(parser: argparse.ArgumentParser):
         action="append",
         default=[],
         dest="files",
-        help="Read package specs from file (any format supported by "
-        "conda's env spec plugins: environment.yml, requirements.txt, "
-        "explicit lockfiles, etc.). May be specified multiple times.",
+        help="Read package specs from a supported environment or lockfile "
+        "through conda's env spec plugins. Explicit package-list files are "
+        "output-only. May be specified multiple times.",
     )
 
     output_group = parser.add_argument_group("Output Format")
@@ -222,7 +222,12 @@ def cmd_serve(args: argparse.Namespace):
     """
     import uvicorn
 
-    uvicorn.run("conda_presto.app:app", host=args.host, port=args.port)
+    uvicorn.run(
+        "conda_presto.app:app",
+        host=args.host,
+        port=args.port,
+        access_log=False,
+    )
 
 
 def main():

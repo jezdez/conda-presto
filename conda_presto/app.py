@@ -1889,7 +1889,13 @@ def build_cors_config(origins: list[str]) -> CORSConfig | None:
     return CORSConfig(allow_origins=origins)
 
 
-middleware = [LoggingMiddlewareConfig(exclude=r"^/solver/v1$").middleware]
+middleware = [
+    LoggingMiddlewareConfig(
+        exclude=r"^/solver/v1$",
+        request_log_fields=("path", "method", "content_type"),
+        response_log_fields=("status_code",),
+    ).middleware
+]
 if RATE_LIMIT:
     middleware.append(RateLimitConfig(rate_limit=("minute", RATE_LIMIT)).middleware)
 
