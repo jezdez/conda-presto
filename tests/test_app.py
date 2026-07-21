@@ -828,10 +828,12 @@ def test_build_cors_config_disabled_without_origins():
     assert build_cors_config([]) is None
 
 
-def test_solver_v1_is_excluded_from_request_logging():
+def test_http_logging_excludes_sensitive_request_data():
     logging_config = app_module.middleware[0].kwargs["config"]
 
     assert logging_config.exclude == r"^/solver/v1$"
+    assert logging_config.request_log_fields == ("path", "method", "content_type")
+    assert logging_config.response_log_fields == ("status_code",)
 
 
 def test_build_cors_config_enabled_for_explicit_origins():

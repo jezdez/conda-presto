@@ -1,184 +1,111 @@
-# CLI resolve
+# Create a multi-platform lockfile
 
-This tutorial walks through the `conda presto` subcommand, from
-basic one-shot solves to multi-platform lockfile pipelines.
+This tutorial starts with a small `environment.yml`, resolves it for Linux and
+macOS, and writes a `pixi.lock`. Along the way, it shows the difference between
+conda-presto's native result and an exporter result.
 
-## Prerequisites
+## Before you start
 
-Install conda-presto globally with [pixi](https://pixi.sh):
-
-```bash
-pixi global install --git https://github.com/jezdez/conda-presto.git
-```
-
-Verify the installation:
+Install conda-presto with {doc}`../quickstart`, then verify the subcommand:
 
 ```bash
 conda presto --help
 ```
 
-## Basic resolve
+Create a working directory containing this `environment.yml`:
 
-The simplest invocation takes inline specs, a channel, and a target
-platform:
+```yaml
+name: science
+channels:
+  - conda-forge
+dependencies:
+  - python=3.13
+  - numpy
+  - pandas
+```
+
+conda-presto reads this file through conda's environment specifier registry.
+It does not create the `science` environment.
+
+## Inspect the native solve result
+
+First resolve only Linux and keep the native JSON:
 
 ```bash
-conda presto -c conda-forge -p linux-64 python=3.12 numpy
+conda presto -f environment.yml -p linux-64 > linux-result.json
 ```
 
-The output is a JSON array with one entry per platform. Each entry
-contains the full dependency closure: package names, versions, builds,
-URLs, SHA256 hashes, and dependency metadata.
-
-You can pass as many specs as you like:
+Confirm that the solve succeeded:
 
 ```bash
-conda presto -c conda-forge -p linux-64 python=3.12 scipy pandas matplotlib
+jq '.[0] | {platform, package_count: (.packages | length), error}' linux-result.json
 ```
 
-## Resolving from an environment file
+The result has one platform, a nonzero package count, and an `error` value of
+`null`. Native JSON can represent a failure for one platform while preserving
+successful results for the others.
 
-Instead of inline specs, pass an environment file with `-f`:
+## Add another platform
+
+Request Linux and Apple silicon macOS:
 
 ```bash
-conda presto -f environment.yml -p linux-64
+conda presto -f environment.yml \
+  -p linux-64 \
+  -p osx-arm64 > multi-platform-result.json
 ```
 
-Any format that conda's env-spec plugins understand works here,
-including `environment.yml`, `pixi.toml`, `pyproject.toml`,
-`requirements.txt`, `conda-lock.yml`, and `pixi.lock`.
-
-You can also merge multiple files into a single solve:
+Inspect the result order and package counts:
 
 ```bash
-conda presto -f environment.yml -f extra-deps.yml -p linux-64
+jq -r '.[] | "\(.platform): \(.packages | length) packages"' multi-platform-result.json
 ```
 
-## Multi-platform solves
+The output order follows the `-p` arguments even though the solves may run in
+parallel.
 
-Pass multiple `-p` flags to solve for several platforms at once.
-The solves run in parallel:
+## Write a pixi.lock
+
+Run the same solve through the `pixi-lock-v6` exporter:
 
 ```bash
-conda presto -f environment.yml -p linux-64 -p osx-arm64
+conda presto -f environment.yml \
+  -p linux-64 \
+  -p osx-arm64 \
+  --format pixi-lock-v6 > pixi.lock
 ```
 
-The JSON output contains one entry per platform:
+Exporter output is a single document, so every requested platform must solve
+successfully. The native JSON path is the better diagnostic form when you need
+per-platform errors.
 
-```text
-[
-  {"platform": "linux-64", "packages": [...], "error": null},
-  {"platform": "osx-arm64", "packages": [...], "error": null}
-]
-```
-
-If the solve fails on one platform but succeeds on another, the
-failed platform carries an `"error"` string while the others still
-return their results.
-
-## Output formats
-
-By default, conda-presto emits its native JSON format. Pass
-`--format` to route the output through conda's exporter plugins
-instead.
-
-### Explicit lockfile
-
-The `@EXPLICIT` format is a plain text file with one URL per line,
-suitable for `conda create --file`:
+Confirm that the lockfile contains both platforms:
 
 ```bash
-conda presto -c conda-forge -p linux-64 --format explicit python=3.12 numpy
+rg 'linux-64|osx-arm64' pixi.lock
 ```
 
-### conda-lock
+## Reuse the lockfile
 
-Generate a `conda-lock.yml` file (v1 format):
+conda-presto can read the lockfile through the same conda plugin system:
 
 ```bash
-conda presto -f environment.yml -p linux-64 -p osx-arm64 --format conda-lock-v1 > conda-lock.yml
+conda presto -f pixi.lock \
+  -p linux-64 \
+  --format conda-lock-v1 > conda-lock.yml
 ```
 
-### pixi.lock
+Because the requested platform is already present and both formats are
+lockfiles, this conversion reuses package records without solving again.
 
-Generate a `pixi.lock` file (rattler-lock v6):
+## What you learned
 
-```bash
-conda presto -f environment.yml -p linux-64 -p osx-arm64 --format pixi-lock-v6 > pixi.lock
-```
+- `conda presto` resolves without installing packages.
+- Native JSON keeps one result per platform and can represent partial failure.
+- `--format` uses conda exporter plugins and requires successful environments.
+- Lockfile-to-lockfile conversion can skip solving when the input covers every
+  requested platform.
 
-### All available formats
-
-The following formats are available out of the box via `conda-lockfiles`:
-
-| Format name | Aliases | Description |
-|---|---|---|
-| `explicit` | | `@EXPLICIT` URL-per-line lockfile |
-| `environment-yaml` | `yaml`, `yml`, `env.yml` | `environment.yml` |
-| `environment-json` | `json` | JSON environment spec |
-| `requirements` | `reqs`, `txt` | pip-style requirements |
-| `conda-lock-v1` | | `conda-lock.yml` |
-| `rattler-lock-v6` | `pixi-lock-v6` | `pixi.lock` |
-
-Any additional formats registered by other exporter plugins are
-picked up automatically.
-
-## Pipeline: environment.yml to pixi.lock
-
-Because conda-presto reads any format conda understands and writes
-any exporter format, you can pipe them together into a lockfile
-creation workflow:
-
-```bash
-conda presto -f environment.yml --format pixi-lock-v6 > pixi.lock
-conda env create -n demo -f pixi.lock
-```
-
-The second step uses `conda-lockfiles`' env-spec loader, so `pixi.lock`
-is just another input format to conda. The same pattern works for
-any pair of formats:
-
-```bash
-# pyproject.toml to conda-lock.yml
-conda presto -f pyproject.toml -p linux-64 --format conda-lock-v1 > conda-lock.yml
-
-# requirements.txt to explicit lockfile
-conda presto -f requirements.txt -c conda-forge -p linux-64 --format explicit > lockfile.txt
-```
-
-If both sides are lockfile formats and the requested platforms are
-already present in the input lockfile, conda-presto reuses the package
-records and skips the solver:
-
-```bash
-conda presto -f pixi.lock -p linux-64 --format conda-lock-v1 > conda-lock.yml
-```
-
-```{tip}
-When using `--format`, a solver failure on any platform raises the
-whole command because exporters only operate on successful solves.
-Drop `--format` when you want per-platform partial results in JSON.
-```
-
-## Cross-platform virtual packages
-
-When solving for a foreign platform (for example, solving for
-`linux-64` from macOS), conda needs virtual packages like `__glibc`,
-`__linux`, and `__osx` to be present for the target platform.
-conda-presto injects sensible defaults automatically:
-
-| Platform | Virtual packages | Defaults |
-|---|---|---|
-| linux | `__glibc`, `__linux` | 2.17, 5.15 |
-| osx | `__osx` | 11.0 |
-| win | `__win` | 0 |
-
-Override these via environment variables if your target environment
-needs different versions:
-
-```bash
-CONDA_PRESTO_GLIBC_VERSION=2.28 conda presto -c conda-forge -p linux-64 python=3.12
-```
-
-See the [environment variables reference](../reference/environment-variables.md)
-for the full list.
+For individual CLI tasks, see {doc}`../how-to/resolve-from-cli` and
+{doc}`../how-to/transcode-lockfiles`. Exact flags are in
+{doc}`../reference/cli`.

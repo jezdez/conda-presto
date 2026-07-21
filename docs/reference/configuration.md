@@ -1,328 +1,165 @@
-# Configuration
+# Configuration reference
 
-This page covers deployment, cache, Docker, and development configuration for
-conda-presto.
+conda-presto reads application settings from environment variables when its
+configuration module is imported. Conda settings come from the active conda
+context. Command-line flags override only the settings represented by those
+flags.
 
-## Docker images
+Exact environment-variable names, defaults, and scopes are listed in
+{doc}`environment-variables`.
 
-Two image flavors are published to GitHub Container Registry on every
-release, for both `linux/amd64` and `linux/arm64`.
+## Configuration loading
 
-### Server image
+Application settings are process configuration. Changing an environment
+variable after the process imports conda-presto does not update that process.
 
-The server image starts the HTTP API by default:
+Integer settings accept decimal integer strings. Boolean settings accept
+`1`, `true`, or `yes` and `0`, `false`, or `no`, without regard to case. Empty
+values use the default. Ambiguous boolean values and invalid integers fail
+during application import with a configuration error.
 
-```bash
-docker run -p 8000:8000 ghcr.io/jezdez/conda-presto:latest
-```
+Comma-separated list settings strip surrounding whitespace and omit empty
+items.
 
-The server starts one persistent worker process. On startup, it loads repodata
-and indexes for the configured channels and platforms. Single-platform requests
-run in that process. For multi-platform requests, the worker coordinates a
-persistent process pool whose size is controlled by `CONDA_PRESTO_WORKERS`.
-After a solve times out, the server reports unavailable until a replacement
-worker has loaded its indexes.
+Additional validation rejects:
 
-### CLI image
+- negative result-cache entry or memory limits
+- an unknown result-cache backend
+- negative recorded-request catalog size
+- candidate persistence with a memory-only backend
+- a negative refresh interval
+- a refresh batch size below one
+- repair suggestion, attempt, or time limits below one
 
-The CLI image runs `conda presto` directly. Pass arguments after the
-image name:
+## Deployment profiles
 
-```bash
-docker run ghcr.io/jezdez/conda-presto:cli -c conda-forge -p linux-64 zlib
-docker run ghcr.io/jezdez/conda-presto:cli -f environment.yml -p linux-64
-```
+| Profile | Process behavior | Public HTTP | Private solver | Scheduled refresh |
+|---|---|:---:|:---:|:---:|
+| `conda presto` | One-shot direct rattler solve | no | no | no |
+| `conda presto --serve` | Litestar server with normal request execution | yes | no | no |
+| Docker server | One persistent foreground worker | yes | no | no |
+| Broker service | One persistent foreground worker managed by conda-broker | loopback | loopback | yes |
 
-### Available tags
+The Docker image sets `CONDA_PRESTO_CONCURRENCY=1` and
+`CONDA_PRESTO_PERSISTENT_WORKER=1`. Its command fixes the bind host at
+`0.0.0.0`. Its built-in health check always uses container port 8000. See
+{doc}`docker-images` before overriding the application port.
 
-| Tag | Image | Description |
+The broker provider injects a loopback host, one foreground request slot,
+persistent-worker mode, disabled HTTP rate limiting, and enabled conda file
+locking. It also supplies the broker service identity and allocated endpoint.
+See {doc}`broker-service` for the exact child environment.
+
+## Channels and platforms
+
+`CONDA_PRESTO_CHANNELS` provides HTTP fallback channels when an input and
+request do not specify them. The CLI uses it only when conda's effective
+channels are empty or exactly `defaults` and no input file supplies channels.
+`CONDA_PRESTO_PLATFORMS` supplies startup warmup targets. It does not become the
+default target list for an ordinary solve, which uses the host platform when no
+platform is requested.
+
+The HTTP server checks requested channels against
+`CONDA_PRESTO_ALLOWED_CHANNELS`. The default allowlist is the configured
+fallback channel list. A value of `*` accepts arbitrary caller-selected
+channels and should be used only inside an appropriate trust and network-egress
+boundary.
+
+## Startup and readiness
+
+An ordinary server loads the configured channel and platform metadata during
+application startup. This primes conda's on-disk repodata cache, but foreground
+requests run in fresh child processes and do not reuse the startup process's
+indexes. A persistent-worker deployment starts its worker and waits for that
+worker to load reusable indexes instead.
+
+`GET /health` reports HTTP 200 after startup when persistent-worker mode is
+disabled. In persistent-worker mode it reports HTTP 503 whenever the worker is
+not ready.
+
+The configured channels and platforms affect startup cost. In an ordinary
+server they should cover metadata worth priming. In a persistent-worker
+deployment they should cover expected traffic without loading index
+combinations that the deployment never uses.
+
+## Concurrency
+
+`CONDA_PRESTO_CONCURRENCY` limits simultaneous foreground solve requests.
+Ordinary HTTP mode defaults to four. Docker and the broker provider set it to
+one because they serialize work through a persistent foreground worker.
+
+`CONDA_PRESTO_WORKERS` controls the process pool used within a multi-platform
+request. It does not increase the number of foreground requests admitted by
+the HTTP limiter. Raising it can reduce multi-platform wall time while
+increasing process and index memory.
+
+Scheduled refresh does not borrow the foreground worker or limiter. It still
+checks foreground activity before starting work and stops starting requests
+when foreground work arrives.
+
+## Result storage
+
+The result-cache backend is selected in this order when
+`CONDA_PRESTO_RESULT_CACHE_BACKEND` is unset:
+
+1. Redis when `CONDA_PRESTO_RESULT_CACHE_REDIS_URL` is set.
+2. File storage when `CONDA_PRESTO_RESULT_CACHE_DIR` is set.
+3. Memory otherwise.
+
+File storage requires a configured directory. Redis uses
+`redis://localhost:6379/0` when the backend is explicitly set to `redis` and no
+URL is supplied. The published server image contains the Redis client.
+
+Public resolve and private solver entries share the in-process entry and byte
+limits. They use separate persistent key namespaces. See {doc}`cache` for
+identity, retention, failure fallback, and invalidation.
+
+## HTTP middleware and limits
+
+The Litestar application configures:
+
+- request-body size enforcement
+- per-client rate limiting when its configured value is nonzero
+- CORS only when allowed origins are explicitly configured
+- response compression
+- structured request logging
+- solve and parse time limits in the handlers
+
+Behind a reverse proxy, uvicorn must trust the intended proxy addresses through
+`--forwarded-allow-ips` before forwarded client addresses can be used for rate
+limiting. TLS, authentication, and public network admission remain deployment
+responsibilities.
+
+## Development workspace
+
+The Pixi workspace defines these environments:
+
+| Environment | Features | Purpose |
 |---|---|---|
-| `latest` | Server | Most recent server release |
-| `<version>` | Server | Specific release (e.g. `0.6.0`) |
-| `<major>.<minor>` | Server | Latest patch for a minor (e.g. `0.6`) |
-| `<major>` | Server | Latest minor for a major (e.g. `0`) |
-| `cli` | CLI | Most recent CLI release |
-| `<version>-cli` | CLI | Specific CLI release (e.g. `0.6.0-cli`) |
-| `<major>.<minor>-cli` | CLI | Latest CLI patch for a minor |
-
-### Building locally
-
-```bash
-docker build -f docker/Dockerfile --target server --build-arg PIXI_ENV=prod -t conda-presto .
-docker run -p 8000:8000 conda-presto
-
-docker build -f docker/Dockerfile --target cli --build-arg PIXI_ENV=cli -t conda-presto-cli .
-docker run conda-presto-cli -c conda-forge -p linux-64 zlib
-```
-
-Both images use a multi-stage build: dependencies are installed with
-pixi in the build stage, and only the runtime environment is copied
-into a minimal `debian:bookworm-slim` image. Both run as a non-root
-user.
-
-## Development setup
-
-conda-presto uses [pixi](https://pixi.sh/) for development. Clone the
-repo and install dependencies:
-
-```bash
-git clone https://github.com/jezdez/conda-presto.git
-cd conda-presto
-pixi install
-```
-
-The following pixi tasks are available:
-
-```{list-table}
-:header-rows: 1
-:widths: 20 40 40
-
-* - Task
-  - Command
-  - Description
-* - `lint`
-  - `pixi run lint`
-  - Check code style with ruff
-* - `format`
-  - `pixi run format`
-  - Auto-format code with ruff
-* - `test`
-  - `pixi run test`
-  - Run tests with pytest (benchmarks disabled)
-* - `bench`
-  - `pixi run bench`
-  - Run benchmarks with pytest-benchmark
-* - `serve`
-  - `pixi run serve`
-  - Start the dev server with uvicorn (auto-reload)
-* - `docs`
-  - `pixi run -e docs docs`
-  - Build Sphinx documentation
-```
-
-### Pixi environments
-
-The project defines several pixi environments for different use cases:
-
-`dev`
-: Development environment with ruff and server dependencies.
-
-`test`
-: Test environment with pytest, httpx, and server dependencies.
-
-`prod`
-: Production server environment (server dependencies only).
-
-`cli`
-: CLI-only environment without server dependencies.
-
-`docs`
-: Documentation build environment with Sphinx and extensions.
-
-## Production deployment
-
-### Running behind a reverse proxy
-
-In production, run conda-presto behind a reverse proxy such as nginx
-or Caddy. This gives you TLS termination, static file serving, and
-additional request filtering.
-
-Start uvicorn with `--forwarded-allow-ips` so that rate limiting uses
-the real client IP instead of the proxy address:
-
-```bash
-uvicorn conda_presto.app:app \
-  --host 0.0.0.0 \
-  --port 8000 \
-  --forwarded-allow-ips='*'
-```
-
-Or use Docker:
-
-```bash
-docker run -p 8000:8000 \
-  -e CONDA_PRESTO_HOST=0.0.0.0 \
-  -e CONDA_PRESTO_RATE_LIMIT=100 \
-  ghcr.io/jezdez/conda-presto:latest
-```
-
-### Rate limiting
-
-Rate limiting is enabled by default at 300 requests per minute per
-client IP. Adjust with `CONDA_PRESTO_RATE_LIMIT` or set to `0` to
-disable it entirely (useful when the reverse proxy handles rate
-limiting itself).
-
-### CORS
-
-By default, CORS is disabled. To allow browser clients, set
-`CONDA_PRESTO_CORS_ORIGINS` to the frontend domains that should be
-allowed:
-
-```bash
-export CONDA_PRESTO_CORS_ORIGINS="https://app.example.com,https://ci.example.com"
-```
-
-### Request limits
-
-Several variables protect the server from oversized or abusive
-requests:
-
-- `CONDA_PRESTO_MAX_BODY_BYTES` caps upload size (default 1 MB)
-- `CONDA_PRESTO_MAX_SPECS` caps specs per request (default 200)
-- `CONDA_PRESTO_MAX_CHANNELS` caps channels per request (default 8)
-- `CONDA_PRESTO_MAX_PLATFORMS` caps platforms per request (default 8)
-- `CONDA_PRESTO_MAX_REPAIR_SUGGESTIONS` caps returned repair suggestions (default 5)
-- `CONDA_PRESTO_MAX_REPAIR_ATTEMPTS` caps repair candidates evaluated (default 20)
-- `CONDA_PRESTO_MAX_REPAIR_TIME_BUDGET_MS` caps repair search time (default 5000 ms)
-- `CONDA_PRESTO_SOLVE_TIMEOUT_S` caps solve duration (default 60s)
-- `CONDA_PRESTO_PARSE_TIMEOUT_S` caps file parsing duration (default 10s)
-- `CONDA_PRESTO_MAX_INDEX_CACHE_ENTRIES` caps in-process solver index
-  cache entries (default 128; set to `0` to disable index caching)
-
-The HTTP server accepts channels from `CONDA_PRESTO_ALLOWED_CHANNELS`
-(defaulting to `CONDA_PRESTO_CHANNELS`). Set it to `*` only when the
-server is already protected by trusted callers and network egress
-controls.
-
-See [Environment variables](environment-variables.md) for the full
-list and their defaults.
-
-### Cache warmup
-
-On server startup, conda-presto pre-warms repodata caches for the
-platforms listed in `CONDA_PRESTO_PLATFORMS` using the channels from
-`CONDA_PRESTO_CHANNELS`. This avoids a cold-start penalty on the
-first request. Configure these variables to match your expected
-workload:
-
-```bash
-export CONDA_PRESTO_CHANNELS="conda-forge,bioconda"
-export CONDA_PRESTO_PLATFORMS="linux-64,osx-arm64"
-```
-
-This generic startup warmup belongs to the foreground worker. Scheduled refresh
-replays recorded solver requests. Its dedicated worker does not pre-build the
-configured default channel/platform combinations.
-
-### Broker-managed local service
-
-conda-presto registers `conda-presto.server` with
-[conda-broker](https://jezdez.github.io/conda-broker/). The manual service binds
-to a broker-assigned loopback port. Its conda-presto server runs in
-persistent-worker mode, so its worker and process pool retain loaded repodata
-and indexes between requests. If the worker fails or times out, `/health`
-reports unavailable and conda-broker replaces the server process.
-
-The published Docker server image also enables persistent-worker mode, but it
-does not start conda-broker. The server replaces a failed worker itself.
-
-See the [broker-managed local service tutorial](../tutorials/broker-service.md)
-for the start, wait, and endpoint commands.
-
-The Docker image leaves the internal Presto solver endpoint disabled and is not
-a `conda --solver=presto` target. It does not run scheduled solver-cache
-refreshes.
-
-### Result cache
-
-Successful `/resolve` responses and internal `/solver/v1` final states share an
-in-process LRU cache. `/resolve` responses use content-addressed entries and are
-returned with a `Location: /r/<sha256>` header. Solver responses use private
-`solver-v1:` entries and are not exposed through that endpoint. Configure
-the total number of retained responses with
-`CONDA_PRESTO_RESULT_CACHE_SIZE` (default 256) and the maximum bytes
-held in memory with `CONDA_PRESTO_RESULT_CACHE_MAX_MEMORY_MB`
-(default 64, `0` disables the byte cap).
-
-Set `CONDA_PRESTO_RESULT_CACHE_DIR` to add a persistent file-backed
-cache layer:
-
-```bash
-export CONDA_PRESTO_RESULT_CACHE_DIR=/var/cache/conda-presto/results
-```
-
-Set `CONDA_PRESTO_RESULT_CACHE_REDIS_URL` to use Redis instead:
-
-```bash
-export CONDA_PRESTO_RESULT_CACHE_BACKEND=redis
-export CONDA_PRESTO_RESULT_CACHE_REDIS_URL=redis://localhost:6379/0
-```
-
-The server still checks the in-process LRU first, then looks up the corresponding
-entry in the persistent store before running the solver. Persistent entries
-survive server restarts. Redis support is included in the published Docker
-server image. Other Python environments require the `redis` optional dependency.
-
-The `/resolve` key includes the normalized specs, ordered channels, target
-platforms, output format, configured virtual-package overrides, conda-presto and
-solver versions, and local repodata cache-file markers. See the
-[Presto solver reference](solver-backend.md) for the internal solver cache key
-and invalidation rules.
-
-### Cache-warming candidates
-
-Successful cacheable foreground `/solver/v1` requests are recorded as
-cache-warming candidates. Each record stores the serialized request, request
-count, and most recent request time. A catalog entry becomes eligible for
-refresh after two uses and expires after seven days without another use. Set
-`CONDA_PRESTO_SOLVER_CACHE_WARM_CANDIDATE_SIZE=0` to disable recording or change
-the default 32-entry limit. When that catalog is full, conda-presto also retains
-up to the same number of observations outside it. An observation and the
-lowest-ranked candidate exchange places when the observation's request count,
-then its most recent request time, ranks higher. The displaced candidate keeps
-its accumulated count, and the highest-ranked observation fills a catalog slot
-when one becomes vacant.
-
-Candidates are process-local and are not served through HTTP. Logs do not
-include recorded request contents. Persistence is disabled by default because
-requests can contain installed package and channel state. To persist requests
-without detected credentials,
-configure a file or Redis result-cache backend and set
-`CONDA_PRESTO_SOLVER_CACHE_WARM_CANDIDATE_PERSIST=true`. Requests with detected
-channel credentials or tokenized URLs remain memory-only. Redis deployments do
-not merge candidate lists across service processes.
-
-### Scheduled solver-cache refresh
-
-Scheduled refresh runs only when `CONDA_BROKER_SERVICE_NAME` identifies the
-`conda-presto.server` broker child and `CONDA_PRESTO_PERSISTENT_WORKER=true`.
-Normal HTTP servers and the Docker image do not run it.
-
-`CONDA_PRESTO_SOLVER_CACHE_WARM_INTERVAL_S`
-: Seconds between refresh cycles (default 300). Set to `0` to disable scheduled
-  refresh.
-
-`CONDA_PRESTO_SOLVER_CACHE_WARM_BATCH_SIZE`
-: Maximum cache-warming candidates checked per cycle (default 8). For a
-  memory-only cache, this is capped by the in-process result-cache entry limit.
-
-The first cycle starts 30 seconds after the broker child becomes ready. Each
-inspection or solve is limited to 30 seconds and also respects a lower
-`CONDA_PRESTO_SOLVE_TIMEOUT_S`. One cycle stops starting work after 60 seconds.
-
-See [Presto solver backend](solver-backend.md) for the cache contract,
-[Performance](../explanation/performance.md) for lifecycle and freshness behavior,
-and [Broker-managed local service](../tutorials/broker-service.md) for the
-operational workflow.
-
-### Concurrency tuning
-
-Two variables control parallelism:
-
-`CONDA_PRESTO_CONCURRENCY`
-: Thread limiter for concurrent solve requests (default 4). The Docker image
-  and broker service set it to 1 because their persistent worker handles one
-  request at a time. Increase it only for a non-persistent HTTP server that
-  handles simultaneous clients.
-
-`CONDA_PRESTO_WORKERS`
-: Process pool size for multi-platform parallel solves within a
-  single request (default `min(4, cpu_count)`). Each platform in a
-  multi-platform solve runs in its own process.
-
-## See also
-
-- [Environment variables](environment-variables.md)
-- [CLI reference](cli.md)
-- [HTTP API reference](http-api.md)
+| `dev` | development and server | Editing, linting, and local server work |
+| `test` | test and server | Pytest, coverage, HTTP clients, and server dependencies |
+| `prod` | server | Production HTTP and broker service runtime |
+| `redis` | server | Server runtime with Redis support |
+| `cli` | base | CLI and composite Action local mode |
+| `docs` | documentation | Sphinx and documentation extensions |
+
+The workspace exposes these tasks:
+
+| Task | Command | Purpose |
+|---|---|---|
+| `lint` | `pixi run lint` | Check Python with Ruff |
+| `format` | `pixi run format` | Format Python with Ruff |
+| `test` | `pixi run -e test test` | Run pytest with coverage |
+| `bench` | `pixi run -e test bench` | Run pytest-benchmark tests |
+| `serve` | `pixi run serve` | Start a reload-enabled development server |
+| `docs` | `pixi run -e docs docs` | Build the Sphinx site |
+
+Changes to Pixi metadata in `pyproject.toml` require an updated `pixi.lock`.
+
+## Related reference
+
+- {doc}`environment-variables`
+- {doc}`docker-images`
+- {doc}`broker-service`
+- {doc}`cache`
+- {doc}`observability`

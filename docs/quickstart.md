@@ -1,78 +1,141 @@
 # Quick start
 
+This tutorial installs conda-presto in a dedicated tooling environment, runs
+one solve, and starts the optional HTTP server. The solve does not create or
+modify a target environment.
+
 ## Install
+
+Choose the package source that matches the documentation you want to follow.
 
 `````{tab-set}
 
-````{tab-item} pixi (global)
+````{tab-item} Latest release
 ```bash
-pixi global install --git https://github.com/jezdez/conda-presto.git
+conda create --name conda-presto \
+  --override-channels \
+  --channel conda-forge \
+  python=3.13 \
+  'conda>=26.5,<27' \
+  'conda-rattler-solver>=0.1.1,<0.2' \
+  'conda-lockfiles>=0.2.1' \
+  'litestar>=2.18' \
+  'pyjwt>=2.0' \
+  'uvicorn>=0.34' \
+  'brotli-python>=1.1' \
+  pip
+conda activate conda-presto
+python -m pip install conda-presto
 ```
 ````
 
-````{tab-item} conda
+````{tab-item} Current main
 ```bash
-conda install -c conda-forge conda-presto
+conda create --name conda-presto-main \
+  --override-channels \
+  --channel conda-forge \
+  python=3.13 \
+  'conda>=26.5,<27' \
+  'conda-rattler-solver>=0.1.1,<0.2' \
+  'conda-lockfiles>=0.2.1' \
+  'litestar>=2.18' \
+  'pyjwt>=2.0' \
+  'uvicorn>=0.34' \
+  'brotli-python>=1.1' \
+  pip
+conda activate conda-presto-main
+python -m pip install 'git+https://github.com/jezdez/conda-presto.git@main'
 ```
 ````
 
-````{tab-item} From source
+````{tab-item} Source checkout
 ```bash
 git clone https://github.com/jezdez/conda-presto.git
 cd conda-presto
 pixi install
+pixi shell
 ```
 ````
 
 `````
 
-Requires conda >= 26.5 and Python >= 3.13. The conda install example
-uses `conda-forge`, which carries the required stable conda solver
-packages.
+conda-presto is installed from PyPI or Git into a conda environment that
+supplies conda and its solver plugins. It is not currently published as a conda
+package. The source-checkout path enters the default Pixi development
+environment. Run the remaining commands inside the activated conda environment
+or Pixi shell.
 
-## First resolve
+:::{note}
+The site built from `main` includes the `[Unreleased]` features in the
+changelog. Use the current-main or source-checkout tab until those features are
+part of a published release.
+:::
 
-Resolve a couple of packages for a single platform:
-
-```bash
-conda presto -c conda-forge -p linux-64 python=3.12 numpy
-```
-
-This prints a JSON array with fully pinned packages including SHA256
-hashes, URLs, sizes, and dependency lists.
-
-## From an environment file
+conda-presto requires conda 26.5 or newer and Python 3.13 or newer. Verify that
+conda discovered the subcommand:
 
 ```bash
-conda presto -f environment.yml -p linux-64 -p osx-arm64
+conda presto --help
 ```
 
-Multiple platforms are solved in parallel.
+## Resolve an environment
 
-## Output formats
-
-Route the output through conda's exporter plugins:
+Resolve Python and NumPy for Linux without downloading packages or creating a
+prefix:
 
 ```bash
-conda presto -c conda-forge -p linux-64 --format explicit zlib
-conda presto -f environment.yml --format pixi-lock-v6 > pixi.lock
+conda presto -c conda-forge -p linux-64 python=3.13 numpy > result.json
 ```
 
-See {doc}`reference/output-formats` for the full list of supported
-formats.
+Inspect the selected package names and versions:
+
+```bash
+jq -r '.[0].packages[] | "\(.name) \(.version) \(.build)"' result.json
+```
+
+The outer array contains one result per requested platform. A successful entry
+has package records and an `error` value of `null`.
+
+## Resolve an environment file
+
+Given an `environment.yml`, request two platforms:
+
+```bash
+conda presto -f environment.yml -p linux-64 -p osx-arm64 > result.json
+```
+
+The two solves can run in parallel. To write a lockfile instead of native JSON,
+select a conda exporter:
+
+```bash
+conda presto -f environment.yml \
+  -p linux-64 \
+  -p osx-arm64 \
+  --format pixi-lock-v6 > pixi.lock
+```
 
 ## Start the HTTP server
+
+Start a local server in one terminal:
 
 ```bash
 conda presto --serve
 ```
 
-The API is available at `http://localhost:8000` with interactive docs
-at the root URL.
+Check readiness from another terminal:
 
-## Next steps
+```bash
+curl -sS http://127.0.0.1:8000/health
+```
 
-- {doc}`tutorials/cli-resolve` for in-depth CLI usage
-- {doc}`tutorials/http-api` for HTTP API workflows
-- {doc}`tutorials/ci-pipeline` for GitHub Action integration
-- {doc}`reference/environment-variables` for tuning and configuration
+The response is `{"status":"ok"}` when the server can accept solve requests.
+Open `http://127.0.0.1:8000/` for the interactive API documentation.
+
+## Choose the next guide
+
+- {doc}`tutorials/cli-resolve` builds a multi-platform lockfile from start to finish.
+- {doc}`tutorials/http-api` introduces the HTTP workflow and result permalinks.
+- {doc}`tutorials/review-and-repair` teaches preflight, repair, diff, and explain.
+- {doc}`tutorials/local-service` introduces the broker service and Presto solver.
+- {doc}`how-to/index` contains task-focused CLI, server, Docker, cache, and CI guides.
+- {doc}`reference/index` documents the exact interfaces and configuration.

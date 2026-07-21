@@ -1,64 +1,85 @@
 # conda-presto
 
-A fast, dry-run conda solver exposed as both a CLI and an HTTP API.
-Given package specs or an environment file, it resolves fully pinned
-packages for one or more platforms, without downloading or installing
-anything, and emits the result as native JSON or any conda exporter
-format.
+conda-presto resolves conda package specifications without creating or changing
+an environment. Use it through the `conda presto` CLI, the Litestar HTTP API, a
+GitHub Action, or the internal broker-backed conda solver.
 
-::::{grid} 2
+::::{grid} 1 1 2 2
 :gutter: 3
 
 :::{grid-item-card} {octicon}`rocket` Quick start
 :link: quickstart
 :link-type: doc
 
-Install conda-presto and run your first resolve in under a minute.
+Install conda-presto, run one resolve, and start a local HTTP server.
 :::
 
 :::{grid-item-card} {octicon}`mortar-board` Tutorials
 :link: tutorials/index
 :link-type: doc
 
-Step-by-step guides for the CLI, HTTP API, and CI pipelines.
+Learn multi-platform locking, HTTP operation, environment review, and the local
+solver service through guided workflows.
+:::
+
+:::{grid-item-card} {octicon}`tools` How-to guides
+:link: how-to/index
+:link-type: doc
+
+Complete a specific CLI, API, Docker, broker, cache, monitoring, or CI task.
 :::
 
 :::{grid-item-card} {octicon}`book` Reference
 :link: reference/index
 :link-type: doc
 
-CLI flags, endpoint specs, output formats, and environment variables.
+Look up exact flags, endpoints, schemas, cache rules, service contracts, image
+behavior, and environment variables.
 :::
 
 :::{grid-item-card} {octicon}`gear` Explanation
 :link: explanation/index
 :link-type: doc
 
-Architecture, performance characteristics, and security model.
+Understand architecture, deployment modes, review semantics, caching,
+performance, and trust boundaries.
 :::
 
 :::{grid-item-card} {octicon}`light-bulb` Roadmap
 :link: proposals
 :link-type: doc
 
-Shipped foundations and future work linked to GitHub issues.
+See shipped release streams and future work linked to GitHub issues.
 :::
 
 :::{grid-item-card} {octicon}`log` Changelog
 :link: changelog
 :link-type: doc
 
-Release history and notable changes.
+Read release history and unreleased user-visible changes.
 :::
 
 ::::
 
 ```{toctree}
-:caption: Tutorials
+:caption: Start here
 :hidden:
 
 quickstart
+```
+
+```{toctree}
+:caption: Tutorials
+:hidden:
+
 tutorials/index
+```
+
+```{toctree}
+:caption: How-to guides
+:hidden:
+
+how-to/index
 ```
 
 ```{toctree}
@@ -76,14 +97,9 @@ explanation/index
 ```
 
 ```{toctree}
-:hidden:
-
-proposals
-```
-
-```{toctree}
 :caption: Project
 :hidden:
 
+proposals
 changelog
 ```

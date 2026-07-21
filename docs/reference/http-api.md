@@ -2,15 +2,45 @@
 
 The conda-presto HTTP API is built on [Litestar](https://litestar.dev/)
 and served by uvicorn. Start it with `conda presto --serve` or
-`uvicorn conda_presto.app:app`.
+`uvicorn conda_presto.app:app --no-access-log`. The conda-presto command is the
+preferred entry point because it applies the documented server configuration.
 
-All endpoints return JSON unless a `format` parameter redirects the
-response through a conda exporter plugin.
+Data endpoints return JSON unless a `format` parameter routes a resolve or
+transcode response through a conda exporter plugin. The root serves the Scalar
+API interface, and `/openapi.json` serves the generated OpenAPI document.
 
-Cacheable `/resolve` responses include a content-addressed `Location`
-header such as `/r/<sha256>`. Repeating the same request against the
-same channel metadata returns the same location while the cache entry
-is retained.
+The generated schema covers route discovery and typed request models. It does
+not describe the manually dispatched request bodies for `POST /resolve`,
+`POST /preflight`, or `POST /transcode`. Their complete body contracts are
+documented on this page.
+
+Retained `/resolve` responses include a content-addressed `Location` header
+such as `/r/<sha256>`. Repeating the same request against unchanged, acceptable
+channel metadata returns the same location while the entry remains available.
+An unretained response is still valid but has no `Location` header.
+
+## Public endpoint summary
+
+| Method | Path | Purpose |
+|---|---|---|
+| `GET` | `/resolve` | Resolve repeated query-parameter specs |
+| `POST` | `/resolve` | Resolve a JSON request or raw environment file |
+| `POST` | `/preflight` | Report deterministic local input findings |
+| `POST` | `/repair` | Test bounded single-spec relaxations |
+| `POST` | `/diff` | Compare two selected package states |
+| `POST` | `/explain` | Trace dependency chains to one package |
+| `POST` | `/transcode` | Convert a covered lockfile without solving |
+| `POST` | `/parse` | Extract specs and channels from a file |
+| `GET` | `/r/{hash}` | Fetch one retained resolve response |
+| `GET` | `/formats` | List registered exporter names and aliases |
+| `GET` | `/platforms` | List conda's known platform subdirectories |
+| `GET` | `/version` | Report installed component versions |
+| `GET` | `/health` | Report persistent-worker readiness |
+| `GET` | `/` | Serve the interactive Scalar interface |
+| `GET` | `/openapi.json` | Serve the generated OpenAPI 3.1 document |
+
+The broker-only `/solver/v1` protocol is guarded, omitted from OpenAPI, and not
+a public integration surface. See {doc}`solver-backend`.
 
 ## Endpoints
 
@@ -59,7 +89,7 @@ Send a `ResolveRequest` object:
 
 All fields are optional, but normal requests must provide either
 `specs` or `file`. Query parameters (`spec`, `channel`, `platform`,
-`format`, `filename`) are accepted alongside the body; body fields take
+`format`, `filename`) are accepted alongside the body. Body fields take
 precedence when both are present. `format` is a query-only option.
 
 ```bash
@@ -67,7 +97,7 @@ curl -sS http://localhost:8000/resolve \
   --json '{"specs":["python=3.12","numpy"],"channels":["conda-forge"],"platforms":["linux-64"]}'
 ```
 
-Successful responses include:
+Retained responses include:
 
 ```text
 Location: /r/3a7f...e91b
@@ -87,7 +117,14 @@ Accepted Content-Types:
 - `text/x-yaml`
 - `application/toml`
 - `application/x-toml`
+- `text/toml`
 - `text/plain`
+
+These media types select raw-body dispatch and a default filename extension.
+An installed conda environment-specifier plugin must still recognize the
+resulting file. The required plugin set handles environment YAML, requirements
+files, conda-lock v1, and rattler-lock v6. TOML formats require an additional
+specifier plugin.
 
 ```bash
 curl -sS --data-binary @environment.yml \
@@ -98,6 +135,10 @@ curl -sS --data-binary @environment.yml \
 Use the `filename` query parameter to pick a specific parser when the
 Content-Type is ambiguous. For example, `?filename=pixi.lock` forces
 the lockfile parser on a generic YAML upload.
+
+HTTP input deliberately rejects files whose first content line is
+`@EXPLICIT`. Use explicit files as exporter output, not as `/resolve`,
+`/parse`, `/preflight`, or `/transcode` input.
 
 Use `POST /transcode` to convert an existing lockfile without solving.
 
@@ -142,9 +183,11 @@ Every returned suggestion solves on every requested platform.
 The initial strategies relax an exact `==` pin or drop one side of a simple
 bounded version range. Fuzzy equality such as `python=3.12` is not rewritten.
 Specs containing a package URL or filename are left unchanged. The
-`max_suggestions`, `max_attempts`, and `time_budget_ms` query parameters cannot
-exceed their corresponding server limits. The time budget includes time spent
-waiting for solver capacity.
+`max_suggestions`, `max_attempts`, and `time_budget_ms` must be positive. A
+value below the corresponding server limit narrows that request. A higher
+value is clamped to the server limit. The time budget includes time spent
+waiting for solver capacity. Repair is available only through HTTP and has no
+matching CLI command.
 
 ```bash
 curl -sS 'http://localhost:8000/repair?max_suggestions=3&max_attempts=10' \
@@ -183,7 +226,7 @@ already solved.
 ### `POST /diff`
 
 Compare two resolve inputs. Both `from` and `to` use the `ResolveRequest`
-shape from `POST /resolve`; an outer `platforms` list applies to both sides.
+shape from `POST /resolve`. An outer `platforms` list applies to both sides.
 When a supplied lockfile already covers a requested platform, the endpoint
 compares its package records directly instead of solving it again.
 
@@ -193,9 +236,69 @@ curl -sS http://localhost:8000/diff \
 ```
 
 The response is keyed by platform and separates added, removed, and changed
-packages. A changed package includes `from`, `to`, and a `kind` of `upgrade`,
-`downgrade`, `version-change`, or `build-change`. It also retains a lockfile
-category when the parsed source provides one.
+packages:
+
+```json
+{
+  "platforms": ["linux-64"],
+  "diff": {
+    "linux-64": {
+      "added": [
+        {
+          "manager": "conda",
+          "name": "new-package",
+          "platform": "linux-64",
+          "version": "1.0",
+          "build": "h123_0",
+          "channel": "conda-forge",
+          "subdir": "linux-64",
+          "url": "https://conda.anaconda.org/conda-forge/linux-64/new-package-1.0-h123_0.conda"
+        }
+      ],
+      "removed": [],
+      "changed": [
+        {
+          "name": "python",
+          "manager": "conda",
+          "from": {
+            "manager": "conda",
+            "name": "python",
+            "platform": "linux-64",
+            "version": "3.12.11",
+            "build": "h9e4cc4f_0_cpython",
+            "channel": "conda-forge",
+            "subdir": "linux-64",
+            "url": "https://conda.anaconda.org/conda-forge/linux-64/python-3.12.11-h9e4cc4f_0_cpython.conda"
+          },
+          "to": {
+            "manager": "conda",
+            "name": "python",
+            "platform": "linux-64",
+            "version": "3.13.5",
+            "build": "hec9711d_102_cp313",
+            "channel": "conda-forge",
+            "subdir": "linux-64",
+            "url": "https://conda.anaconda.org/conda-forge/linux-64/python-3.13.5-hec9711d_102_cp313.conda"
+          },
+          "kind": "upgrade"
+        }
+      ],
+      "unchanged_count": 6
+    }
+  }
+}
+```
+
+`platforms` lists the compared platforms in response order. `diff` maps each
+listed platform to its `added`, `removed`, and `changed` package arrays plus
+`unchanged_count`.
+
+Every package in `added` and `removed`, and each `from` and `to` object in
+`changed`, has the `DiffPackage` fields `manager`, `name`, `platform`,
+`version`, `build`, `channel`, `subdir`, and `url`. The optional `category`
+field is present when a parsed conda-lock source provides one. A
+`ChangedPackage` has `name`, `manager`, `from`, `to`, and `kind`. `kind` is
+`upgrade`, `downgrade`, `version-change`, or `build-change`.
 
 Solver failures return HTTP 422. Inputs that resolve to no common platform
 return HTTP 400.
@@ -210,22 +313,22 @@ must select exactly one platform (the host platform is used when omitted).
 
 ```bash
 curl -sS http://localhost:8000/explain \
-  --json '{"package":"zlib","specs":["python"],"platforms":["linux-64"]}'
+  --json '{"package":"libzlib","specs":["python"],"platforms":["linux-64"]}'
 ```
 
 ```json
 {
-  "package": "zlib",
-  "version": "1.3.1",
+  "package": "libzlib",
+  "version": "1.3.2",
   "platform": "linux-64",
-  "chains": [["python", "zlib"]],
+  "chains": [["python", "libzlib"]],
   "complete": true
 }
 ```
 
 `complete` is false when the bounded local graph cannot account for every
 edge, such as a virtual package or an unresolvable dependency record. Missing
-packages return HTTP 404; solver failures return HTTP 422.
+packages return HTTP 404, and solver failures return HTTP 422.
 
 ---
 
@@ -245,6 +348,14 @@ Query parameters
   `filename`
   : Hint for the parser when uploading a raw file body.
 
+  `spec` (repeatable)
+  : Accepted only as a rejection input. Any supplied spec requires solving,
+    so the endpoint returns HTTP 400 instead of ignoring it.
+
+  `channel` (repeatable)
+  : Accepted only as a rejection input. Any channel override requires
+    solving, so the endpoint returns HTTP 400 instead of ignoring it.
+
 #### JSON body
 
 Send a `TranscodeRequest` object:
@@ -253,9 +364,14 @@ Send a `TranscodeRequest` object:
 {
   "file": "...pixi.lock content...",
   "filename": "pixi.lock",
-  "platforms": ["linux-64"]
+  "platforms": ["linux-64"],
+  "specs": [],
+  "channels": []
 }
 ```
+
+`specs` and `channels` are optional rejection-only fields. A non-empty value
+returns HTTP 400 because applying it would require a solve.
 
 #### Raw lockfile upload
 
@@ -296,20 +412,11 @@ Missing entries return HTTP 404:
 {"error": "result not in cache; re-POST to recompute"}
 ```
 
-The current implementation checks a bounded in-process LRU store first.
-`CONDA_PRESTO_RESULT_CACHE_SIZE` caps entry count, and
-`CONDA_PRESTO_RESULT_CACHE_MAX_MEMORY_MB` caps retained payload bytes.
-If a memory-only cache rejects an oversized response, the response is
-still returned but no `Location` header is attached.
-When `CONDA_PRESTO_RESULT_CACHE_DIR` or
-`CONDA_PRESTO_RESULT_CACHE_REDIS_URL` is set, conda-presto also checks
-a file-backed or Redis-backed persistent store using the same
-`resolve-v1:<sha256>` CAS key. The hash key includes the normalized
-specs, ordered channels, platforms, output format, configured virtual-package
-overrides, conda-presto and solver/exporter dependency versions, and metadata
-from conda's local repodata cache files. Expired repodata bypasses a cached
-result, and changed metadata produces a new key. A future sharded repodata index
-can replace the file metadata marker with exact shard or sparse-index digests.
+This retrieval does not repeat the repodata freshness check used by a new
+`/resolve` request. The address identifies the stored response, so an older
+permalink can remain retrievable after current metadata would produce another
+digest. It remains available until eviction or removal from the persistent
+store. See {doc}`cache` for key fields, retention, and invalidation rules.
 
 ---
 
@@ -324,13 +431,21 @@ curl http://localhost:8000/formats
 ```json
 {
   "formats": [
+    "conda-lock",
     "conda-lock-v1",
+    "env.yml",
     "environment-json",
     "environment-yaml",
     "explicit",
+    "json",
+    "pixi",
     "pixi-lock-v6",
     "rattler-lock-v6",
-    "requirements"
+    "reqs",
+    "requirements",
+    "txt",
+    "yaml",
+    "yml"
   ]
 }
 ```
@@ -347,7 +462,27 @@ curl http://localhost:8000/platforms
 
 ```json
 {
-  "platforms": ["linux-32", "linux-64", "linux-aarch64", "osx-64", "osx-arm64", "win-32", "win-64"]
+  "platforms": [
+    "emscripten-wasm32",
+    "freebsd-64",
+    "linux-32",
+    "linux-64",
+    "linux-aarch64",
+    "linux-armv6l",
+    "linux-armv7l",
+    "linux-ppc64",
+    "linux-ppc64le",
+    "linux-riscv64",
+    "linux-s390x",
+    "noarch",
+    "osx-64",
+    "osx-arm64",
+    "wasi-wasm32",
+    "win-32",
+    "win-64",
+    "win-arm64",
+    "zos-z"
+  ]
 }
 ```
 
@@ -423,56 +558,33 @@ Open this URL in a browser to explore and test the API interactively.
 ### `GET /openapi.json`
 
 The raw OpenAPI 3.1 schema generated by Litestar. This is the same
-schema that powers the Scalar UI at `/`.
+schema that powers the Scalar UI at `/`. Manually dispatched bodies for
+`POST /resolve`, `POST /preflight`, and `POST /transcode` are not represented.
 
-## Response format
+## Resolve response formats
 
-The default response for `/resolve` (both GET and POST) is a JSON
-array with one entry per requested platform:
-
-```json
-[
-  {
-    "platform": "linux-64",
-    "packages": [
-      {
-        "name": "zlib",
-        "version": "1.3.2",
-        "build": "h25fd6f3_2",
-        "build_number": 2,
-        "channel": "conda-forge",
-        "subdir": "linux-64",
-        "url": "https://conda.anaconda.org/conda-forge/linux-64/zlib-1.3.2-h25fd6f3_2.conda",
-        "sha256": "245c9ee...",
-        "md5": "c2a01a08...",
-        "size": 95931,
-        "depends": ["__glibc >=2.17,<3.0.a0", "libzlib 1.3.2 h25fd6f3_2"],
-        "constrains": []
-      }
-    ],
-    "error": null
-  }
-]
-```
-
-Partial failures are expressed as per-platform `error` fields, so a
-bad spec for one platform does not fail the whole request.
-
-When `?format=<name>` is set, the response body is the raw exporter
-output instead (e.g. an `@EXPLICIT` lockfile or a `pixi.lock` YAML
-document). Any solver failure on the exporter path returns HTTP 500
-instead of a partial response, because exporters only operate on
-successful solves.
+Without `?format=`, both `/resolve` methods return conda-presto's native
+`SolveResult` array. Partial failures are represented per platform. With
+`?format=<name>`, the response is rendered by the selected conda exporter and
+requires every platform solve to succeed. See {doc}`output-formats` for the
+canonical schemas, media types, aliases, and failure behavior.
 
 ## Error responses
 
 | Status | Meaning |
 |---:|---|
-| 400 | Bad request: invalid specs, unknown format name, or too many specs/platforms |
+| 400 | Invalid input, unknown format, unsupported media type, disallowed channel, request-cap violation, or incompatible operation |
+| 404 | Stored result or requested explanation package not found. The guarded private solver route also appears absent outside its broker service. |
 | 413 | Request body too large (exceeds `CONDA_PRESTO_MAX_BODY_BYTES`) |
+| 422 | A solve required by `/diff` or `/explain` failed, or the private solver returned a conda solver error |
+| 429 | Per-client request rate exceeded when rate limiting is enabled |
+| 500 | Unexpected solve or exporter failure |
+| 503 | Persistent worker unavailable on `/health` or the private solver route |
 | 504 | Solve timed out (exceeds `CONDA_PRESTO_SOLVE_TIMEOUT_S`) |
 
-Error bodies are JSON objects with an `error` field:
+Errors returned explicitly by conda-presto handlers are JSON objects with an
+`error` field. Framework-level request validation and middleware responses can
+use Litestar's own error shape.
 
 ```json
 {"error": "Unknown format 'bogus'. Available: conda-lock-v1, environment-json, ..."}
@@ -480,6 +592,7 @@ Error bodies are JSON objects with an `error` field:
 
 ## See also
 
-- [CLI reference](cli.md)
-- [Output formats](output-formats.md)
-- [Environment variables](environment-variables.md)
+- {doc}`cli`
+- {doc}`output-formats`
+- {doc}`cache`
+- {doc}`environment-variables`

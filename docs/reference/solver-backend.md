@@ -54,72 +54,36 @@ force-remove are supported. Unsupported state raises a conda error before a
 request is sent. Offline mode and `--update-deps` are also rejected at the
 service boundary.
 
-## Performance and caching
+## Performance, cache, and refresh
 
 The broker keeps Python, conda, and rattler loaded and benefits from conda's
 on-disk repodata cache. Before constructing a state-specific rattler index, the
-`/solver/v1` handler checks the bounded in-process cache used by `/resolve` and
-its optional persistent file or Redis store, under a private `solver-v1:`
-namespace. A hit skips index construction and SAT solving.
+handler checks the private `solver-v1:` result namespace. A current hit skips
+index construction and SAT solving.
 
-The solver cache key hashes the solve-affecting serialized request fields, the
-effective repodata filename, the operation identifier, and the conda-presto,
-conda, conda-rattler-solver, and py-rattler versions. Prefix paths, file
-inventories, and the local repodata TTL are not included. The TTL is applied to
-every freshness check, so callers with different TTLs can share an entry only
-while its repodata markers are fresh for the current caller. Changed installed
-records, history, pins, virtual packages, requested specs, settings, channels,
-or dependency versions select a different entry.
+The cache identity covers the serialized solve-affecting state and dependency
+versions. Prefix paths, prefix file inventories, and the local repodata TTL are
+excluded. Stored repodata markers must still be fresh and match before a hit is
+used. Solver entries share the result cache's in-process limits and optional
+persistent store, but are never exposed through `/r/<hash>` or public cache
+headers. See {doc}`cache` for the exact identity, retention, freshness, and
+privacy rules.
 
-Each entry stores the successful response and the repodata cache-file markers
-recorded by the worker after index collection: channel URL, selected JSON or
-sharded source, file size, modification time, and freshness state. A hit
-requires conda to consider the current cache files fresh and their markers to
-match the stored markers. A result is not retained when the markers before or
-after index collection are unavailable, the current markers differ, or a
-transient JSON fallback leaves an old shard marker unchanged. After a repodata
-refresh, a retained result replaces the entry under the same request key.
-Missing repodata and local `file://` sources remain uncacheable. Errors and
-metadata-free early exits are not retained.
-
-In-memory solver entries share `CONDA_PRESTO_RESULT_CACHE_SIZE` and
-`CONDA_PRESTO_RESULT_CACHE_MAX_MEMORY_MB` with `/resolve`. They can use the
-configured persistent result store, whose retention is managed separately, but
-they have no public `/r/<hash>` permalink or public immutable cache headers.
-Measure hit rates against the commands and prefix states used by the deployment.
-Treat a configured file or Redis store as private because final states can
-contain package metadata from credentialed channels.
-
-The service records successful cacheable foreground `/solver/v1` requests as
-cache-warming candidates.
-Candidate identity includes the serialized request but omits dependency
-versions so recorded requests can remain eligible after compatible upgrades.
-Background requests are not recorded. Candidates remain process-local unless
-persistence is enabled, and requests with detected credentials are excluded
-from persistence. Candidates are not available through `/r`, OpenAPI, health
-responses, or request logs. A bounded set of observations retains requests
-outside the candidate catalog. An observation and the lowest-ranked candidate
-exchange places when the observation's request count, then recency, ranks
-higher, without discarding either request's accumulated count.
-
-In the broker child, scheduled refresh checks recorded candidates and
-recomputes missing or stale entries in a separate worker. It starts no replay
-while foreground work is active or waiting. Repodata invalidation uses the same
-freshness and cache-file marker checks as foreground solves.
-Solver errors remove a candidate until another successful foreground request
-records it. Timeouts and infrastructure failures leave it for the next cycle.
-
-The timing and batch settings are documented in
-[Configuration](configuration.md). Freshness and foreground trade-offs are
-covered in [Performance](../explanation/performance.md).
+Successful cacheable foreground requests can enter the recorded-request
+catalog. In the broker service, scheduled refresh replays eligible missing or
+stale entries without starting new work while foreground solver work is active
+or waiting. See {doc}`cache` for selection, persistence, timing, failure, and
+worker-lifecycle behavior. Freshness and foreground trade-offs are covered in
+{doc}`../explanation/performance`.
 
 ## Internal protocol
 
-The broker child enables `POST /solver/v1` through its
-`CONDA_BROKER_SERVICE_NAME` identity. It must identify the
-`conda-presto.server` broker child. The handler is absent from the public OpenAPI
-contract and requires the broker's persistent worker. The Docker server does not
-enable it or run scheduled solver-cache refresh.
+The server process enables `POST /solver/v1` when its
+`CONDA_BROKER_SERVICE_NAME` is `conda-presto.server`. That identity is process
+state, not a request credential. Once enabled, any loopback client can reach the
+route. The handler is absent from the public OpenAPI contract and requires the
+broker's persistent worker. The Docker server does not enable it or run
+scheduled solver-cache refresh.
 Request and response logging excludes this route so channel credentials and
 installed-prefix state are not written to broker logs.
 
