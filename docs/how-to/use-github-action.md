@@ -30,9 +30,9 @@ jobs:
           platforms: linux-64,osx-arm64
 ```
 
-Local mode is the default. The Action downloads a pinned Pixi release, verifies
-its SHA-256 digest, and runs conda-presto from the pinned Action checkout. It
-does not require a running server.
+Local mode is the default. The Action uses a commit-pinned `setup-pixi` action
+to install Pixi 0.70.1 and runs conda-presto from the pinned Action checkout.
+It does not require a running server.
 
 ## Write and upload a lockfile
 

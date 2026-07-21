@@ -25,8 +25,6 @@ def test_action_yaml_loads():
 def test_action_runs_from_checked_out_action_path():
     text = action_text()
 
-    assert 'bash "$GITHUB_ACTION_PATH/.github/scripts/install-pixi"' in text
-    assert "prefix-dev/setup-pixi@" not in text
     assert 'pixi run --manifest-path "${GITHUB_ACTION_PATH}/pyproject.toml"' in text
 
 

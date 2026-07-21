@@ -4,7 +4,6 @@ on:
   pull_request:
     paths:
       - .github/workflows/docker.yml
-      - .github/scripts/verify-release-tag
       - conda_presto/**
       - Dockerfile
       - docker/Dockerfile
@@ -12,78 +11,26 @@ on:
       - pyproject.toml
       - README.md
       - .trivyignore.yaml
-  release:
-    types: [published]
   workflow_dispatch:
-    inputs:
-      tag:
-        description: Release tag to build
-        required: true
-        type: string
 
 env:
-  REGISTRY: ghcr.io
-  RELEASE_TAG: ${{ github.event.release.tag_name || inputs.tag || '0.0.0' }}
+  RELEASE_TAG: ${{ github.event_name == 'pull_request' && '0.0.0' || github.ref_name }}
 
 permissions: {}
 
 concurrency:
-  group: docker-${{ github.event.release.tag_name || inputs.tag || github.ref }}
+  group: docker-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
-  verify-release:
-    name: Verify published release
-    runs-on: ubuntu-latest
-    outputs:
-      commit: ${{ steps.release.outputs.commit }}
-      short_commit: ${{ steps.release.outputs.short_commit }}
-    permissions:
-      checks: read # Require successful checks for the release commit.
-      contents: read
-    steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-        with:
-          ref: ${{ github.event_name == 'pull_request' && github.ref || github.event.repository.default_branch }}
-          fetch-depth: 0
-          persist-credentials: false
-
-      - name: Require published final release
-        if: github.event_name != 'pull_request'
-        env:
-          GH_TOKEN: ${{ github.token }}
-          GH_REPO: ${{ github.repository }}
-          RELEASE_TAG: ${{ env.RELEASE_TAG }}
-        run: |
-          set -euo pipefail
-          release="$(gh release view "$RELEASE_TAG" --repo "$GH_REPO" \
-            --json isDraft,isPrerelease,publishedAt,tagName)"
-          if ! jq --exit-status \
-            '.isDraft == false and .isPrerelease == false and .publishedAt != null and .tagName == env.RELEASE_TAG' \
-            <<<"$release" >/dev/null; then
-            echo "Docker images require a published final GitHub release" >&2
-            exit 1
-          fi
-
-      - name: Verify signed release tag on main
-        if: github.event_name != 'pull_request'
-        id: release
-        env:
-          GH_TOKEN: ${{ github.token }}
-          GH_REPO: ${{ github.repository }}
-          RELEASE_TAG: ${{ env.RELEASE_TAG }}
-        run: bash .github/scripts/verify-release-tag
-
   smoke-server:
     name: Build and run server image
-    needs: [verify-release]
     runs-on: ubuntu-latest
     permissions:
       contents: read
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
-          ref: ${{ github.event_name == 'pull_request' && github.ref || needs.verify-release.outputs.commit }}
           persist-credentials: false
 
       - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4
@@ -201,7 +148,6 @@ jobs:
   smoke-space:
     name: Build and run Space image
     if: github.event_name == 'pull_request'
-    needs: [verify-release]
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -277,14 +223,12 @@ jobs:
 
   smoke-cli:
     name: Build and run CLI image
-    needs: [verify-release]
     runs-on: ubuntu-latest
     permissions:
       contents: read
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
-          ref: ${{ github.event_name == 'pull_request' && github.ref || needs.verify-release.outputs.commit }}
           persist-credentials: false
 
       - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4
@@ -337,7 +281,6 @@ jobs:
 
   scan-arm64:
     name: Build and scan arm64 ${{ matrix.flavor }} image
-    needs: [verify-release]
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -353,7 +296,6 @@ jobs:
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
-          ref: ${{ github.event_name == 'pull_request' && github.ref || needs.verify-release.outputs.commit }}
           persist-credentials: false
 
       - uses: docker/setup-qemu-action@96fe6ef7f33517b61c61be40b68a1882f3264fb8 # v4.2.0
@@ -460,7 +402,7 @@ jobs:
   build-and-push:
     name: Build and push ${{ matrix.flavor }} image
     if: github.event_name != 'pull_request'
-    needs: [smoke-server, smoke-cli, scan-arm64, verify-release]
+    needs: [smoke-server, smoke-cli, scan-arm64]
     runs-on: ubuntu-latest
     environment: ghcr
     permissions:
@@ -480,7 +422,6 @@ jobs:
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
-          ref: ${{ needs.verify-release.outputs.commit }}
           persist-credentials: false
 
       - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4
@@ -502,7 +443,7 @@ jobs:
             type=semver,pattern={{major}},value=${{ env.RELEASE_TAG }},suffix=${{ matrix.suffix }},enable=${{ !startsWith(env.RELEASE_TAG, 'v0.') && !startsWith(env.RELEASE_TAG, '0.') }}
             type=raw,value=latest,enable=${{ matrix.flavor == 'server' }}
             type=raw,value=cli,enable=${{ matrix.flavor == 'cli' }}
-            type=raw,value=${{ needs.verify-release.outputs.short_commit }},suffix=${{ matrix.suffix }}
+            type=sha,prefix=,suffix=${{ matrix.suffix }}
 
       - name: Verify image tags
         shell: bash
@@ -510,7 +451,7 @@ jobs:
           FLAVOR: ${{ matrix.flavor }}
           IMAGE: ghcr.io/${{ github.repository }}
           RELEASE_TAG: ${{ env.RELEASE_TAG }}
-          SHORT_COMMIT: ${{ needs.verify-release.outputs.short_commit }}
+          SOURCE_COMMIT: ${{ github.sha }}
           SUFFIX: ${{ matrix.suffix }}
           TAGS: ${{ steps.meta.outputs.tags }}
         run: |
@@ -519,6 +460,7 @@ jobs:
           version="${RELEASE_TAG#v}"
           minor="${version%.*}"
           major="${version%%.*}"
+          short_commit="${SOURCE_COMMIT:0:7}"
 
           grep -Fxq "$IMAGE:$version$SUFFIX" <<<"$TAGS"
           grep -Fxq "$IMAGE:$minor$SUFFIX" <<<"$TAGS"
@@ -550,7 +492,7 @@ jobs:
 
           for immutable_tag in \
             "$IMAGE:$version$SUFFIX" \
-            "$IMAGE:$SHORT_COMMIT$SUFFIX"; do
+            "$IMAGE:$short_commit$SUFFIX"; do
             if output="$(docker buildx imagetools inspect "$immutable_tag" 2>&1)"; then
               echo "Immutable image tag already exists: $immutable_tag" >&2
               exit 1

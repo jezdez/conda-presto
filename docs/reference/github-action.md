@@ -26,16 +26,16 @@ other value leaves no response to process and the action fails.
 
 ## Local mode
 
-Local mode downloads Pixi 0.70.1 for the runner platform, verifies its pinned
-SHA-256 digest, then executes:
+Local mode uses the commit-pinned `setup-pixi` action to install Pixi 0.70.1,
+then executes:
 
 ```text
 pixi run --manifest-path <action-path>/pyproject.toml -e cli conda-presto <arguments>
 ```
 
-The checked-out action path supplies the verified installer, manifest, and
-conda-presto source. The action does not install conda-presto globally or fetch
-its repository a second time.
+The checked-out action path supplies the manifest and conda-presto source. The
+action does not install conda-presto globally or fetch its repository a second
+time.
 
 The local Pixi environment supports `linux-64`, `linux-aarch64`, `osx-64`, and
 `osx-arm64`. Windows is not a platform in the workspace manifest.

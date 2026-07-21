@@ -39,9 +39,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Prevent HTTP lockfile uploads from fetching package URLs during parsing. HTTP can inspect lockfile metadata but rejects operations that require package-record materialization. Direct CLI lockfile transcoding is unchanged.
 - Bound solver responses, individual persistent values, and recorded-request catalogs, expire persistent entries, remove invalid stored values, and perform best-effort file-store cleanup at startup and hourly.
 - Document required filesystem quotas and Redis `maxmemory` eviction because persistent TTL and per-value limits do not bound aggregate storage.
-- Require verified signed release tags on `main` with successful CI and CodeQL checks, build from the verified commit, separate artifact builds from OIDC attestation, and restrict Docker publication to published final releases.
+- Run releases only for final version tags, separate artifact builds from OIDC attestation, gate PyPI and GHCR publication with protected environments, and dispatch Docker publication from the released tag.
 - Build and scan server and CLI images on amd64 and arm64, require approval through the protected `ghcr` environment before publication, publish full vulnerability reports, pin base images by digest, keep application and environment files outside writable cache and home paths read-only, and remove unnecessary setuid and setgid permissions.
-- Verify the Pixi download used by workflows and the composite Action, keep response bodies out of Action logs, require HTTPS except for loopback, disable curl configuration, accept only HTTP 2xx, and validate native JSON.
+- Pin `setup-pixi` by commit and Pixi to 0.70.1, keep response bodies out of Action logs, require HTTPS except for loopback, disable curl configuration, accept only HTTP 2xx, and validate native JSON.
 - Lock release build tooling, require setuptools 83 or newer, and isolate automated lockfile generation from its write-token job.
 - Keep conda filesystem locking enabled in the persistent Docker server.
 - Refresh loaded solver indexes when conda considers their repodata stale, and validate cached results against the repodata cache files used.

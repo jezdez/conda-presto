@@ -4,7 +4,6 @@ on:
   pull_request:
     paths:
       - action.yml
-      - .github/scripts/install-pixi
       - .github/workflows/action-smoke.yml
       - conda_presto/**
       - pyproject.toml

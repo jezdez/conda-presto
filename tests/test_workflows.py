@@ -9,37 +9,18 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOWS = ROOT / ".github" / "workflows"
-REQUIRED_CHECKS = (
-    "Lint",
-    "Test",
-    "Broker lifecycle",
-    "Analyze Python",
-    "Analyze GitHub Actions",
-)
 
 
-@pytest.mark.parametrize("workflow", ["release.yml", "docker.yml"])
-def test_publish_workflows_use_release_tag_verifier(workflow):
-    text = (WORKFLOWS / workflow).read_text()
+def test_release_dispatches_docker_from_final_tag():
+    text = (WORKFLOWS / "release.yml").read_text()
+    publish_job = text.split("  publish-github-release:\n", 1)[1]
 
-    assert "checks: read" in text
-    assert "run: bash .github/scripts/verify-release-tag" in text
-
-
-def test_release_tag_verifier_requires_a_signed_checked_commit_on_main():
-    text = (ROOT / ".github" / "scripts" / "verify-release-tag").read_text()
-
-    assert "GitHub could not verify the release tag signature" in text
-    assert 'git merge-base --is-ancestor "${tagged_commit}" origin/main' in text
-    assert 'git cat-file -t "refs/tags/${RELEASE_TAG}"' in text
-    assert 'echo "commit=${tagged_commit}"' in text
-    assert '.tag == $tag' in text
-    assert "check-runs?filter=latest&per_page=100" in text
-    assert '.app.slug == "github-actions"' in text
-    assert "all($matches[]" in text
-    assert '.conclusion == "success"' in text
-    for check_name in REQUIRED_CHECKS:
-        assert f'"{check_name}"' in text
+    assert '- "v[0-9]+.[0-9]+.[0-9]+"' in text
+    assert "environment: pypi" in text
+    assert "actions: write" in publish_job
+    assert 'gh release edit "$RELEASE_TAG"' in publish_job
+    assert "gh workflow run docker.yml" in publish_job
+    assert '--ref "$RELEASE_TAG"' in publish_job
 
 
 def test_release_build_has_no_oidc_permissions():
@@ -56,28 +37,23 @@ def test_release_build_has_no_oidc_permissions():
     assert "actions/attest@" in attest_job
 
 
-def test_docker_publish_requires_release_verification():
+def test_docker_publish_uses_dispatched_tag():
     text = (WORKFLOWS / "docker.yml").read_text()
-    verify_job = text.split("  verify-release:\n", 1)[1].split(
-        "  smoke-server:\n", 1
-    )[0]
     publish_job = text.split("  build-and-push:\n", 1)[1].split(
         "  attest-images:\n", 1
     )[0]
 
+    assert "workflow_dispatch:" in text
     assert (
-        "ref: ${{ github.event_name == 'pull_request' && github.ref || "
-        "github.event.repository.default_branch }}"
-    ) in verify_job
-    assert "needs: [smoke-server, smoke-cli, scan-arm64, verify-release]" in publish_job
-    assert "Docker images require a published final GitHub release" in text
+        "RELEASE_TAG: ${{ github.event_name == 'pull_request' && '0.0.0' || "
+        "github.ref_name }}"
+    ) in text
+    assert "needs: [smoke-server, smoke-cli, scan-arm64]" in publish_job
     assert "provenance: mode=max" in publish_job
     assert "sbom: true" in publish_job
     assert "environment: ghcr" in publish_job
-    assert "needs.verify-release.outputs.short_commit" in publish_job
-    assert text.count("needs.verify-release.outputs.commit") == 4
-    assert "type=sha" not in publish_job
-    assert text.count("needs: [verify-release]") == 4
+    assert "type=sha,prefix=,suffix=${{ matrix.suffix }}" in publish_job
+    assert "SOURCE_COMMIT: ${{ github.sha }}" in publish_job
 
 
 @pytest.mark.parametrize(
@@ -141,7 +117,7 @@ def test_docker_publish_refuses_existing_immutable_tags():
     )[0]
 
     assert '"$IMAGE:$version$SUFFIX"' in publish_job
-    assert '"$IMAGE:$SHORT_COMMIT$SUFFIX"' in publish_job
+    assert '"$IMAGE:$short_commit$SUFFIX"' in publish_job
     assert "Immutable image tag already exists" in publish_job
     assert "subject-version:" not in text
 
@@ -173,27 +149,23 @@ def test_codeql_actions_use_commit_shas():
     assert "languages: ${{ matrix.language }}" in text
 
 
-def test_workflows_install_a_digest_verified_pixi():
-    installer = (ROOT / ".github" / "scripts" / "install-pixi").read_text()
+@pytest.mark.parametrize(
+    "path",
+    [
+        "action.yml",
+        ".github/workflows/ci.yml",
+        ".github/workflows/docs.yml",
+        ".github/workflows/release.yml",
+        ".github/workflows/solver-smoke.yml",
+        ".github/workflows/update-lockfile.yml",
+    ],
+)
+def test_setup_pixi_uses_pinned_version(path):
+    text = (ROOT / path).read_text()
+    setup_count = text.count("prefix-dev/setup-pixi@")
 
-    assert "version=v0.70.1" in installer
-    assert (
-        "https://github.com/prefix-dev/pixi/releases/download/${version}/${asset}"
-        in installer
-    )
-    assert "--proto '=https'" in installer
-    assert "--proto-redir '=https'" in installer
-    assert '.createHash("sha256")' in installer
-    assert '"${actual_digest}" != "${expected_digest}"' in installer
-    assert len(re.findall(r"expected_digest=[0-9a-f]{64}", installer)) == 6
-
-    paths = [ROOT / "action.yml", *WORKFLOWS.glob("*.yml")]
-
-    for path in paths:
-        text = path.read_text()
-        assert "pixi-version:" not in text
-        if setup_count := text.count("prefix-dev/setup-pixi@"):
-            assert text.count("run: bash .github/scripts/install-pixi") == setup_count
+    assert setup_count > 0
+    assert text.count("pixi-version: v0.70.1") == setup_count
 
 
 def test_dev_server_disables_uvicorn_access_log():

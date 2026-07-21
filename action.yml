@@ -44,10 +44,12 @@ runs:
   using: composite
   steps:
     # Local mode: install Pixi, then run conda-presto from this checkout.
-    - name: Install verified Pixi
+    - name: Install Pixi
       if: inputs.mode == 'local'
-      shell: bash
-      run: bash "$GITHUB_ACTION_PATH/.github/scripts/install-pixi"
+      uses: prefix-dev/setup-pixi@a09b6247153796b190642a2b53fac4241043cf6f # v0.10.0
+      with:
+        pixi-version: v0.70.1
+        run-install: false
 
     - name: Resolve (local)
       id: local

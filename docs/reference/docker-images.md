@@ -24,18 +24,18 @@ For a release such as `v0.7.0`, the publishing workflow produces:
 | `latest` | `cli` | Mutable flavor alias updated by each release |
 | `0.7.0` | `0.7.0-cli` | Immutable exact release tag |
 | `0.7` | `0.7-cli` | Mutable minor-line alias updated within the release line |
-| `<short-git-sha>` | `<short-git-sha>-cli` | Immutable tag for the verified source revision |
+| `<short-git-sha>` | `<short-git-sha>-cli` | Immutable tag for the source revision |
 
 Major-zero releases do not publish `0` or `0-cli` because those aliases could
 cross incompatible minor lines. Before publishing, the workflow refuses to
 overwrite an existing exact release tag or short source-SHA tag. The `latest`,
 `cli`, minor, and nonzero-major aliases move. A short SHA can theoretically
 collide, in which case publication fails rather than replacing the existing
-tag. Publication requires the tagged source commit's CI and CodeQL checks to
-have passed, then waits for approval through the protected `ghcr` environment.
-That environment accepts only `v*` tags. Pin the image manifest digest when
-deployment reproducibility must not depend on tag policy or registry
-administration.
+tag. The release workflow dispatches image publication from the released
+version tag, and publication waits for approval through the protected `ghcr`
+environment. That environment accepts only `v*` tags. Pin the image manifest
+digest when deployment reproducibility must not depend on tag policy or
+registry administration.
 
 ## Provenance and image contents
 
