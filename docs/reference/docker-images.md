@@ -23,10 +23,12 @@ For a release such as `v0.7.0`, the publishing workflow produces:
 | `latest` | `cli` | Mutable flavor alias updated by the publishing workflow |
 | `0.7.0` | `0.7.0-cli` | Exact release |
 | `0.7` | `0.7-cli` | Mutable minor-line alias |
-| `0` | `0-cli` | Mutable major-line alias |
-| `<short-git-sha>` | `<short-git-sha>-cli` | Source revision built for that release event |
+| `<short-git-sha>` | `<short-git-sha>-cli` | Traceability alias for the source revision |
 
-Pin an exact release or source revision when deployment reproducibility matters.
+Major-zero releases do not publish `0` or `0-cli` because those aliases could
+cross incompatible minor lines. Short SHA tags can collide and all registry
+tags can move. Pin the image manifest digest when deployment reproducibility
+matters.
 
 ## Server defaults
 

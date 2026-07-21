@@ -148,11 +148,7 @@ def transcode_envs(
     if len(parsed_files) != 1 or specs or has_channel_override:
         return None
     parsed = parsed_files[0]
-    if (
-        parsed.is_lockfile
-        and parsed.environments
-        and output_format.is_lockfile
-    ):
+    if parsed.is_lockfile and parsed.environments and output_format.is_lockfile:
         return parsed.environments
     return None
 

@@ -35,23 +35,27 @@ python -m pip install conda-presto
 conda presto -c conda-forge -p linux-64 python=3.13 numpy
 ```
 
-conda-presto is installed from PyPI into a conda environment that supplies conda and its solver plugins. It is not currently published as a conda package. See the [quick start](https://jezdez.github.io/conda-presto/quickstart/) for the current-main and source-checkout paths, file inputs, lockfile output, and the local HTTP server.
-
-The PyPI command installs the latest released version. The broker service, internal Presto solver, repair endpoint, and scheduled solver-cache refresh are currently unreleased on `main`. Use the current-main installation from the quick start until 0.7.0 is published.
+conda-presto is installed from PyPI into a conda environment that supplies conda and its solver plugins. It is not currently published as a conda package. See the [quick start](https://jezdez.github.io/conda-presto/quickstart/) for released, current-main, and source-checkout installation paths, file inputs, lockfile output, and the local HTTP server.
 
 ## Run the HTTP server
 
 ```bash
-docker build -f docker/Dockerfile \
-  --target server \
-  --build-arg PIXI_ENV=prod \
-  --build-arg CONDA_PRESTO_VERSION=0.7.0.dev0 \
-  -t conda-presto-server:main .
-docker run --rm -p 127.0.0.1:8000:8000 conda-presto-server:main
-curl http://127.0.0.1:8000/health
+docker run --detach \
+  --name conda-presto \
+  --publish 127.0.0.1:8000:8000 \
+  ghcr.io/jezdez/conda-presto:0.7.0
+for _ in {1..180}
+do
+  if curl --fail --silent http://127.0.0.1:8000/health >/dev/null
+  then
+    break
+  fi
+  sleep 1
+done
+curl --fail --silent --show-error http://127.0.0.1:8000/health
 ```
 
-This builds the unreleased 0.7 server from the current checkout. After 0.7.0 is published, use the immutable `ghcr.io/jezdez/conda-presto:0.7.0` tag. The server image listens on port 8000 inside the container and runs one persistent foreground worker. It does not start conda-broker, expose the internal solver route, or run scheduled solver-cache refresh.
+The server image listens on port 8000 inside the container and runs one persistent foreground worker. It does not start conda-broker, expose the internal solver route, or run scheduled solver-cache refresh.
 
 See [Run conda-presto with Docker](https://jezdez.github.io/conda-presto/how-to/run-with-docker/) and the [Docker image reference](https://jezdez.github.io/conda-presto/reference/docker-images/).
 

@@ -47,9 +47,7 @@ class ParsedInputFile:
         specifier = context.plugin_manager.detect_environment_specifier(path_str)
         spec = specifier.environment_spec(path_str)
         if not spec.can_handle():
-            raise ValueError(
-                f"No conda environment spec plugin can handle: {path_str}"
-            )
+            raise ValueError(f"No conda environment spec plugin can handle: {path_str}")
 
         environment_format = specifier.environment_format
         if environment_format == EnvironmentFormat.lockfile:
@@ -59,11 +57,7 @@ class ParsedInputFile:
             if targets and available and set(targets).issubset(available):
                 envs = tuple(spec.env_for(platform) for platform in targets)
             return cls(
-                specs=[
-                    str(spec)
-                    for env in envs
-                    for spec in env.requested_packages
-                ],
+                specs=[str(spec) for env in envs for spec in env.requested_packages],
                 channels=list(
                     dict.fromkeys(
                         channel

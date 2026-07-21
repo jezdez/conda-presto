@@ -123,6 +123,57 @@ jobs:
         if: always()
         run: docker rm --force conda-presto-smoke || true
 
+  metadata-smoke:
+    name: Verify ${{ matrix.flavor }} image metadata
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    strategy:
+      matrix:
+        include:
+          - flavor: server
+            suffix: ""
+          - flavor: cli
+            suffix: -cli
+    steps:
+      - uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6
+        id: meta
+        with:
+          images: ghcr.io/${{ github.repository }}
+          flavor: latest=false
+          tags: |
+            type=semver,pattern={{version}},value=${{ env.RELEASE_TAG }},suffix=${{ matrix.suffix }}
+            type=semver,pattern={{major}}.{{minor}},value=${{ env.RELEASE_TAG }},suffix=${{ matrix.suffix }}
+            type=semver,pattern={{major}},value=${{ env.RELEASE_TAG }},suffix=${{ matrix.suffix }},enable=${{ !startsWith(env.RELEASE_TAG, 'v0.') && !startsWith(env.RELEASE_TAG, '0.') }}
+            type=raw,value=latest,enable=${{ matrix.flavor == 'server' }}
+            type=raw,value=cli,enable=${{ matrix.flavor == 'cli' }}
+
+      - name: Verify test tags
+        shell: bash
+        env:
+          FLAVOR: ${{ matrix.flavor }}
+          IMAGE: ghcr.io/${{ github.repository }}
+          TAGS: ${{ steps.meta.outputs.tags }}
+        run: |
+          set -euo pipefail
+
+          if test "$FLAVOR" = server; then
+            expected="$(printf '%s\n' \
+              "$IMAGE:0.0.0" \
+              "$IMAGE:0.0" \
+              "$IMAGE:latest")"
+          else
+            expected="$(printf '%s\n' \
+              "$IMAGE:0.0.0-cli" \
+              "$IMAGE:0.0-cli" \
+              "$IMAGE:cli")"
+          fi
+
+          diff -u \
+            <(sort <<<"$expected") \
+            <(sort <<<"$TAGS")
+
   build-and-push:
     name: Build and push ${{ matrix.flavor }} image
     if: github.event_name != 'pull_request'
@@ -156,18 +207,67 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Verify dispatched release ref
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          RELEASE_TAG: ${{ env.RELEASE_TAG }}
+        run: test "$GITHUB_REF_NAME" = "$RELEASE_TAG"
+
       - uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6
         id: meta
         with:
           images: ghcr.io/${{ github.repository }}
-          flavor: suffix=${{ matrix.suffix }}
+          flavor: latest=false
           tags: |
-            type=semver,pattern={{version}},value=${{ env.RELEASE_TAG }}
-            type=semver,pattern={{major}}.{{minor}},value=${{ env.RELEASE_TAG }}
-            type=semver,pattern={{major}},value=${{ env.RELEASE_TAG }}
+            type=semver,pattern={{version}},value=${{ env.RELEASE_TAG }},suffix=${{ matrix.suffix }}
+            type=semver,pattern={{major}}.{{minor}},value=${{ env.RELEASE_TAG }},suffix=${{ matrix.suffix }}
+            type=semver,pattern={{major}},value=${{ env.RELEASE_TAG }},suffix=${{ matrix.suffix }},enable=${{ !startsWith(env.RELEASE_TAG, 'v0.') && !startsWith(env.RELEASE_TAG, '0.') }}
             type=raw,value=latest,enable=${{ matrix.flavor == 'server' }}
             type=raw,value=cli,enable=${{ matrix.flavor == 'cli' }}
-            type=sha,prefix=,enable=${{ github.event_name == 'release' }}
+            type=sha,prefix=,suffix=${{ matrix.suffix }}
+
+      - name: Verify image tags
+        shell: bash
+        env:
+          FLAVOR: ${{ matrix.flavor }}
+          IMAGE: ghcr.io/${{ github.repository }}
+          RELEASE_TAG: ${{ env.RELEASE_TAG }}
+          SUFFIX: ${{ matrix.suffix }}
+          TAGS: ${{ steps.meta.outputs.tags }}
+        run: |
+          set -euo pipefail
+
+          version="${RELEASE_TAG#v}"
+          minor="${version%.*}"
+          major="${version%%.*}"
+
+          grep -Fxq "$IMAGE:$version$SUFFIX" <<<"$TAGS"
+          grep -Fxq "$IMAGE:$minor$SUFFIX" <<<"$TAGS"
+
+          if test "$major" = 0; then
+            if grep -Fxq "$IMAGE:$major$SUFFIX" <<<"$TAGS"; then
+              echo "Major-zero alias must not be published" >&2
+              exit 1
+            fi
+          else
+            grep -Fxq "$IMAGE:$major$SUFFIX" <<<"$TAGS"
+          fi
+
+          if test "$FLAVOR" = server; then
+            grep -Fxq "$IMAGE:latest" <<<"$TAGS"
+            if grep -Fxq "$IMAGE:cli" <<<"$TAGS"; then
+              echo "Server metadata contains the CLI alias" >&2
+              exit 1
+            fi
+          else
+            grep -Fxq "$IMAGE:cli" <<<"$TAGS"
+            if grep -Eq "^$IMAGE:(latest|cli-cli)$" <<<"$TAGS"; then
+              echo "CLI metadata contains a reserved server or duplicate CLI alias" >&2
+              exit 1
+            fi
+          fi
+
+          grep -Eq "^$IMAGE:[0-9a-f]{7}$SUFFIX$" <<<"$TAGS"
 
       - uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7
         with:

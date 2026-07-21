@@ -1,7 +1,7 @@
 # Run conda-presto with Docker
 
-conda-presto provides an HTTP server image and a one-shot CLI image. The 0.7
-documentation describes current `main` until 0.7.0 is published.
+conda-presto provides an HTTP server image and a one-shot CLI image. The
+examples pin the 0.7.0 release.
 
 ## Choose image versions
 
@@ -9,33 +9,34 @@ Set the image variables once, then use the remaining commands unchanged.
 
 `````{tab-set}
 
+````{tab-item} 0.7.0 release
+Select the exact server and CLI release tags:
+
+```bash
+export CONDA_PRESTO_SERVER_IMAGE=ghcr.io/jezdez/conda-presto:0.7.0
+export CONDA_PRESTO_CLI_IMAGE=ghcr.io/jezdez/conda-presto:0.7.0-cli
+```
+````
+
 ````{tab-item} Current main
-From a source checkout, build both targets with explicit local names:
+To test unpublished changes, build both targets from a source checkout with
+explicit local names:
 
 ```bash
 docker build -f docker/Dockerfile \
   --target server \
   --build-arg PIXI_ENV=prod \
-  --build-arg CONDA_PRESTO_VERSION=0.7.0.dev0 \
+  --build-arg CONDA_PRESTO_VERSION=0.7.1.dev0 \
   --tag conda-presto-server:main .
 
 docker build -f docker/Dockerfile \
   --target cli \
   --build-arg PIXI_ENV=cli \
-  --build-arg CONDA_PRESTO_VERSION=0.7.0.dev0 \
+  --build-arg CONDA_PRESTO_VERSION=0.7.1.dev0 \
   --tag conda-presto-cli:main .
 
 export CONDA_PRESTO_SERVER_IMAGE=conda-presto-server:main
 export CONDA_PRESTO_CLI_IMAGE=conda-presto-cli:main
-```
-````
-
-````{tab-item} 0.7.0 release
-After 0.7.0 is published, select its immutable server and CLI tags:
-
-```bash
-export CONDA_PRESTO_SERVER_IMAGE=ghcr.io/jezdez/conda-presto:0.7.0
-export CONDA_PRESTO_CLI_IMAGE=ghcr.io/jezdez/conda-presto:0.7.0-cli
 ```
 ````
 

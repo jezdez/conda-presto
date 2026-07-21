@@ -6,7 +6,7 @@ delegate one conda dry-run to the internal Presto solver backend.
 
 ## Verify service discovery
 
-Use the current-main installation from {doc}`../quickstart`, then list the
+Use the latest-release installation from {doc}`../quickstart`, then list the
 discovered services from that activated environment:
 
 ```bash

@@ -24,7 +24,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: jezdez/conda-presto@v0.6.0
+      - uses: jezdez/conda-presto@v0.7.0
         with:
           file: environment.yml
           platforms: linux-64,osx-arm64
@@ -44,7 +44,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: jezdez/conda-presto@v0.6.0
+      - uses: jezdez/conda-presto@v0.7.0
         id: solve
         with:
           file: environment.yml
@@ -67,7 +67,7 @@ request that exits unsuccessfully fails the Action step.
 Pass comma-separated specs, channels, and platforms:
 
 ```yaml
-- uses: jezdez/conda-presto@v0.6.0
+- uses: jezdez/conda-presto@v0.7.0
   with:
     specs: python=3.13,numpy,pandas
     channels: conda-forge
@@ -83,7 +83,7 @@ Remote mode sends a JSON request to the deployment's `/resolve` endpoint:
 ```yaml
 - uses: actions/checkout@v4
 
-- uses: jezdez/conda-presto@v0.6.0
+- uses: jezdez/conda-presto@v0.7.0
   with:
     mode: remote
     endpoint: ${{ vars.CONDA_PRESTO_URL }}
@@ -105,7 +105,7 @@ runners provide both tools.
 Give the solve step an ID, then use its `solved` and `result` outputs:
 
 ```yaml
-- uses: jezdez/conda-presto@v0.6.0
+- uses: jezdez/conda-presto@v0.7.0
   id: solve
   with:
     specs: python=3.13,numpy

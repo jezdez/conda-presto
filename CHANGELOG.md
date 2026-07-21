@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-07-21
+
 ### Added
 
 - `POST /repair` suggests single-spec relaxations for infeasible requests and returns only suggestions that solve on every requested platform.
@@ -21,14 +23,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - Reorganize the documentation into tutorials, how-to guides, reference, and explanation pages covering the 0.7 service, solver, cache, and repair features.
+- Add package authorship, classifiers, keywords, and project URLs, and update release examples for 0.7.0.
 
 ### Fixed
 
 - Limit public HTTP access logs to request metadata and response status, and disable uvicorn's raw access log so solve inputs and credentials are not recorded.
 - Keep conda filesystem locking enabled in the persistent Docker server.
-- Refresh loaded solver indexes when conda considers their repodata stale, and key cached results by the repodata cache files used.
+- Refresh loaded solver indexes when conda considers their repodata stale, and validate cached results against the repodata cache files used.
 - Restart failed persistent workers in Docker while conda-broker restarts its server process.
 - Bypass cached solver results when py-rattler or repodata cache-file markers change, skip retention across ambiguous metadata transitions, and replace an existing solver cache entry after refresh.
+- Publish the Docker CLI alias as `cli`, keep CLI images from replacing `latest`, add source-revision tags, and omit ambiguous major-zero aliases.
 
 ## [0.6.0] - 2026-07-10
 
@@ -328,7 +332,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Dependabot configuration for GitHub Actions version updates.
 - BSD 3-Clause license.
 
-[Unreleased]: https://github.com/jezdez/conda-presto/compare/v0.6.0...HEAD
+[Unreleased]: https://github.com/jezdez/conda-presto/compare/v0.7.0...HEAD
+[0.7.0]: https://github.com/jezdez/conda-presto/releases/tag/v0.7.0
 [0.6.0]: https://github.com/jezdez/conda-presto/releases/tag/v0.6.0
 [0.5.1]: https://github.com/jezdez/conda-presto/releases/tag/v0.5.1
 [0.5.0]: https://github.com/jezdez/conda-presto/releases/tag/v0.5.0

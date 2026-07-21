@@ -6,7 +6,7 @@ compare two feasible results, and trace one transitive dependency.
 
 ## Start a local server
 
-Use the current-main installation from {doc}`../quickstart`, then run the HTTP
+Use the latest-release installation from {doc}`../quickstart`, then run the HTTP
 API in one terminal:
 
 ```bash

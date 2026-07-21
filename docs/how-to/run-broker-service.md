@@ -9,7 +9,7 @@ automatically and does not change one-shot `conda presto` commands.
 
 ## Install and verify the provider
 
-Use the current-main installation in {doc}`../quickstart`, then verify the
+Use the latest-release installation in {doc}`../quickstart`, then verify the
 provider from that activated conda environment:
 
 ```bash
