@@ -5,7 +5,31 @@ from __future__ import annotations
 from pathlib import Path
 from tomllib import loads
 
+import pytest
+
 ROOT = Path(__file__).resolve().parents[1]
+
+PIXI_IMAGE = (
+    "ghcr.io/prefix-dev/pixi:0.70.1@sha256:"
+    "2537738f8b7e2c7a7f070f56928ab959c4559a8d7e04f71eb16b0f779f0588f6"
+)
+DEBIAN_IMAGE = (
+    "debian:bookworm-slim@sha256:"
+    "7b140f374b289a7c2befc338f42ebe6441b7ea838a042bbd5acbfca6ec875818"
+)
+
+
+@pytest.mark.parametrize("path", ["Dockerfile", "docker/Dockerfile"])
+def test_dockerfile_pins_images_and_locks_runtime_files(path):
+    text = (ROOT / path).read_text()
+
+    assert f"FROM {PIXI_IMAGE}" in text
+    assert f"FROM {DEBIAN_IMAGE}" in text
+    assert "COPY pyproject.toml pixi.lock README.md ./" in text
+    assert "find / -xdev -type f -perm /6000 -exec chmod a-s {} +" in text
+    assert "chmod -R a-w /app/conda_presto" in text
+    assert "http.client.HTTPConnection('127.0.0.1'" in text
+    assert "sys.exit(c.getresponse().status != 200)" in text
 
 
 def test_dockerfile_has_server_healthcheck():

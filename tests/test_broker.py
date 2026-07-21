@@ -5,7 +5,6 @@ from __future__ import annotations
 import os
 import threading
 import time
-from contextlib import contextmanager
 from pathlib import Path
 from tomllib import loads
 from types import SimpleNamespace
@@ -20,6 +19,30 @@ from conda_broker.registry import ServiceRegistry
 import conda_presto.broker as broker_module
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+@pytest.fixture()
+def health_connection(monkeypatch):
+    calls = []
+    state = {"status": 200, "error": None}
+
+    class Connection:
+        def __init__(self, host, port, timeout):
+            calls.append(("connect", host, port, timeout))
+
+        def request(self, method, path):
+            calls.append(("request", method, path))
+            if state["error"] is not None:
+                raise state["error"]
+
+        def getresponse(self):
+            return SimpleNamespace(status=state["status"])
+
+        def close(self):
+            calls.append(("close",))
+
+    monkeypatch.setattr(broker_module, "HTTPConnection", Connection)
+    return calls, state
 
 
 def test_broker_service_exposes_root_and_health_check():
@@ -46,47 +69,72 @@ def test_broker_service_exposes_root_and_health_check():
     }
 
 
-def test_broker_health_check_uses_service_root(monkeypatch):
-    checked = []
-
-    @contextmanager
-    def response():
-        yield SimpleNamespace(status=200)
-
+def test_broker_health_check_uses_service_root(monkeypatch, health_connection):
+    calls, _ = health_connection
     monkeypatch.setenv("CONDA_PRESTO_URL", "http://127.0.0.1:8765/")
-    monkeypatch.setattr(
-        broker_module,
-        "urlopen",
-        lambda url, timeout: checked.append((url, timeout)) or response(),
-    )
 
     broker_module.main()
 
-    assert checked == [("http://127.0.0.1:8765/health", 2)]
+    assert calls == [
+        ("connect", "127.0.0.1", 8765, 2),
+        ("request", "GET", "/health"),
+        ("close",),
+    ]
 
 
-def test_broker_health_check_fails_when_unavailable(monkeypatch):
+@pytest.mark.parametrize("error", [OSError(), broker_module.HTTPException()])
+def test_broker_health_check_fails_when_unavailable(
+    monkeypatch,
+    health_connection,
+    error,
+):
+    calls, state = health_connection
     monkeypatch.setenv("CONDA_PRESTO_URL", "http://127.0.0.1:8765")
+    state["error"] = error
 
-    def unavailable(*_, **__):
-        raise OSError
+    with pytest.raises(SystemExit, match="1"):
+        broker_module.main()
 
-    monkeypatch.setattr(broker_module, "urlopen", unavailable)
+    assert calls[-1] == ("close",)
+
+
+@pytest.mark.parametrize("status", [302, 500])
+def test_broker_health_check_rejects_unsuccessful_response(
+    monkeypatch,
+    health_connection,
+    status,
+):
+    _, state = health_connection
+    state["status"] = status
+    monkeypatch.setenv("CONDA_PRESTO_URL", "http://127.0.0.1:8765")
 
     with pytest.raises(SystemExit, match="1"):
         broker_module.main()
 
 
-def test_broker_health_check_rejects_unsuccessful_response(monkeypatch):
-    @contextmanager
-    def response():
-        yield SimpleNamespace(status=500)
-
-    monkeypatch.setenv("CONDA_PRESTO_URL", "http://127.0.0.1:8765")
-    monkeypatch.setattr(broker_module, "urlopen", lambda *_, **__: response())
+@pytest.mark.parametrize(
+    "url",
+    [
+        pytest.param("https://127.0.0.1:8765", id="https"),
+        pytest.param("http://example.com:8765", id="non-loopback"),
+        pytest.param("http://user:password@127.0.0.1:8765", id="credentials"),
+        pytest.param("http://127.0.0.1:8765/base", id="path"),
+        pytest.param("http://127.0.0.1:8765?query=1", id="query"),
+        pytest.param("http://127.0.0.1:8765#fragment", id="fragment"),
+    ],
+)
+def test_broker_health_check_rejects_untrusted_urls(
+    monkeypatch,
+    health_connection,
+    url,
+):
+    calls, _ = health_connection
+    monkeypatch.setenv("CONDA_PRESTO_URL", url)
 
     with pytest.raises(SystemExit, match="1"):
         broker_module.main()
+
+    assert calls == []
 
 
 def test_broker_entry_point_is_discoverable():

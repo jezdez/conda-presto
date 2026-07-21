@@ -1,6 +1,4 @@
-ARG PIXI_VERSION=0.70.1
-
-FROM ghcr.io/prefix-dev/pixi:${PIXI_VERSION} AS build
+FROM ghcr.io/prefix-dev/pixi:0.70.1@sha256:2537738f8b7e2c7a7f070f56928ab959c4559a8d7e04f71eb16b0f779f0588f6 AS build
 
 ARG PIXI_ENV=prod
 
@@ -16,7 +14,7 @@ RUN echo '#!/bin/bash' > /app/entrypoint.sh \
     && cat /shell-hook >> /app/entrypoint.sh \
     && echo 'exec "$@"' >> /app/entrypoint.sh
 
-FROM debian:bookworm-slim AS production
+FROM debian:bookworm-slim@sha256:7b140f374b289a7c2befc338f42ebe6441b7ea838a042bbd5acbfca6ec875818 AS production
 
 ARG PIXI_ENV=prod
 
@@ -29,7 +27,10 @@ COPY --from=build --chmod=0755 /app/entrypoint.sh /app/entrypoint.sh
 COPY conda_presto/ /app/conda_presto/
 
 RUN mkdir -p /app/.pixi/envs/${PIXI_ENV}/pkgs/cache /home/app/.conda/pkgs \
-    && chown -R app:app /app/.pixi/envs/${PIXI_ENV}/pkgs /home/app
+    && chown -R app:app /app/.pixi/envs/${PIXI_ENV}/pkgs /home/app \
+    && find / -xdev -type f -perm /6000 -exec chmod a-s {} + \
+    && chmod -R a-w /app/conda_presto \
+    && chmod a-w /app/entrypoint.sh
 
 USER app
 ENTRYPOINT ["/app/entrypoint.sh", "conda", "presto"]
@@ -45,7 +46,7 @@ ENTRYPOINT ["/app/entrypoint.sh", "env", "CONDA_NO_LOCK=false", "conda", "presto
 EXPOSE 8000
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=120s --retries=3 \
-    CMD /app/.pixi/envs/prod/bin/python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3).read()"
+    CMD /app/.pixi/envs/prod/bin/python -c "import http.client, sys; c = http.client.HTTPConnection('127.0.0.1', 8000, timeout=3); c.request('GET', '/health'); sys.exit(c.getresponse().status != 200)"
 
 CMD ["--serve", "--host", "0.0.0.0"]
 

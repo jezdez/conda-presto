@@ -30,8 +30,9 @@ jobs:
           platforms: linux-64,osx-arm64
 ```
 
-Local mode is the default. The Action installs Pixi and runs conda-presto from
-the pinned Action checkout. It does not require a running server.
+Local mode is the default. The Action downloads a pinned Pixi release, verifies
+its SHA-256 digest, and runs conda-presto from the pinned Action checkout. It
+does not require a running server.
 
 ## Write and upload a lockfile
 
@@ -98,7 +99,15 @@ variable `CONDA_PRESTO_URL`. Use a secret instead if the URL itself contains
 sensitive information.
 
 Remote mode requires `jq` and `curl` on the runner. GitHub-hosted Ubuntu
-runners provide both tools.
+runners provide both tools. It sends the complete environment file and channel
+configuration to the endpoint. Use only a trusted HTTPS deployment whose
+operators are permitted to read that data.
+
+The Action rejects plain HTTP except for `localhost`, `127.0.0.1`, and `::1`.
+It disables curl's default `curlrc` configuration, accepts only HTTP 2xx, and
+validates the native JSON result shape when no exporter format is selected.
+It does not print response bodies automatically. Use `output` to write the body
+to a workspace file, or read the bounded `result` output in a later step.
 
 ## Read outputs in another step
 

@@ -55,8 +55,8 @@ Server tuning:
 
 Request limits (abuse/DoS protection):
     ``CONDA_PRESTO_SOLVE_TIMEOUT_S``
-        Max wall-clock seconds per solve request (default: ``60``).
-        Returns HTTP 504 if exceeded.
+        Solver deadline per HTTP request (default: ``60``). Non-abandoned
+        cache-state inspection can extend observed request duration.
     ``CONDA_PRESTO_PARSE_TIMEOUT_S``
         Max wall-clock seconds per file parse request (default: ``10``).
         Returns HTTP 504 if exceeded.
@@ -66,6 +66,11 @@ Request limits (abuse/DoS protection):
     ``CONDA_PRESTO_MAX_SPECS``
         Max specs per request (default: ``200``).  Returns HTTP 400
         if exceeded.
+    ``CONDA_PRESTO_MAX_SOLVER_CHANNELS``
+        Max channels in one private solver request (default: ``128``).
+    ``CONDA_PRESTO_MAX_SOLVER_STATE_ITEMS``
+        Max combined records and specs in one private solver request
+        (default: ``10000``).
     ``CONDA_PRESTO_MAX_REPAIR_SUGGESTIONS``
         Max returned repair suggestions per request (default: ``5``).
     ``CONDA_PRESTO_MAX_REPAIR_ATTEMPTS``
@@ -223,6 +228,10 @@ PARSE_TIMEOUT_S = env_int("CONDA_PRESTO_PARSE_TIMEOUT_S", 10)
 MAX_CHANNELS = env_int("CONDA_PRESTO_MAX_CHANNELS", 8)
 MAX_PLATFORMS = env_int("CONDA_PRESTO_MAX_PLATFORMS", 8)
 MAX_SPECS = env_int("CONDA_PRESTO_MAX_SPECS", 200)
+MAX_SOLVER_CHANNELS = env_int("CONDA_PRESTO_MAX_SOLVER_CHANNELS", 128)
+MAX_SOLVER_STATE_ITEMS = env_int("CONDA_PRESTO_MAX_SOLVER_STATE_ITEMS", 10_000)
+if min(MAX_SOLVER_CHANNELS, MAX_SOLVER_STATE_ITEMS) < 1:
+    raise ValueError("Private solver request limits must be positive")
 MAX_REPAIR_SUGGESTIONS = env_int("CONDA_PRESTO_MAX_REPAIR_SUGGESTIONS", 5)
 MAX_REPAIR_ATTEMPTS = env_int("CONDA_PRESTO_MAX_REPAIR_ATTEMPTS", 20)
 MAX_REPAIR_TIME_BUDGET_MS = env_int("CONDA_PRESTO_MAX_REPAIR_TIME_BUDGET_MS", 5_000)

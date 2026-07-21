@@ -6,10 +6,11 @@ The same solve engine is available through the `conda presto` CLI, a Litestar HT
 
 ## Capabilities
 
-- Resolve inline specs or supported environment and lockfile inputs selected through conda environment specifier plugins
+- Resolve inline specs or supported environment inputs selected through conda environment specifier plugins
 - Solve several target platforms with deterministic target virtual-package defaults
 - Write native package metadata or any installed conda exporter format
-- Convert covered lockfiles through `/transcode` without solving
+- Convert covered lockfiles through the CLI without solving
+- Inspect lockfile metadata over HTTP without loading package records
 - Parse and review inputs through `/parse`, `/preflight`, `/repair`, `/diff`, and `/explain`
 - Retain HTTP results under content-addressed `/r/<hash>` locations with memory, file, or Redis storage
 - Run a persistent public HTTP worker in the server container
@@ -43,6 +44,8 @@ conda-presto is installed from PyPI into a conda environment that supplies conda
 docker run --detach \
   --name conda-presto \
   --publish 127.0.0.1:8000:8000 \
+  --cap-drop ALL \
+  --security-opt no-new-privileges \
   ghcr.io/jezdez/conda-presto:0.7.0
 for _ in {1..180}
 do

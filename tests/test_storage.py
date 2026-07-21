@@ -6,7 +6,9 @@ from datetime import timedelta
 
 import anyio
 import pytest
+from litestar.stores.file import FileStore
 
+import conda_presto.storage as storage_module
 from conda_presto.storage import StoreOperationCoordinator
 
 
@@ -67,6 +69,90 @@ async def test_store_operation_errors_reach_the_waiting_caller():
     async with coordinator.lifespan():
         with pytest.raises(OSError, match="store unavailable"):
             await coordinator.set("key", b"value", timeout_s=1)
+
+
+@pytest.mark.anyio
+async def test_store_operation_coordinator_deletes_entries():
+    class Store:
+        value = b"value"
+
+        async def delete(self, _key):
+            self.value = None
+
+    store = Store()
+    coordinator = StoreOperationCoordinator(store)
+
+    async with coordinator.lifespan():
+        assert await coordinator.delete("key", timeout_s=1)
+
+    assert store.value is None
+
+
+@pytest.mark.anyio
+async def test_file_store_expired_entries_are_removed_at_startup(tmp_path):
+    store = FileStore(tmp_path / "cache", create_directories=True)
+    await store.set("expired", b"value", expires_in=-1)
+    assert [file async for file in store.path.iterdir()]
+
+    coordinator = StoreOperationCoordinator(store)
+    async with coordinator.lifespan():
+        pass
+
+    assert not [file async for file in store.path.iterdir()]
+
+
+@pytest.mark.anyio
+async def test_file_store_expired_entries_are_removed_while_running(
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.setattr(storage_module, "FILE_STORE_CLEANUP_INTERVAL_S", 0.01)
+    store = FileStore(tmp_path / "cache", create_directories=True)
+    coordinator = StoreOperationCoordinator(store)
+
+    async with coordinator.lifespan():
+        assert await coordinator.set(
+            "expired",
+            b"value",
+            timeout_s=1,
+            expires_in=timedelta(milliseconds=20),
+        )
+        await anyio.sleep(0.03)
+        with anyio.fail_after(1):
+            while [file async for file in store.path.iterdir()]:
+                await anyio.sleep(0.01)
+
+    assert not [file async for file in store.path.iterdir()]
+
+
+@pytest.mark.anyio
+async def test_corrupt_file_store_entry_does_not_block_startup(tmp_path):
+    store = FileStore(tmp_path / "cache", create_directories=True)
+    await store.path.mkdir(parents=True)
+    corrupt = store.path / "corrupt"
+    await corrupt.write_bytes(b"corrupt")
+
+    coordinator = StoreOperationCoordinator(store)
+    async with coordinator.lifespan():
+        pass
+
+    assert not await corrupt.exists()
+
+
+@pytest.mark.anyio
+async def test_file_store_write_is_verified(tmp_path):
+    class DroppingFileStore(FileStore):
+        async def set(self, key, value, expires_in=None):
+            pass
+
+    store = DroppingFileStore(tmp_path / "cache", create_directories=True)
+    coordinator = StoreOperationCoordinator(store)
+
+    async with coordinator.lifespan():
+        with pytest.raises(OSError, match="write failed"):
+            await coordinator.set("key", b"value", timeout_s=1)
+
+    assert await store.get("key") is None
 
 
 @pytest.mark.anyio

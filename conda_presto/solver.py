@@ -6,14 +6,14 @@ import hashlib
 import ipaddress
 import json
 import logging
+import time
 from collections.abc import Iterator
 from contextlib import ExitStack, contextmanager
+from http.client import HTTPConnection, HTTPException, HTTPResponse
 from importlib.metadata import version as pkg_version
 from types import MappingProxyType
 from typing import Any, Literal, NoReturn
-from urllib.error import HTTPError, URLError
-from urllib.parse import urljoin, urlparse
-from urllib.request import HTTPRedirectHandler, ProxyHandler, Request, build_opener
+from urllib.parse import urlparse
 
 import msgspec
 from conda.auxlib import NULL
@@ -35,12 +35,15 @@ from conda_rattler_solver.solver import RattlerSolver
 from conda_rattler_solver.state import SolverInputState, SolverOutputState
 
 from .config import SOLVE_TIMEOUT_S
+from .exceptions import contains_credentials, redact_safe_error
 from .resolve import RepodataSnapshot, platform_lock
 
 log = logging.getLogger(__name__)
 
-SOLVER_CACHE_ENVELOPE_VERSION = 3
+SOLVER_CACHE_ENVELOPE_VERSION = 4
 SOLVER_WARMING_ENVELOPE_VERSION = 1
+SOLVER_RESPONSE_MAX_BYTES = 8 * 1024 * 1024
+SOLVER_RESPONSE_READ_SIZE = 64 * 1024
 SOLVER_CACHE_DEPENDENCY_PACKAGES = (
     "conda-presto",
     "conda",
@@ -80,14 +83,20 @@ class PrestoSolveError(msgspec.Struct):
     def from_exception(cls, error: CondaError) -> PrestoSolveError:
         """Capture the public conda error data used by CLI retry handling."""
         common = {
-            "message": str(error),
+            "message": redact_safe_error(str(error)),
             "allow_retry": getattr(error, "allow_retry", None),
         }
         if isinstance(error, PackagesNotFoundError):
+            channel_urls = []
+            for channel in error.channel_urls:
+                try:
+                    channel_urls.append(str(Channel(channel)))
+                except Exception:
+                    channel_urls.append("[redacted-url]")
             return cls(
                 kind="packages-not-found",
                 packages=[str(package) for package in error.packages],
-                channel_urls=[str(channel) for channel in error.channel_urls],
+                channel_urls=channel_urls,
                 **common,
             )
         if isinstance(error, SpecsConfigurationConflictError):
@@ -139,11 +148,8 @@ class PrestoSolveOutcome(msgspec.Struct):
             and self.metadata_used is not None
             and not current.stale
             and current.records == self.metadata_used.records
+            and self.metadata_before.records == self.metadata_used.records
             and self.metadata_used.is_cacheable_after(self.metadata_before)
-            and (
-                self.metadata_before.stale
-                or self.metadata_before.records == self.metadata_used.records
-            )
         )
 
 
@@ -293,27 +299,13 @@ class PrestoSolveRequest(msgspec.Struct, forbid_unknown_fields=True):
     def has_detected_credentials(self) -> bool:
         """Return whether known credential patterns occur in this request."""
         pending = [self.canonical_state()]
-        while pending:
-            value = pending.pop()
-            if isinstance(value, dict):
-                for key, item in value.items():
-                    if key.lower() in {"auth", "password", "token"} and item:
-                        return True
-                    pending.append(item)
-            elif isinstance(value, (list, tuple)):
-                pending.extend(value)
-            elif isinstance(value, str):
-                parsed = urlparse(value)
-                if (
-                    parsed.username
-                    or parsed.password
-                    or (parsed.scheme and (parsed.query or parsed.fragment))
-                ):
-                    return True
-                parts = [part for part in parsed.path.split("/") if part]
-                if parsed.scheme and "t" in parts[:-1]:
-                    return True
-        return False
+        for channel_data in self.channels:
+            try:
+                channel = Channel(**channel_data)
+                pending.extend(channel.urls(with_credentials=True, subdirs=("noarch",)))
+            except Exception:
+                return True
+        return contains_credentials(pending)
 
     def repodata_snapshot(self) -> RepodataSnapshot:
         """Capture the server metadata that can affect this solve."""
@@ -530,14 +522,7 @@ class PrestoSolverClient:
     """Call the broker-discovered internal Presto solver endpoint."""
 
     service_name = "conda-presto.server"
-
-    class RedirectHandler(HTTPRedirectHandler):
-        """Reject redirects so solve state never leaves the loopback endpoint."""
-
-        def redirect_request(self, req, fp, code, msg, headers, newurl):
-            return None
-
-    opener = build_opener(ProxyHandler({}), RedirectHandler())
+    connection_class = HTTPConnection
 
     @staticmethod
     def is_loopback(host: str) -> bool:
@@ -556,49 +541,121 @@ class PrestoSolverClient:
     ) -> PrestoSolveResponse:
         """Submit a serialized solver request without managing the service."""
         endpoint = Broker.current().service(self.service_name).endpoint(ready=True)
-        parsed_url = urlparse(endpoint.url) if endpoint and endpoint.url else None
+        try:
+            parsed_url = urlparse(endpoint.url) if endpoint and endpoint.url else None
+            hostname = parsed_url.hostname if parsed_url is not None else None
+            port = parsed_url.port or 80 if parsed_url is not None else None
+        except ValueError:
+            parsed_url = None
+            hostname = None
+            port = None
         if (
             endpoint is None
             or endpoint.protocol != "http"
             or parsed_url is None
             or parsed_url.scheme != "http"
-            or parsed_url.hostname is None
-            or not self.is_loopback(parsed_url.hostname)
+            or hostname is None
+            or not self.is_loopback(hostname)
+            or parsed_url.username is not None
+            or parsed_url.password is not None
+            or parsed_url.query
+            or parsed_url.fragment
         ):
             raise PrestoSolverError(
                 "The internal Presto solver requires a ready loopback service. "
                 "Run 'conda broker start conda-presto.server' and "
                 "'conda broker wait conda-presto.server'."
             )
-        url = urljoin(f"{endpoint.url.rstrip('/')}/", "solver/v1")
-        http_request = Request(
-            url,
-            data=msgspec.json.encode(request),
-            headers={"Content-Type": "application/json"},
-            method="POST",
+        timeout = SOLVE_TIMEOUT_S + 5
+        deadline = time.monotonic() + timeout
+        path = f"{parsed_url.path.rstrip('/')}/solver/v1"
+        connection = self.connection_class(
+            hostname,
+            port,
+            timeout=timeout,
         )
         try:
-            with self.opener.open(
-                http_request, timeout=SOLVE_TIMEOUT_S + 5
-            ) as response:
-                return msgspec.json.decode(response.read(), type=PrestoSolveResponse)
-        except HTTPError as exc:
-            body = exc.read()
-            if exc.code == 422:
+            connection.request(
+                "POST",
+                path,
+                body=msgspec.json.encode(request),
+                headers={"Content-Type": "application/json"},
+            )
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise TimeoutError("response deadline exceeded")
+            if connection.sock is not None:
+                connection.sock.settimeout(remaining)
+            response = connection.getresponse()
+            body = self.read_response(response, connection, deadline)
+            if response.status == 200:
+                return msgspec.json.decode(body, type=PrestoSolveResponse)
+            if response.status == 422:
                 try:
                     error = msgspec.json.decode(body, type=PrestoSolveError)
                 except (msgspec.DecodeError, msgspec.ValidationError):
                     pass
                 else:
                     error.raise_exception(prefix)
-            detail = body.decode("utf-8", errors="replace")
+            detail = redact_safe_error(body.decode("utf-8", errors="replace"))
             raise PrestoSolverError(
-                f"The internal Presto solver returned HTTP {exc.code}: {detail}"
+                f"The internal Presto solver returned HTTP {response.status}: {detail}"
             ) from None
-        except (OSError, URLError, msgspec.DecodeError, msgspec.ValidationError) as exc:
+        except PrestoSolverError:
+            raise
+        except (
+            OSError,
+            HTTPException,
+            msgspec.DecodeError,
+            msgspec.ValidationError,
+        ) as exc:
             raise PrestoSolverError(
                 f"The internal Presto solver is unavailable: {exc}"
             ) from None
+        finally:
+            connection.close()
+
+    @staticmethod
+    def read_response(
+        response: HTTPResponse,
+        connection: HTTPConnection,
+        deadline: float,
+    ) -> bytes:
+        """Read one response within the size limit and total deadline."""
+        content_length = response.getheader("Content-Length")
+        if content_length is not None:
+            try:
+                declared_size = int(content_length)
+            except ValueError:
+                raise PrestoSolverError(
+                    "The internal Presto solver returned an invalid Content-Length."
+                ) from None
+            if declared_size < 0 or declared_size > SOLVER_RESPONSE_MAX_BYTES:
+                raise PrestoSolverError(
+                    "The internal Presto solver response exceeds the size limit."
+                )
+
+        body = bytearray()
+        while len(body) <= SOLVER_RESPONSE_MAX_BYTES:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise TimeoutError("response deadline exceeded")
+            if connection.sock is not None:
+                connection.sock.settimeout(remaining)
+            chunk = response.read1(
+                min(
+                    SOLVER_RESPONSE_READ_SIZE,
+                    SOLVER_RESPONSE_MAX_BYTES + 1 - len(body),
+                )
+            )
+            if not chunk:
+                break
+            body.extend(chunk)
+        if len(body) > SOLVER_RESPONSE_MAX_BYTES:
+            raise PrestoSolverError(
+                "The internal Presto solver response exceeds the size limit."
+            )
+        return bytes(body)
 
 
 class PrestoSolver(RattlerSolver):

@@ -19,6 +19,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Cache successful `/solver/v1` final states by serialized solver request fields and dependency versions, with repodata cache-file markers recorded by the worker.
 - Record successful cacheable foreground `/solver/v1` requests as cache-warming candidates.
 - Check recorded solver requests and refresh missing or stale cache entries when no foreground solve is active or waiting.
+- Publish container SBOMs and GitHub-verifiable image attestations, and scan Python and GitHub Actions changes with CodeQL.
 
 ### Changed
 
@@ -28,6 +29,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - Limit public HTTP access logs to request metadata and response status, and disable uvicorn's raw access log so solve inputs and credentials are not recorded.
+- Restrict the private solver route to loopback JSON requests for the broker-assigned authority, reject browser origins, and serve OpenAPI as JSON without remotely loaded browser code.
+- Bound private solver channels and serialized state independently of the public API, return generic unexpected errors, and redact URL-shaped strings and conda `Current channels:` blocks from application and dependency logs.
+- Compare channel allowlists by resolved credential-free URLs so canonical names cannot authorize another host, protocol downgrade, or wildcard local-file access.
+- Apply `no-store` to successful mutable `/resolve` cache responses, reserve immutable caching for content-addressed permalinks, and skip retention when requests or produced package URLs contain detected credential patterns.
+- Include effective conda settings, per-platform virtual-package records, stronger repodata file identity, and identifiable exporter provider callbacks and distribution versions in public result-cache keys.
+- Recheck repodata before returning public cache hits, and publish public and private results only when their before-and-after repodata markers are unchanged and safe.
+- Isolate HTTP file parsing in a terminable process, bound input structure before conda plugin object construction, reject YAML aliases, remove its temporary directory after process cleanup, and reject non-printable or longer-than-240-byte basenames.
+- Prevent HTTP lockfile uploads from fetching package URLs during parsing. HTTP can inspect lockfile metadata but rejects operations that require package-record materialization. Direct CLI lockfile transcoding is unchanged.
+- Bound solver responses, individual persistent values, and recorded-request catalogs, expire persistent entries, remove invalid stored values, and perform best-effort file-store cleanup at startup and hourly.
+- Document required filesystem quotas and Redis `maxmemory` eviction because persistent TTL and per-value limits do not bound aggregate storage.
+- Require verified signed release tags on `main` with successful CI and CodeQL checks, build from the verified commit, separate artifact builds from OIDC attestation, and restrict Docker publication to published final releases.
+- Build and scan server and CLI images on amd64 and arm64, require approval through the protected `ghcr` environment before publication, publish full vulnerability reports, pin base images by digest, keep application and environment files outside writable cache and home paths read-only, and remove unnecessary setuid and setgid permissions.
+- Verify the Pixi download used by workflows and the composite Action, keep response bodies out of Action logs, require HTTPS except for loopback, disable curl configuration, accept only HTTP 2xx, and validate native JSON.
+- Lock release build tooling, require setuptools 83 or newer, and isolate automated lockfile generation from its write-token job.
 - Keep conda filesystem locking enabled in the persistent Docker server.
 - Refresh loaded solver indexes when conda considers their repodata stale, and validate cached results against the repodata cache files used.
 - Restart failed persistent workers in Docker while conda-broker restarts its server process.

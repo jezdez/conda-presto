@@ -12,8 +12,41 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  pixi-update:
+  update:
     name: Update Pixi lockfile
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Install verified Pixi
+        run: bash .github/scripts/install-pixi
+
+      - uses: prefix-dev/setup-pixi@a09b6247153796b190642a2b53fac4241043cf6f # v0.10.0
+        with:
+          run-install: false
+
+      - name: Update lockfile
+        run: |
+          set -euo pipefail
+          pixi update --no-install
+          printf "Updates \`%s\` from the constraints in \`%s\`.\n" \
+            pixi.lock pyproject.toml > diff.md
+
+      - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: lockfile-update
+          path: |
+            pixi.lock
+            diff.md
+          if-no-files-found: error
+
+  create-pull-request:
+    name: Create dependency pull request
+    needs: [update]
     runs-on: ubuntu-latest
     permissions:
       contents: write # Push the updated lockfile branch.
@@ -23,14 +56,10 @@ jobs:
         with:
           persist-credentials: false
 
-      - uses: prefix-dev/setup-pixi@a09b6247153796b190642a2b53fac4241043cf6f # v0.10.0
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          run-install: false
-
-      - name: Update lockfile
-        run: |
-          set -euo pipefail
-          pixi update --json --no-install | pixi exec -s "pixi-diff-to-markdown>=0.3.9" pixi-diff-to-markdown >> diff.md
+          name: lockfile-update
+          path: .
 
       - name: Create pull request
         env:

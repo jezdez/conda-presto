@@ -94,6 +94,7 @@ conda = ">=26.5,<27"
 conda-rattler-solver = ">=0.1.1,<0.2"
 conda-lockfiles = ">=0.2.1"
 msgspec = ">=0.19"
+setuptools = ">=83"
 
 [tool.pixi.pypi-dependencies]
 conda-presto = { path = ".", editable = true }
@@ -124,6 +125,13 @@ uvicorn = ">=0.34"
 brotli-python = ">=1.1"
 redis-py = ">=5.0"
 
+[tool.pixi.feature.release.dependencies]
+hatch-vcs = ">=0.2.0"
+hatchling = ">=1.12.2"
+python-build = ">=1.2"
+python = ">=3.13,<3.14"
+setuptools = ">=83"
+
 [tool.pixi.environments]
 dev = { features = ["dev", "server"], solve-group = "default" }
 test = { features = ["test", "server"], solve-group = "default" }
@@ -131,6 +139,7 @@ prod = { features = ["server"], solve-group = "default" }
 redis = { features = ["server"], solve-group = "default" }
 cli = { solve-group = "default" }
 docs = { features = ["docs"], solve-group = "default" }
+release = { features = ["release"], no-default-feature = true }
 
 [tool.pixi.activation.env]
 CONDA_CHANNEL_PRIORITY = "strict"
@@ -150,5 +159,5 @@ lint = { cmd = "ruff check conda_presto tests", description = "Check code style"
 format = { cmd = "ruff format conda_presto tests", description = "Auto-format code" }
 test = { cmd = "pytest", description = "Run tests" }
 bench = { cmd = "pytest tests/test_benchmarks.py --benchmark-enable", description = "Run benchmarks" }
-serve = { cmd = "uvicorn conda_presto.app:app --reload", description = "Run dev server" }
+serve = { cmd = "uvicorn conda_presto.app:app --reload --no-access-log", description = "Run dev server" }
 solve = { cmd = "conda-presto", description = "Run a solve" }

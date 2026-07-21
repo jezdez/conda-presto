@@ -128,7 +128,9 @@ conda broker wait conda-presto.server --timeout 180
 Loopback prevents remote network access, but it does not authenticate users on
 the same host. Run the service only on a trusted single-user system or behind
 equivalent process isolation. Keep private-channel credentials and persistent
-cache data inside that boundary.
+cache data inside that boundary. The solver route rejects browser-originated,
+non-JSON, wrong-authority, and non-loopback requests, but another local process
+that can discover the endpoint remains inside the same trust boundary.
 
 Read {doc}`../explanation/security` before using private channels. Use
 {doc}`use-presto-solver` to select the local solver backend. See

@@ -33,37 +33,40 @@ when all of these conditions hold:
 If those conditions do not hold, the normal CLI path may solve the combined
 request instead.
 
-## Transcode through the HTTP API
+## Understand the HTTP boundary
 
-The `/transcode` endpoint is stricter. It rejects a request that would require
-a solve:
+The HTTP parser recognizes lockfile format and platform metadata but does not
+materialize package records. Current environment-specifier plugins can fetch
+the package URLs while building those records, which is not safe for an
+untrusted upload. Use the CLI for the conversion itself.
+
+`POST /transcode` reports this boundary as HTTP 400:
 
 ```bash
 export CONDA_PRESTO_URL=http://127.0.0.1:8000
 
-curl --fail --silent --show-error \
+curl --silent --show-error \
   --data-binary @pixi.lock \
   --header 'Content-Type: application/yaml' \
   "$CONDA_PRESTO_URL/transcode?filename=pixi.lock&platform=linux-64&platform=osx-arm64&format=conda-lock-v1" \
-  --output conda-lock.yml
+  | jq
 ```
 
 Use `filename` when the media type does not identify the lockfile parser.
 
 ## Diagnose a rejected transcode
 
-Remove `--fail` temporarily to inspect the HTTP 400 response:
+The normal materialization rejection is:
 
-```bash
-curl --silent --show-error \
-  --data-binary @pixi.lock \
-  --header 'Content-Type: application/yaml' \
-  "$CONDA_PRESTO_URL/transcode?filename=pixi.lock&platform=win-64&format=conda-lock-v1" \
-  | jq
+```json
+{
+  "error": "Request cannot be transcoded",
+  "reasons": ["lockfile package records cannot be loaded from HTTP input"]
+}
 ```
 
-The `reasons` list identifies missing platforms, a non-lockfile input or
-output, or request fields that would require a solve.
+The `reasons` list can instead identify missing platforms, a non-lockfile input
+or output, or request fields that would require a solve.
 
 Available lockfile exporters are listed in
 {doc}`../reference/output-formats`. For a normal environment-to-lockfile solve,

@@ -14,7 +14,7 @@ codebase.
 
 | Issue | Status | Summary |
 |---|:---:|---|
-| [Lockfile transcoder mode](https://github.com/jezdez/conda-presto/issues/11) | {bdg-success}`shipped` | Lockfile-in / lockfile-out `/transcode` endpoint and CLI fast path |
+| [Lockfile transcoder mode](https://github.com/jezdez/conda-presto/issues/11) | {bdg-success}`shipped` | CLI lockfile-in / lockfile-out fast path and metadata-only HTTP validation |
 | [GitHub Action for CI workflows](https://github.com/jezdez/conda-presto/issues/17) | {bdg-success}`shipped` | Composite action for local CLI or hosted API solve workflows |
 | [Content-addressed solve cache](https://github.com/jezdez/conda-presto/issues/19) | {bdg-success}`shipped` | HTTP result cache with durable `/r/<hash>` lookup while entries are retained |
 
@@ -23,7 +23,7 @@ codebase.
 | Issue | Status | Summary |
 |---|:---:|---|
 | [Preflight validation](https://github.com/jezdez/conda-presto/issues/16) | {bdg-success}`shipped` | Deterministic local input checks and lint-style findings |
-| [Environment / lockfile diff](https://github.com/jezdez/conda-presto/issues/14) | {bdg-success}`shipped` | Platform-aware comparisons between resolved environments and covered lockfiles |
+| [Environment / lockfile diff](https://github.com/jezdez/conda-presto/issues/14) | {bdg-success}`shipped` | Platform-aware comparisons between resolved HTTP inputs |
 | [Explain package inclusion](https://github.com/jezdez/conda-presto/issues/15) | {bdg-success}`shipped` | Bounded dependency-chain explanations for successful single-platform solves |
 
 ## v0.7 repair and solver service
@@ -75,9 +75,10 @@ graph TD
     class T,P,GH,PF,D,E,RPR,B,FS,WC,CW shipped;
 ```
 
-Diff and explain can use existing lockfile records when the requested platform
-is covered. Repair stays separate from explain because it may run repeated
-solver attempts under an explicit budget. The internal Presto solver backend
+HTTP lockfile uploads remain metadata-only because materializing their package
+records can fetch package URLs. Repair stays separate from explain because it
+may run repeated solver attempts under an explicit budget. The internal Presto
+solver backend
 uses the broker-managed local process and does not define a remote protocol.
 Its final-state entries share the configured cache storage and
 in-memory bounds, but remain separate from public `/resolve` permalinks.

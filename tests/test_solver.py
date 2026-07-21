@@ -4,11 +4,8 @@ from __future__ import annotations
 
 from collections import OrderedDict
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from io import BytesIO
 from threading import Thread
 from types import SimpleNamespace
-from urllib.error import HTTPError
-from urllib.request import ProxyHandler
 
 import msgspec
 import pytest
@@ -69,6 +66,48 @@ def broker_endpoint(monkeypatch):
         SimpleNamespace(current=lambda: broker),
     )
     return endpoint
+
+
+@pytest.fixture()
+def solver_connection(monkeypatch):
+    calls = []
+
+    class Response:
+        status = 200
+        body = msgspec.json.encode(PrestoSolveResponse(records=[], neutered=[]))
+        content_length = None
+
+        def getheader(self, name):
+            if name == "Content-Length":
+                return self.content_length
+            return None
+
+        def read1(self, size):
+            chunk, self.body = self.body[:size], self.body[size:]
+            return chunk
+
+    class Connection:
+        response_type = Response
+        transport_error = None
+
+        def __init__(self, host, port, timeout):
+            calls.append(("connect", host, port, timeout))
+            self.sock = None
+            self.response = self.response_type()
+
+        def request(self, method, path, body, headers):
+            calls.append(("request", method, path, body, headers))
+            if self.transport_error is not None:
+                raise self.transport_error
+
+        def getresponse(self):
+            return self.response
+
+        def close(self):
+            calls.append(("close",))
+
+    monkeypatch.setattr(PrestoSolverClient, "connection_class", Connection)
+    return Connection, calls
 
 
 @pytest.mark.parametrize(
@@ -154,7 +193,7 @@ def test_solver_cache_key_preserves_channel_order(solver_request):
 
 def test_solver_cache_key_covers_protocol_version(monkeypatch, solver_request):
     first = solver_request.cache_key()
-    monkeypatch.setattr(solver_module, "SOLVER_CACHE_ENVELOPE_VERSION", 4)
+    monkeypatch.setattr(solver_module, "SOLVER_CACHE_ENVELOPE_VERSION", 5)
 
     assert solver_request.cache_key() != first
 
@@ -217,8 +256,8 @@ def test_solver_cache_key_is_stable_across_repodata(
             RepodataSnapshot((("channel", "repodata.json", 10, 1),), True),
             RepodataSnapshot((("channel", "repodata.json", 20, 2),), False),
             RepodataSnapshot((("channel", "repodata.json", 20, 2),), False),
-            True,
-            id="stale-refreshed",
+            False,
+            id="stale-changed-before-marker-capture",
         ),
         pytest.param(
             RepodataSnapshot((("channel", "repodata.json", 10, 1),), True),
@@ -530,6 +569,21 @@ def test_presto_error_roundtrip(error, expected_type):
     assert raised.value.allow_retry is False
     if isinstance(raised.value, SpecsConfigurationConflictError):
         assert "/client-prefix/conda-meta/pinned" in str(raised.value)
+
+
+def test_presto_error_roundtrip_redacts_channel_credentials():
+    secret_url = "https://user:password@example.test/t/token/channel"
+    serialized = PrestoSolveError.from_exception(
+        PackagesNotFoundError(["missing"], [secret_url])
+    )
+
+    assert serialized.channel_urls == ["https://example.test/channel"]
+    assert "password" not in serialized.message
+    assert "token" not in serialized.message
+    with pytest.raises(PackagesNotFoundError) as raised:
+        serialized.raise_exception("/client-prefix")
+    assert "password" not in str(raised.value)
+    assert "token" not in str(raised.value)
 
 
 def test_presto_request_uses_rattler_backend(
@@ -913,34 +967,20 @@ def test_presto_request_capture_rejects_unsupported_state(
             PrestoSolveRequest.from_solver(solver, input_state)
 
 
-def test_client_posts_to_broker_loopback(monkeypatch, solver_request, broker_endpoint):
-    calls = []
-
-    class Response:
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *exc_info):
-            return False
-
-        def read(self):
-            return msgspec.json.encode(PrestoSolveResponse(records=[], neutered=[]))
-
-    def open_request(request, timeout):
-        calls.append((request, timeout))
-        return Response()
-
-    monkeypatch.setattr(
-        PrestoSolverClient,
-        "opener",
-        SimpleNamespace(open=open_request),
-    )
-
+def test_client_posts_to_broker_loopback(
+    solver_request,
+    broker_endpoint,
+    solver_connection,
+):
+    _, calls = solver_connection
     response = PrestoSolverClient().solve(solver_request, "/tmp/prefix")
 
     assert response == PrestoSolveResponse(records=[], neutered=[])
-    assert calls[0][0].full_url == "http://127.0.0.1:8765/solver/v1"
-    assert calls[0][1] == 65
+    assert calls[0] == ("connect", "127.0.0.1", 8765, 65)
+    assert calls[1][0:3] == ("request", "POST", "/solver/v1")
+    assert calls[1][3] == msgspec.json.encode(solver_request)
+    assert calls[1][4] == {"Content-Type": "application/json"}
+    assert calls[2] == ("close",)
 
 
 @pytest.mark.parametrize(
@@ -964,9 +1004,25 @@ def test_client_rejects_non_loopback_broker_endpoint(solver_request, broker_endp
         PrestoSolverClient().solve(solver_request, "/tmp/prefix")
 
 
-def test_client_rejects_redirects_and_environment_proxies(
-    solver_request, broker_endpoint
+@pytest.mark.parametrize(
+    "url",
+    [
+        pytest.param("http://[", id="invalid-ipv6"),
+        pytest.param("http://127.0.0.1:not-a-port", id="invalid-port"),
+    ],
+)
+def test_client_wraps_malformed_broker_endpoint(
+    solver_request,
+    broker_endpoint,
+    url,
 ):
+    broker_endpoint.url = url
+
+    with pytest.raises(PrestoSolverError, match="ready loopback service"):
+        PrestoSolverClient().solve(solver_request, "/tmp/prefix")
+
+
+def test_client_rejects_redirects(solver_request, broker_endpoint):
     requests = []
 
     class Handler(BaseHTTPRequestHandler):
@@ -997,10 +1053,6 @@ def test_client_rejects_redirects_and_environment_proxies(
         thread.join()
 
     assert requests == ["/solver/v1"]
-    assert not any(
-        isinstance(handler, ProxyHandler)
-        for handler in PrestoSolverClient.opener.handlers
-    )
 
 
 @pytest.mark.parametrize(
@@ -1017,24 +1069,15 @@ def test_client_rejects_redirects_and_environment_proxies(
     ],
 )
 def test_client_restores_conda_http_error(
-    monkeypatch, solver_request, broker_endpoint, error
+    solver_request,
+    broker_endpoint,
+    error,
+    solver_connection,
 ):
-    monkeypatch.setattr(
-        PrestoSolverClient,
-        "opener",
-        SimpleNamespace(
-            open=lambda request, timeout: (_ for _ in ()).throw(
-                HTTPError(
-                    request.full_url,
-                    422,
-                    "unprocessable",
-                    {},
-                    BytesIO(
-                        msgspec.json.encode(PrestoSolveError.from_exception(error))
-                    ),
-                ),
-            )
-        ),
+    connection, _ = solver_connection
+    connection.response_type.status = 422
+    connection.response_type.body = msgspec.json.encode(
+        PrestoSolveError.from_exception(error)
     )
 
     with pytest.raises(type(error)):
@@ -1042,36 +1085,82 @@ def test_client_restores_conda_http_error(
 
 
 def test_client_surfaces_unstructured_service_http_error(
-    monkeypatch, solver_request, broker_endpoint
+    solver_request,
+    broker_endpoint,
+    solver_connection,
 ):
-    monkeypatch.setattr(
-        PrestoSolverClient,
-        "opener",
-        SimpleNamespace(
-            open=lambda request, timeout: (_ for _ in ()).throw(
-                HTTPError(
-                    request.full_url, 422, "unprocessable", {}, BytesIO(b"bad state")
-                )
-            )
-        ),
-    )
+    connection, _ = solver_connection
+    connection.response_type.status = 422
+    connection.response_type.body = b"bad state"
 
     with pytest.raises(PrestoSolverError, match="HTTP 422: bad state"):
         PrestoSolverClient().solve(solver_request, "/tmp/prefix")
 
 
-def test_client_surfaces_transport_error(monkeypatch, solver_request, broker_endpoint):
-    monkeypatch.setattr(
-        PrestoSolverClient,
-        "opener",
-        SimpleNamespace(
-            open=lambda request, timeout: (_ for _ in ()).throw(
-                OSError("connection lost")
-            )
-        ),
-    )
+def test_client_surfaces_transport_error(
+    solver_request,
+    broker_endpoint,
+    solver_connection,
+):
+    connection, _ = solver_connection
+    connection.transport_error = OSError("connection lost")
 
     with pytest.raises(PrestoSolverError, match="connection lost"):
+        PrestoSolverClient().solve(solver_request, "/tmp/prefix")
+
+
+@pytest.mark.parametrize(
+    ("content_length", "body"),
+    [
+        pytest.param(
+            str(solver_module.SOLVER_RESPONSE_MAX_BYTES + 1),
+            b"",
+            id="declared-size",
+        ),
+        pytest.param(
+            None,
+            b"x" * (solver_module.SOLVER_RESPONSE_MAX_BYTES + 1),
+            id="streamed-size",
+        ),
+    ],
+)
+def test_client_rejects_oversized_responses(
+    solver_request,
+    broker_endpoint,
+    solver_connection,
+    content_length,
+    body,
+):
+    connection, _ = solver_connection
+    connection.response_type.content_length = content_length
+    connection.response_type.body = body
+
+    with pytest.raises(PrestoSolverError, match="exceeds the size limit"):
+        PrestoSolverClient().solve(solver_request, "/tmp/prefix")
+
+
+def test_client_rejects_invalid_content_length(
+    solver_request,
+    broker_endpoint,
+    solver_connection,
+):
+    connection, _ = solver_connection
+    connection.response_type.content_length = "invalid"
+
+    with pytest.raises(PrestoSolverError, match="invalid Content-Length"):
+        PrestoSolverClient().solve(solver_request, "/tmp/prefix")
+
+
+def test_client_enforces_total_response_deadline(
+    monkeypatch,
+    solver_request,
+    broker_endpoint,
+    solver_connection,
+):
+    ticks = iter([0.0, solver_module.SOLVE_TIMEOUT_S + 6])
+    monkeypatch.setattr(solver_module.time, "monotonic", lambda: next(ticks))
+
+    with pytest.raises(PrestoSolverError, match="response deadline exceeded"):
         PrestoSolverClient().solve(solver_request, "/tmp/prefix")
 
 

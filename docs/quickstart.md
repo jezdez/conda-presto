@@ -129,7 +129,7 @@ curl -sS http://127.0.0.1:8000/health
 ```
 
 The response is `{"status":"ok"}` when the server can accept solve requests.
-Open `http://127.0.0.1:8000/` for the interactive API documentation.
+Fetch `http://127.0.0.1:8000/openapi.json` for the generated OpenAPI document.
 
 ## Choose the next guide
 

@@ -17,6 +17,9 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
+from functools import cache
+from importlib.metadata import packages_distributions
+from importlib.metadata import version as distribution_version
 
 from conda.base.context import context
 from conda.exceptions import CondaValueError
@@ -35,6 +38,8 @@ EXTENSION_MEDIA_TYPES: dict[str, str] = {
 }
 
 DEFAULT_MEDIA_TYPE = "text/plain; charset=utf-8"
+
+ExporterCacheIdentity = tuple[str, str, tuple[tuple[str, str], ...]]
 
 
 @dataclass(frozen=True)
@@ -66,6 +71,35 @@ class OutputFormat:
     @property
     def is_lockfile(self) -> bool:
         return self.exporter.environment_format == EnvironmentFormat.lockfile
+
+    def cache_identity(self) -> ExporterCacheIdentity | None:
+        """Return a versioned provider identity suitable for persistent caches."""
+        callback = self.exporter.multiplatform_export or self.exporter.export
+        module = getattr(callback, "__module__", None)
+        qualname = getattr(callback, "__qualname__", None)
+        if not module or not qualname:
+            return None
+        versions = self.provider_versions(module.partition(".")[0])
+        if versions is None:
+            return None
+        return self.exporter.name, f"{module}:{qualname}", versions
+
+    @staticmethod
+    @cache
+    def provider_versions(package: str) -> tuple[tuple[str, str], ...] | None:
+        """Return installed distributions that provide one import package."""
+        try:
+            distributions = packages_distributions().get(package, ())
+            if not distributions:
+                return None
+            return tuple(
+                sorted(
+                    (distribution, distribution_version(distribution))
+                    for distribution in set(distributions)
+                )
+            )
+        except Exception:
+            return None
 
     @property
     def media_type(self) -> str:

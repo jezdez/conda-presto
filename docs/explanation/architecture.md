@@ -2,8 +2,8 @@
 
 conda-presto is a solve-only bridge around conda. It reads package specs or
 environment files, selects package records for one or more platforms, and emits
-native JSON or a conda exporter format. It does not download package payloads,
-create prefixes, or run installation transactions.
+native JSON or a conda exporter format. Its solve paths do not download package
+payloads, create prefixes, or run installation transactions.
 
 The internal `conda --solver=presto` plugin adds a separate local path. It
 delegates final-state selection to the broker service, then returns control to
@@ -16,16 +16,19 @@ flowchart LR
     A["Request\n(specs or file)"] --> B["Input adapter\n(conda env-spec registry)"]
     B --> C{"Operation"}
     C -->|"resolve"| D["Rattler solve"]
-    C -->|"covered lockfile"| E["Reuse package records"]
+    C -->|"CLI covered lockfile"| E["Reuse package records"]
+    C -->|"HTTP lockfile"| H["Inspect metadata or reject"]
     D --> F["Native JSON or\nconda exporter"]
     E --> F
+    H --> G
     F --> G["CLI output or\nHTTP response"]
 ```
 
-`/transcode` and the CLI lockfile conversion path reuse records only when the
-input is a lockfile, every requested platform is present, the output is another
-lockfile format, and no extra specs or channel overrides require a solve.
-`/diff` and `/explain` can also use covered lockfile records.
+The CLI lockfile conversion path reuses records only when the input is a
+lockfile, every requested platform is present, the output is another lockfile
+format, and no extra specs or channel overrides require a solve. HTTP parsing
+inspects lockfile format and platform metadata but rejects `/resolve`, `/diff`,
+`/explain`, or `/transcode` work that would materialize uploaded package URLs.
 
 ## Input adapters
 
@@ -39,9 +42,10 @@ Conda's explicit-file specifier does not expose that multi-platform lockfile
 interface, so explicit files are not accepted as input. The explicit exporter
 remains available as an output format.
 
-The CLI and HTTP layer turn parsed files and inline arguments into the same
-spec, channel, and platform inputs. HTTP raw uploads use Litestar's parsed media
-type plus an optional filename hint to select the file adapter.
+The CLI and HTTP layer turn parsed environment files and inline arguments into
+the same spec, channel, and platform inputs. HTTP raw uploads use Litestar's
+parsed media type plus an optional filename hint to select the file adapter.
+For lockfiles, only the trusted local CLI asks the adapter for package records.
 
 ## Review operations
 
@@ -61,9 +65,10 @@ solver. See {doc}`environment-review` for the complete model.
 ## Direct solve engine
 
 Direct CLI and public HTTP solves use `conda-rattler-solver`. conda-presto sets
-the target platform and deterministic target virtual-package overrides on
-conda's context before building the solver input, including for the host's
-native subdir. The direct engine is fixed to the rattler backend.
+the target platform and configured target virtual-package overrides on conda's
+context before building the solver input, including for the host's native
+subdir. Other effective virtual-package plugin detections and overrides can
+also participate. The direct engine is fixed to the rattler backend.
 
 Multi-platform requests dispatch one solve per platform. A process pool keeps
 platform work isolated from conda's process-global context. Persistent server

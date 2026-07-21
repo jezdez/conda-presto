@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import math
 import time
 from dataclasses import dataclass, field
 from typing import Literal
@@ -18,6 +19,8 @@ SOLVER_WARM_CANDIDATE_STORE_KEY = "solver-warm-candidates-v1"
 SOLVER_WARM_CANDIDATE_MAX_AGE_S = 7 * 24 * 60 * 60
 SOLVER_WARM_CANDIDATE_MIN_REQUESTS = 2
 SOLVER_WARM_CANDIDATE_STORE_TIMEOUT_S = 2
+SOLVER_WARM_CANDIDATE_MAX_REQUESTS = 2**31 - 1
+SOLVER_WARM_CANDIDATE_MAX_STORED_BYTES = 8 * 1024 * 1024
 
 
 class SolverWarmCandidate(msgspec.Struct):
@@ -31,7 +34,11 @@ class SolverWarmCandidate(msgspec.Struct):
     def eligible(self, now: float) -> bool:
         """Return whether this request is eligible for warming."""
         return (
-            self.request_count >= SOLVER_WARM_CANDIDATE_MIN_REQUESTS
+            SOLVER_WARM_CANDIDATE_MIN_REQUESTS
+            <= self.request_count
+            <= SOLVER_WARM_CANDIDATE_MAX_REQUESTS
+            and math.isfinite(self.last_requested)
+            and 0 <= self.last_requested <= now
             and max(0.0, now - self.last_requested) <= SOLVER_WARM_CANDIDATE_MAX_AGE_S
         )
 
@@ -61,19 +68,25 @@ class SolverWarmCandidates:
         now: float | None = None,
     ) -> bool:
         """Record one successful foreground request without persistent I/O."""
-        if self.max_size == 0:
-            return False
         now = time.time() if now is None else now
+        if self.max_size == 0 or not math.isfinite(now) or now < 0:
+            return False
         fingerprint = request.warming_key()
 
         self._prune(now)
         if entry := self.entries.get(fingerprint):
             entry.request = request
-            entry.request_count += 1
+            entry.request_count = min(
+                entry.request_count + 1,
+                SOLVER_WARM_CANDIDATE_MAX_REQUESTS,
+            )
             entry.last_requested = now
         elif entry := self.observations.get(fingerprint):
             entry.request = request
-            entry.request_count += 1
+            entry.request_count = min(
+                entry.request_count + 1,
+                SOLVER_WARM_CANDIDATE_MAX_REQUESTS,
+            )
             entry.last_requested = now
             if len(self.entries) < self.max_size:
                 del self.observations[fingerprint]
@@ -156,12 +169,25 @@ class SolverWarmCandidates:
             return
         if payload is None:
             return
-        try:
-            catalog = msgspec.msgpack.decode(payload, type=StoredWarmCandidates)
-        except (msgspec.DecodeError, msgspec.ValidationError):
+        catalog = None
+        if len(payload) <= SOLVER_WARM_CANDIDATE_MAX_STORED_BYTES:
+            try:
+                catalog = msgspec.msgpack.decode(payload, type=StoredWarmCandidates)
+            except (msgspec.DecodeError, msgspec.ValidationError):
+                pass
+        if catalog is None:
             log.warning("Ignoring corrupt cache-warming candidates")
             self.generation += 1
             self.persisted_generation = 0
+            try:
+                completed = await self.store_operations.delete(
+                    SOLVER_WARM_CANDIDATE_STORE_KEY,
+                    timeout_s=SOLVER_WARM_CANDIDATE_STORE_TIMEOUT_S,
+                )
+                if not completed:
+                    log.warning("Cache-warming candidate deletion timed out")
+            except Exception:
+                log.warning("Cache-warming candidate deletion failed")
             return
 
         now = time.time() if now is None else now
@@ -174,6 +200,9 @@ class SolverWarmCandidates:
             if (
                 fingerprint != entry.fingerprint
                 or entry.request.has_detected_credentials()
+                or not 1 <= entry.request_count <= SOLVER_WARM_CANDIDATE_MAX_REQUESTS
+                or not math.isfinite(entry.last_requested)
+                or not 0 <= entry.last_requested <= now
                 or max(0.0, now - entry.last_requested)
                 > SOLVER_WARM_CANDIDATE_MAX_AGE_S
             ):
@@ -216,6 +245,9 @@ class SolverWarmCandidates:
                 ]
             )
         )
+        if len(payload) > SOLVER_WARM_CANDIDATE_MAX_STORED_BYTES:
+            log.warning("Cache-warming candidate catalog exceeds the size limit")
+            return
         try:
             completed = await self.store_operations.set(
                 SOLVER_WARM_CANDIDATE_STORE_KEY,

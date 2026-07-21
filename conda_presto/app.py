@@ -8,14 +8,14 @@ Endpoints:
 - ``POST /repair`` — suggest relaxations for infeasible specs
 - ``POST /diff`` — compare two resolved inputs
 - ``POST /explain`` — show dependency chains for one resolved package
-- ``POST /transcode`` — convert one lockfile format to another
+- ``POST /transcode`` — validate an HTTP lockfile conversion request
 - ``GET /r/{hash}`` — fetch a stored content-addressed resolve result
 - ``GET /formats`` — list registered output format names
 - ``GET /platforms`` — list known conda platform subdirs
 - ``GET /version`` — version info for conda-presto and dependencies
 - ``POST /parse`` — extract specs/channels from a file without solving
 - ``GET /health`` — reports solver readiness
-- ``GET /`` — interactive Scalar API documentation
+- ``GET /`` — OpenAPI 3.1 schema
 - ``GET /openapi.json`` — OpenAPI 3.1 schema (auto-generated)
 
 Output formats:
@@ -82,6 +82,7 @@ from contextlib import AsyncExitStack, asynccontextmanager
 from dataclasses import dataclass, field, replace
 from importlib.metadata import version as pkg_version
 from typing import Annotated, Literal
+from urllib.parse import urlsplit
 
 import anyio
 import msgspec
@@ -93,12 +94,15 @@ from litestar import Litestar, Request, get, post
 from litestar.config.compression import CompressionConfig
 from litestar.config.cors import CORSConfig
 from litestar.connection import ASGIConnection
+from litestar.datastructures import CacheControlHeader
+from litestar.enums import RequestEncodingType
 from litestar.exceptions import NotFoundException
 from litestar.handlers import BaseRouteHandler
 from litestar.logging import LoggingConfig
 from litestar.middleware.logging import LoggingMiddlewareConfig
 from litestar.middleware.rate_limit import RateLimitConfig
 from litestar.openapi import OpenAPIConfig, ResponseSpec
+from litestar.openapi.plugins import JsonRenderPlugin
 from litestar.params import FromPath, FromQuery, QueryParameter
 from litestar.response import Response
 from litestar.status_codes import (
@@ -124,6 +128,8 @@ from .config import (
     MAX_REPAIR_ATTEMPTS,
     MAX_REPAIR_SUGGESTIONS,
     MAX_REPAIR_TIME_BUDGET_MS,
+    MAX_SOLVER_CHANNELS,
+    MAX_SOLVER_STATE_ITEMS,
     MAX_SPECS,
     PARSE_TIMEOUT_S,
     PERSISTENT_WORKER,
@@ -140,8 +146,8 @@ from .config import (
     SOLVER_CACHE_WARM_CANDIDATE_SIZE,
     SOLVER_CACHE_WARM_INTERVAL_S,
 )
-from .exceptions import SAFE_ERROR_TYPES, UnknownFormatError
-from .exporter import OutputFormat
+from .exceptions import SAFE_ERROR_TYPES, CredentialRedactionFilter, UnknownFormatError
+from .exporter import ExporterCacheIdentity, OutputFormat
 from .inputs import ParsedInputFile
 from .preflight import PreflightResult
 from .resolve import (
@@ -304,13 +310,11 @@ class ParseResult(msgspec.Struct):
 
 @dataclass
 class ResolveInput:
-    """One parsed request ready for direct lockfile use or a solve."""
+    """One parsed request ready for a solve."""
 
     specs: list[str]
     channels: list[str]
     platforms: list[str]
-    parsed_file: ParsedInputFile | None
-    direct_lockfile: bool
 
     @classmethod
     async def from_request(
@@ -319,7 +323,7 @@ class ResolveInput:
         data: ResolveRequest,
         default_platforms: list[str] | None = None,
     ) -> ResolveInput | Response:
-        """Parse one request and select its direct-lockfile or solve path."""
+        """Parse one request and select its solve inputs."""
         input_specs = list(data.specs or [])
         channels = list(data.channels or [])
         platforms = list(data.platforms or [])
@@ -337,15 +341,6 @@ class ResolveInput:
             parsed_file = parsed
             if parsed_file.is_lockfile and not platforms and default_platforms is None:
                 platforms = list(parsed_file.available_platforms)
-                parsed = await parse_input_for_request(
-                    request,
-                    data.file,
-                    data.filename,
-                    platforms,
-                )
-                if isinstance(parsed, Response):
-                    return parsed
-                parsed_file = parsed
             input_specs.extend(parsed_file.specs)
             if not channels:
                 channels = parsed_file.channels
@@ -357,22 +352,20 @@ class ResolveInput:
         if cap_error := validate_caps(input_specs, channels, platforms):
             return cap_error
 
-        direct_lockfile = bool(
-            parsed_file
-            and parsed_file.is_lockfile
-            and parsed_file.environments
-            and not data.specs
-            and not data.channels
-        )
-        if not input_specs and not direct_lockfile:
+        if not input_specs:
             if parsed_file and parsed_file.is_lockfile:
+                if set(platforms).issubset(parsed_file.available_platforms):
+                    message = (
+                        "Lockfile package records cannot be loaded from HTTP input. "
+                        "Provide specs to solve."
+                    )
+                else:
+                    message = (
+                        "Lockfile input cannot be solved for the requested "
+                        "platforms. Provide specs to solve."
+                    )
                 return Response(
-                    ErrorResponse(
-                        error=(
-                            "Lockfile input cannot be solved for the requested "
-                            "platforms; provide specs to solve."
-                        )
-                    ),
+                    ErrorResponse(error=message),
                     status_code=HTTP_400_BAD_REQUEST,
                 )
             return Response(
@@ -383,33 +376,15 @@ class ResolveInput:
             specs=input_specs,
             channels=channels,
             platforms=platforms,
-            parsed_file=parsed_file,
-            direct_lockfile=direct_lockfile,
         )
 
     async def results(self, request: Request) -> list[SolveResult] | Response:
-        """Return parsed lockfile records or native solve results."""
-        if self.direct_lockfile:
-            return [
-                SolveResult.from_environment(environment)
-                for environment in self.parsed_file.environments
-            ]
+        """Return native solve results."""
         payload = await run_solve(request, self.specs, self.channels, self.platforms)
         if isinstance(payload, Response):
             return payload
         body, _ = payload
         return msgspec.json.decode(body, type=list[SolveResult])
-
-    @property
-    def lockfile_category(self) -> str | None:
-        """Return the category retained by the conda-lock v1 registry view."""
-        if (
-            self.direct_lockfile
-            and self.parsed_file is not None
-            and self.parsed_file.source_format == "conda-lock-v1"
-        ):
-            return "main"
-        return None
 
 
 class DiffRequest(
@@ -694,32 +669,48 @@ def validate_caps(
     return None
 
 
-def canonical_channel_name(channel: str) -> str:
-    """Return conda's canonical channel name for allowlist comparison."""
-    return Channel(channel).canonical_name
+def resolved_channel_urls(channel: str) -> set[str]:
+    """Return credential-free channel base URLs for allowlist comparison."""
+    return {
+        url.removesuffix("/noarch")
+        for url in Channel(channel).urls(
+            with_credentials=False,
+            subdirs=("noarch",),
+        )
+    }
 
 
 def validate_channels(channels: list[str]) -> Response | None:
     """Return a 400 response when channels are outside the server allowlist."""
-    if "*" in CHANNEL_ALLOWLIST:
-        return None
-
     try:
-        allowed = {canonical_channel_name(ch) for ch in CHANNEL_ALLOWLIST}
-    except Exception as exc:
+        allowed = {
+            url
+            for channel in CHANNEL_ALLOWLIST
+            if channel != "*"
+            for url in resolved_channel_urls(channel)
+        }
+    except Exception:
+        log.exception("Invalid channel allowlist configuration")
         return Response(
-            {"error": f"Invalid channel configuration: {exc}"},
-            status_code=HTTP_400_BAD_REQUEST,
+            {"error": "Invalid server channel configuration"},
+            status_code=HTTP_500_INTERNAL_SERVER_ERROR,
         )
 
     invalid = []
     for channel in channels:
         try:
-            canonical = canonical_channel_name(channel)
+            resolved = resolved_channel_urls(channel)
         except Exception:
             invalid.append(channel)
             continue
-        if not channel.strip() or canonical not in allowed:
+        wildcard_http = "*" in CHANNEL_ALLOWLIST and all(
+            urlsplit(url).scheme in {"http", "https"} for url in resolved
+        )
+        if (
+            not channel.strip()
+            or not resolved
+            or (not wildcard_http and not resolved.issubset(allowed))
+        ):
             invalid.append(channel)
     if invalid:
         return Response(
@@ -737,15 +728,17 @@ async def parse_input_for_request(
 ) -> ParsedInputFile | Response:
     """Parse input off the event loop with a bounded wall-clock time."""
     capacity = request.app.state.solver_limiter
+    deadline = time.monotonic() + PARSE_TIMEOUT_S
     try:
         with anyio.fail_after(PARSE_TIMEOUT_S):
             return await anyio.to_thread.run_sync(
-                ParsedInputFile.from_content,
+                ParsedInputFile.from_content_until,
                 content,
                 filename,
                 target_platforms,
+                deadline,
                 limiter=capacity.arrive() if capacity is not None else None,
-                abandon_on_cancel=True,
+                abandon_on_cancel=False,
             )
     except TimeoutError:
         log.warning("Parse timeout after %ss", PARSE_TIMEOUT_S)
@@ -907,7 +900,9 @@ def run_solve_in_process(
             process.join(max(0.0, min(5.0, deadline - time.monotonic())))
         if process.is_alive():
             process.kill()
-        process.join()
+        process.join(5)
+        if process.is_alive():
+            raise RuntimeError("Solve worker did not exit after kill")
 
     if status == "ok":
         return payload
@@ -925,6 +920,7 @@ def solve_process_entrypoint(
     captured_errors: tuple[type[Exception], ...] = (Exception,),
 ) -> None:
     """Send a solve result from an isolated process."""
+    CredentialRedactionFilter.install()
     try:
         sender.send(
             (
@@ -961,35 +957,116 @@ async def run_cached_solve(
 ) -> Response:
     """Run a solve through the content-addressed result cache."""
     cache: ResultCache = request.app.state.result_cache
+    retain_result = not (
+        cache.channels_have_credentials(channels) or cache.specs_have_credentials(specs)
+    )
+    exporter_identity: ExporterCacheIdentity | None = None
+    if format_name is not None:
+        try:
+            output_format = OutputFormat.named(format_name)
+        except UnknownFormatError as exc:
+            return Response(
+                {"error": str(exc), "available_formats": exc.available},
+                status_code=HTTP_400_BAD_REQUEST,
+                headers={"Cache-Control": "no-store"},
+            )
+        exporter_identity = output_format.cache_identity()
+        retain_result = retain_result and exporter_identity is not None
     resolved_platforms = list(platforms or [NATIVE_SUBDIR])
-    initial_repodata = RepodataSnapshot.capture(channels, resolved_platforms)
-    digest = cache.key_for(specs, channels, platforms, format_name, initial_repodata)
-    key = cache.resolve_key(digest)
-    location = f"/r/{digest}"
-    if not initial_repodata.stale and (
-        cached_response := await cache.get_response(key, location=location)
-    ):
-        return cached_response
+    capacity = request.app.state.solver_limiter
+    deadline = time.monotonic() + SOLVE_TIMEOUT_S
+    try:
+        with anyio.fail_after(SOLVE_TIMEOUT_S):
+            initial_repodata, solve_context = await anyio.to_thread.run_sync(
+                cache.capture_state,
+                channels,
+                resolved_platforms,
+                limiter=capacity.arrive() if capacity is not None else None,
+                abandon_on_cancel=False,
+            )
+            if time.monotonic() >= deadline:
+                raise TimeoutError
+            digest = cache.key_for(
+                specs,
+                channels,
+                platforms,
+                format_name,
+                initial_repodata,
+                solve_context=solve_context,
+                exporter_identity=exporter_identity,
+            )
+            key = cache.resolve_key(digest)
+            location = f"/r/{digest}"
+            if retain_result and not initial_repodata.stale:
+                cached_response = await cache.get_response(key, location=location)
+                if cached_response is not None:
+                    current_repodata = await anyio.to_thread.run_sync(
+                        RepodataSnapshot.capture,
+                        channels,
+                        resolved_platforms,
+                        limiter=capacity.arrive() if capacity is not None else None,
+                        abandon_on_cancel=False,
+                    )
+                    if (
+                        not current_repodata.stale
+                        and current_repodata.records == initial_repodata.records
+                    ):
+                        if time.monotonic() >= deadline:
+                            raise TimeoutError
+                        return cached_response
+                    initial_repodata = current_repodata
 
-    payload = await run_solve(
-        request, specs, channels, platforms, format_name=format_name
-    )
-    if isinstance(payload, Response):
-        return payload
+            remaining_s = deadline - time.monotonic()
+            if remaining_s <= 0:
+                raise TimeoutError
+            payload = await run_solve(
+                request,
+                specs,
+                channels,
+                platforms,
+                format_name=format_name,
+                timeout_s=remaining_s,
+            )
+            if isinstance(payload, Response):
+                return payload
 
-    # Recompute after solving so refreshed repodata and the worker's index agree.
-    repodata = RepodataSnapshot.capture(channels, resolved_platforms)
-    digest = cache.key_for(specs, channels, platforms, format_name, repodata)
-    key = cache.resolve_key(digest)
-    body, media_type = payload
-    if not repodata.is_cacheable_after(initial_repodata):
-        return Response(body, media_type=media_type)
-    return await cache.remember(
-        key,
-        body,
-        media_type,
-        location=f"/r/{digest}",
-    )
+            # Recompute so refreshed repodata and the worker's index agree.
+            repodata = await anyio.to_thread.run_sync(
+                RepodataSnapshot.capture,
+                channels,
+                resolved_platforms,
+                limiter=capacity.arrive() if capacity is not None else None,
+                abandon_on_cancel=False,
+            )
+            if time.monotonic() >= deadline:
+                raise TimeoutError
+            digest = cache.key_for(
+                specs,
+                channels,
+                platforms,
+                format_name,
+                repodata,
+                solve_context=solve_context,
+                exporter_identity=exporter_identity,
+            )
+            key = cache.resolve_key(digest)
+            body, media_type = payload
+            return await cache.remember(
+                key,
+                body,
+                media_type,
+                location=f"/r/{digest}",
+                retain=retain_result
+                and repodata.records == initial_repodata.records
+                and repodata.is_cacheable_after(initial_repodata),
+            )
+    except TimeoutError:
+        log.warning("Cached solve timeout after %ss", SOLVE_TIMEOUT_S)
+        return Response(
+            {"error": f"Solve exceeded {SOLVE_TIMEOUT_S}s timeout"},
+            status_code=HTTP_504_GATEWAY_TIMEOUT,
+            headers={"Cache-Control": "no-store"},
+        )
 
 
 def transcode_rejection(
@@ -1011,6 +1088,8 @@ def transcode_rejection(
             reasons.append(
                 "requested platforms not present in lockfile: " + ", ".join(missing)
             )
+        elif not parsed.environments:
+            reasons.append("lockfile package records cannot be loaded from HTTP input")
     if format_name is None:
         reasons.append("no output format was requested")
     else:
@@ -1128,15 +1207,21 @@ async def resolve_post(
 
     if not specs:
         if parsed_file and parsed_file.is_lockfile:
+            if set(platforms or [NATIVE_SUBDIR]).issubset(
+                parsed_file.available_platforms
+            ):
+                message = (
+                    "Lockfile package records cannot be loaded from HTTP input. "
+                    "Provide specs to solve."
+                )
+            else:
+                message = (
+                    "Lockfile input cannot be solved for the requested platforms. "
+                    "Request a lockfile output for a platform present in the "
+                    "lockfile or provide specs to solve."
+                )
             return Response(
-                {
-                    "error": (
-                        "Lockfile input cannot be solved for the "
-                        "requested platforms; request a lockfile output "
-                        "for a platform present in the lockfile or "
-                        "provide specs to solve."
-                    )
-                },
+                {"error": message},
                 status_code=HTTP_400_BAD_REQUEST,
             )
         return Response(
@@ -1374,8 +1459,6 @@ async def diff_post(request: Request, data: DiffRequest) -> Response:
             diff={
                 platform: before_by_platform[platform].diff(
                     after_by_platform[platform],
-                    before.lockfile_category,
-                    after.lockfile_category,
                 )
                 for platform in platforms
             },
@@ -1463,7 +1546,7 @@ async def transcode_post(
     format: FromQuery[str | None] = None,
     filename: FromQuery[str | None] = None,
 ) -> Response:
-    """Convert one lockfile format to another without solving."""
+    """Validate an HTTP lockfile conversion request without solving."""
     content_type, _ = request.content_type
 
     file_content: str | None = None
@@ -1541,35 +1624,6 @@ async def transcode_post(
         return parsed
     parsed_file = parsed
 
-    if (
-        parsed_file.is_lockfile
-        and format is not None
-        and not has_extra_specs
-        and not has_channel_override
-    ):
-        try:
-            output_format = OutputFormat.named(format)
-        except UnknownFormatError as exc:
-            return Response(
-                {"error": str(exc), "available_formats": exc.available},
-                status_code=HTTP_400_BAD_REQUEST,
-            )
-        if output_format.is_lockfile and parsed_file.environments:
-            try:
-                body, media_type = output_format.render(list(parsed_file.environments))
-            except UnknownFormatError as exc:
-                return Response(
-                    {"error": str(exc), "available_formats": exc.available},
-                    status_code=HTTP_400_BAD_REQUEST,
-                )
-            except Exception:
-                log.exception("Environment export failed")
-                return Response(
-                    {"error": "Internal solver error"},
-                    status_code=HTTP_500_INTERNAL_SERVER_ERROR,
-                )
-            return Response(body, media_type=media_type)
-
     return transcode_rejection(
         parsed_file,
         format,
@@ -1586,6 +1640,7 @@ async def result_get(request: Request, key: FromPath[str]) -> Response:
     cached_response = await cache.get_response(
         cache.resolve_key(key),
         location=f"/r/{key}",
+        immutable=True,
     )
     if cached_response is None:
         return Response(
@@ -1686,10 +1741,18 @@ def require_solver_service(
 ) -> None:
     """Restrict the private solver route before Litestar parses its body."""
     client = connection.client
+    service_url = os.environ.get("CONDA_PRESTO_URL")
+    expected_authority = urlsplit(service_url).netloc if service_url else ""
     if (
         os.environ.get("CONDA_BROKER_SERVICE_NAME") != PrestoSolverClient.service_name
+        or not isinstance(connection, Request)
         or client is None
         or not PrestoSolverClient.is_loopback(client.host)
+        or "origin" in connection.headers
+        or connection.content_type[0] != RequestEncodingType.JSON
+        or not expected_authority
+        or connection.headers.get("host", "").casefold()
+        != expected_authority.casefold()
     ):
         raise NotFoundException
 
@@ -1699,6 +1762,7 @@ def require_solver_service(
     status_code=200,
     include_in_schema=False,
     guards=[require_solver_service],
+    cache_control=CacheControlHeader(no_store=True),
 )
 async def solver_v1(
     request: Request,
@@ -1706,12 +1770,47 @@ async def solver_v1(
 ) -> Response:
     """Run the broker-only internal Presto solver protocol."""
     if cap_error := validate_caps(
-        data.specs_to_add + data.specs_to_remove,
-        data.channels,
+        [],
+        [],
         data.subdirs,
         validate_channel_allowlist=False,
     ):
         return cap_error
+    if len(data.channels) > MAX_SOLVER_CHANNELS:
+        return Response(
+            {
+                "error": (
+                    f"Too many solver channels: {len(data.channels)} > "
+                    f"{MAX_SOLVER_CHANNELS} "
+                    "(CONDA_PRESTO_MAX_SOLVER_CHANNELS)"
+                )
+            },
+            status_code=HTTP_400_BAD_REQUEST,
+        )
+    state_items = sum(
+        len(values)
+        for values in (
+            data.specs_to_add,
+            data.specs_to_remove,
+            data.installed,
+            data.history,
+            data.pinned,
+            data.virtual,
+            data.aggressive_updates,
+            data.always_update,
+        )
+    )
+    if state_items > MAX_SOLVER_STATE_ITEMS:
+        return Response(
+            {
+                "error": (
+                    f"Too many solver state entries: {state_items} > "
+                    f"{MAX_SOLVER_STATE_ITEMS} "
+                    "(CONDA_PRESTO_MAX_SOLVER_STATE_ITEMS)"
+                )
+            },
+            status_code=HTTP_400_BAD_REQUEST,
+        )
     worker = getattr(request.app.state, "solve_worker", None)
     if worker is None:
         return Response(
@@ -1724,9 +1823,13 @@ async def solver_v1(
         deadline = time.monotonic() + SOLVE_TIMEOUT_S
         with anyio.fail_after(SOLVE_TIMEOUT_S):
             result = await service.probe(data)
+            if time.monotonic() >= deadline:
+                raise TimeoutError
             if result is None:
                 async with request.app.state.solver_limiter.arrive():
                     result = await service.resolve(data, worker, deadline)
+                if time.monotonic() >= deadline:
+                    raise TimeoutError
     except TimeoutError:
         return Response(
             ErrorResponse(error=f"Solve exceeded {SOLVE_TIMEOUT_S}s timeout"),
@@ -1757,6 +1860,7 @@ async def solver_v1(
 @asynccontextmanager
 async def solver_resources_lifespan(app: Litestar) -> AsyncIterator[None]:
     """Own result storage, foreground caches, and worker processes."""
+    CredentialRedactionFilter.install()
     resources = AsyncExitStack()
     app.state.solve_worker = None
     try:
@@ -1792,8 +1896,8 @@ async def solver_resources_lifespan(app: Litestar) -> AsyncIterator[None]:
                 ),
             )
             log.info(
-                "Starting persistent solve worker for %s on %s",
-                DEFAULT_CHANNELS,
+                "Starting persistent solve worker for %d channels on %s",
+                len(DEFAULT_CHANNELS),
                 DEFAULT_PLATFORMS,
             )
             await anyio.to_thread.run_sync(
@@ -1802,8 +1906,8 @@ async def solver_resources_lifespan(app: Litestar) -> AsyncIterator[None]:
             )
         else:
             log.info(
-                "Pre-warming repodata cache for %s on %s",
-                DEFAULT_CHANNELS,
+                "Pre-warming repodata cache for %d channels on %s",
+                len(DEFAULT_CHANNELS),
                 DEFAULT_PLATFORMS,
             )
             await anyio.to_thread.run_sync(
@@ -1922,6 +2026,7 @@ app = Litestar(
         version=pkg_version("conda-presto"),
         description="Fast dry-run conda solver HTTP API.",
         path="/",
+        render_plugins=[JsonRenderPlugin()],
     ),
     lifespan=[solver_resources_lifespan, solver_cache_refresher_lifespan],
     request_max_body_size=MAX_BODY_BYTES,
@@ -1929,6 +2034,7 @@ app = Litestar(
     cors_config=build_cors_config(CORS_ORIGINS),
     logging_config=LoggingConfig(
         log_exceptions="always",
+        disable_stack_trace=set(range(400, 500)),
         loggers={"conda_presto": {"level": LOG_LEVEL}},
     ),
     middleware=middleware,

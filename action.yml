@@ -26,7 +26,7 @@ inputs:
     description: Output format (explicit, environment-yaml, conda-lock-v1, pixi-lock-v6, etc.)
     required: false
   output:
-    description: Path to write the response body to (omit for stdout)
+    description: Path to write the response body to
     required: false
   endpoint:
     description: "conda-presto base URL (required when mode: remote)"
@@ -43,12 +43,11 @@ outputs:
 runs:
   using: composite
   steps:
-    # Local mode: install pixi, then run conda-presto from this checkout.
-    - name: Install pixi
+    # Local mode: install Pixi, then run conda-presto from this checkout.
+    - name: Install verified Pixi
       if: inputs.mode == 'local'
-      uses: prefix-dev/setup-pixi@a09b6247153796b190642a2b53fac4241043cf6f # v0.10.0
-      with:
-        run-install: false
+      shell: bash
+      run: bash "$GITHUB_ACTION_PATH/.github/scripts/install-pixi"
 
     - name: Resolve (local)
       id: local
@@ -67,7 +66,7 @@ runs:
 
         if [[ -n "${INPUT_FILE:-}" ]]; then
           if [[ ! -f "${INPUT_FILE}" ]]; then
-            echo "::error::File not found: ${INPUT_FILE}"
+            echo "::error::Input file not found"
             exit 1
           fi
           args+=(-f "${INPUT_FILE}")
@@ -127,61 +126,82 @@ runs:
           echo "::error::Input 'endpoint' is required when mode is 'remote'"
           exit 1
         fi
+        loopback_host='^http://(127[.]0[.]0[.]1|localhost)(:[0-9]+)?(/|$)'
+        loopback_ipv6='^http://\[::1\](:[0-9]+)?(/|$)'
+        if [[ "${INPUT_ENDPOINT}" == https://* ]]; then
+          :
+        elif [[ "${INPUT_ENDPOINT}" =~ ${loopback_host} ]] \
+          || [[ "${INPUT_ENDPOINT}" =~ ${loopback_ipv6} ]]; then
+          :
+        else
+          echo "::error::Input 'endpoint' must use HTTPS unless it is a loopback URL"
+          exit 1
+        fi
 
-        url="${INPUT_ENDPOINT}/resolve"
+        url="${INPUT_ENDPOINT%/}/resolve"
 
         body='{}'
 
         if [[ -n "${INPUT_FILE:-}" ]]; then
           if [[ ! -f "${INPUT_FILE}" ]]; then
-            echo "::error::File not found: ${INPUT_FILE}"
+            echo "::error::Input file not found"
             exit 1
           fi
-          file_content="$(cat "${INPUT_FILE}")"
           file_basename="$(basename "${INPUT_FILE}")"
-          body=$(echo "${body}" | jq \
-            --arg file "${file_content}" \
+          body=$(printf '%s' "${body}" | jq \
+            --rawfile file "${INPUT_FILE}" \
             --arg filename "${file_basename}" \
             '. + {file: $file, filename: $filename}')
         fi
 
         if [[ -n "${INPUT_SPECS:-}" ]]; then
-          specs_json=$(echo "${INPUT_SPECS}" | tr ',' '\n' | jq -R . | jq -s .)
-          body=$(echo "${body}" | jq --argjson specs "${specs_json}" '. + {specs: $specs}')
+          body=$(printf '%s' "${body}" | jq --arg value "${INPUT_SPECS}" \
+            '. + {specs: ($value | split(","))}')
         fi
 
         if [[ -n "${INPUT_CHANNELS:-}" ]]; then
-          channels_json=$(echo "${INPUT_CHANNELS}" | tr ',' '\n' | jq -R . | jq -s .)
-          body=$(echo "${body}" | jq --argjson channels "${channels_json}" '. + {channels: $channels}')
+          body=$(printf '%s' "${body}" | jq --arg value "${INPUT_CHANNELS}" \
+            '. + {channels: ($value | split(","))}')
         fi
 
         if [[ -n "${INPUT_PLATFORMS:-}" ]]; then
-          platforms_json=$(echo "${INPUT_PLATFORMS}" | tr ',' '\n' | jq -R . | jq -s .)
-          body=$(echo "${body}" | jq --argjson platforms "${platforms_json}" '. + {platforms: $platforms}')
+          body=$(printf '%s' "${body}" | jq --arg value "${INPUT_PLATFORMS}" \
+            '. + {platforms: ($value | split(","))}')
         fi
 
         if [[ -n "${INPUT_FORMAT:-}" ]]; then
-          url="${url}?format=${INPUT_FORMAT}"
+          encoded_format="$(jq --null-input --raw-output \
+            --arg format "${INPUT_FORMAT}" '$format | @uri')"
+          url="${url}?format=${encoded_format}"
         fi
 
         echo "::group::conda-presto request (remote)"
         echo "endpoint: configured"
-        echo "body_fields: $(echo "${body}" | jq -cr 'keys | join(",")')"
+        echo "body_fields: $(printf '%s' "${body}" | jq -cr 'keys | join(",")')"
         [[ -n "${INPUT_FORMAT:-}" ]] && echo "format: provided" || echo "format: default"
         echo "::endgroup::"
 
         tmpout="$(mktemp)"
-        http_code=$(curl -sS -o "${tmpout}" -w "%{http_code}" \
-          -X POST "${url}" \
-          -H "Content-Type: application/json" \
-          -d "${body}")
-
-        if [[ "${http_code}" -ge 400 ]]; then
-          echo "exit_code=1" >> "$GITHUB_OUTPUT"
-          echo "::error::conda-presto returned HTTP ${http_code}"
-          cat "${tmpout}" | jq . 2>/dev/null || cat "${tmpout}"
+        if http_code=$(printf '%s' "${body}" \
+          | curl --disable --silent --show-error \
+            --proto '=http,https' \
+            --noproxy '127.0.0.1,localhost,::1' \
+            --connect-timeout 10 \
+            --max-time 300 \
+            --max-filesize 104857600 \
+            --output "${tmpout}" \
+            --write-out "%{http_code}" \
+            --request POST "${url}" \
+            --header "Content-Type: application/json" \
+            --data-binary @-); then
+          if [[ "${http_code}" -lt 200 || "${http_code}" -ge 300 ]]; then
+            echo "exit_code=1" >> "$GITHUB_OUTPUT"
+            echo "::error::conda-presto returned HTTP ${http_code}"
+          else
+            echo "exit_code=0" >> "$GITHUB_OUTPUT"
+          fi
         else
-          echo "exit_code=0" >> "$GITHUB_OUTPUT"
+          echo "exit_code=1" >> "$GITHUB_OUTPUT"
         fi
         echo "tmpout=${tmpout}" >> "$GITHUB_OUTPUT"
 
@@ -219,50 +239,52 @@ runs:
         rm -f "${tmpout}"
 
         make_delimiter() {
-          if command -v uuidgen >/dev/null 2>&1; then
-            printf 'CONDA_PRESTO_%s\n' "$(uuidgen | tr '[:lower:]' '[:upper:]' | tr -d '-')"
-          elif command -v openssl >/dev/null 2>&1; then
-            printf 'CONDA_PRESTO_%s\n' "$(openssl rand -hex 16)"
-          else
-            printf 'CONDA_PRESTO_%s_%s\n' "${RANDOM}" "$$"
-          fi
+          printf 'CONDA_PRESTO_%s\n' \
+            "$(od -An -N16 -tx1 /dev/urandom | tr -d '[:space:]')"
         }
 
         if [[ "${exit_code}" != "0" ]]; then
           echo "solved=false" >> "$GITHUB_OUTPUT"
-          echo "${response_body}"
-          exit 1
-        fi
+          echo "::error::conda-presto did not complete successfully"
+        else
+          solved="true"
+          if [[ -z "${INPUT_FORMAT:-}" ]]; then
+            if ! error_count=$(printf '%s\n' "${response_body}" \
+              | jq --exit-status 'if type == "array" then [.[] | select(.error != null)] | length else error("expected native result array") end' 2>/dev/null); then
+              echo "solved=false" >> "$GITHUB_OUTPUT"
+              echo "::error::conda-presto returned an invalid native response"
+              exit_code=1
+            elif [[ "${error_count}" -gt 0 ]]; then
+              solved="false"
+              echo "::warning::${error_count} platform(s) had solver errors"
+            fi
+          fi
 
-        solved="true"
-        if [[ -z "${INPUT_FORMAT:-}" ]]; then
-          error_count=$(echo "${response_body}" | jq '[.[] | select(.error != null)] | length' 2>/dev/null || echo "0")
-          if [[ "${error_count}" -gt 0 ]]; then
-            solved="false"
-            echo "::warning::${error_count} platform(s) had solver errors"
+          if [[ "${exit_code}" == "0" ]]; then
+            echo "solved=${solved}" >> "$GITHUB_OUTPUT"
+
+            if [[ -n "${INPUT_OUTPUT:-}" ]]; then
+              printf '%s\n' "${response_body}" > "${INPUT_OUTPUT}"
+              echo "::notice::Output written"
+            fi
+
+            result_size=${#response_body}
+            if [[ ${result_size} -gt 100000 ]]; then
+              echo "result=(output too large)" >> "$GITHUB_OUTPUT"
+            else
+              delimiter="$(make_delimiter)"
+              while grep -Fqx "${delimiter}" <<< "${response_body}"; do
+                delimiter="$(make_delimiter)"
+              done
+              {
+                echo "result<<${delimiter}"
+                printf '%s\n' "${response_body}"
+                echo "${delimiter}"
+              } >> "$GITHUB_OUTPUT"
+            fi
           fi
         fi
 
-        echo "solved=${solved}" >> "$GITHUB_OUTPUT"
-
-        if [[ -n "${INPUT_OUTPUT:-}" ]]; then
-          echo "${response_body}" > "${INPUT_OUTPUT}"
-          echo "::notice::Output written to ${INPUT_OUTPUT}"
-        else
-          echo "${response_body}"
-        fi
-
-        result_size=${#response_body}
-        if [[ ${result_size} -gt 100000 ]]; then
-          echo "result=(output too large, written to ${INPUT_OUTPUT:-stdout})" >> "$GITHUB_OUTPUT"
-        else
-          delimiter="$(make_delimiter)"
-          while grep -Fqx "${delimiter}" <<< "${response_body}"; do
-            delimiter="$(make_delimiter)"
-          done
-          {
-            echo "result<<${delimiter}"
-            printf '%s\n' "${response_body}"
-            echo "${delimiter}"
-          } >> "$GITHUB_OUTPUT"
+        if [[ "${exit_code}" != "0" ]]; then
+          exit 1
         fi

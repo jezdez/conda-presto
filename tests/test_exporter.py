@@ -12,6 +12,7 @@ from types import SimpleNamespace
 import pytest
 from conda.models.environment import Environment
 
+import conda_presto.exporter as exporter_module
 from conda_presto.exceptions import UnknownFormatError
 from conda_presto.exporter import OutputFormat
 
@@ -69,6 +70,23 @@ def test_output_format_available_includes_conda_lockfiles():
     assert "conda-lock-v1" in formats
     assert "rattler-lock-v6" in formats
     assert "pixi-lock-v6" in formats
+
+
+def test_output_format_cache_identity_versions_provider():
+    identity = OutputFormat.named("explicit").cache_identity()
+
+    assert identity is not None
+    assert identity[0] == "explicit"
+    assert identity[1].endswith(":export_explicit")
+    assert any(distribution == "conda" for distribution, _ in identity[2])
+
+
+def test_output_format_cache_identity_requires_installed_provider(monkeypatch):
+    OutputFormat.provider_versions.cache_clear()
+    monkeypatch.setattr(exporter_module, "packages_distributions", lambda: {})
+
+    assert OutputFormat.named("explicit").cache_identity() is None
+    OutputFormat.provider_versions.cache_clear()
 
 
 def test_output_format_unknown_format_raises():

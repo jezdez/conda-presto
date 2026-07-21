@@ -11,6 +11,7 @@ from conda.exceptions import PackagesNotFoundError
 from conda.models.environment import Environment
 
 import conda_presto.worker as worker_module
+from conda_presto.exceptions import CredentialRedactionFilter
 from conda_presto.resolve import SolveResult
 from conda_presto.solver import PrestoSolveError, PrestoSolveOutcome
 
@@ -841,6 +842,129 @@ def test_persistent_solve_worker_entrypoint_handles_closed_request_pipe(monkeypa
     )
 
     assert sent == [("ready", None), "closed"]
+
+
+def test_persistent_solve_worker_entrypoint_redacts_dependency_logs(
+    monkeypatch,
+    caplog,
+):
+    sent = []
+    requests = iter([(["conda-forge"], ["zlib"], ["linux-64"], None), None])
+    connection = SimpleNamespace(
+        recv=lambda: next(requests),
+        send=sent.append,
+        close=lambda: sent.append("closed"),
+    )
+    secret_url = (
+        "https://user:password@example.test/t/private/channel/repodata.json.zst"
+    )
+
+    def solve(*_):
+        worker_module.logging.getLogger("conda.gateways.repodata.zstd").warning(
+            "Could not decompress %s as zstd (%s)",
+            secret_url,
+            RuntimeError(secret_url),
+        )
+        return []
+
+    monkeypatch.setattr(worker_module, "solve", solve)
+    monkeypatch.setattr(worker_module, "shutdown_process_pool", lambda: None)
+
+    with caplog.at_level("WARNING", logger="conda.gateways.repodata.zstd"):
+        worker_module.persistent_solve_worker_entrypoint(
+            connection,
+            [],
+            [],
+            warmup_on_start=False,
+        )
+
+    assert sent == [("ready", None), ("ok", []), "closed"]
+    assert any(
+        isinstance(filter_, CredentialRedactionFilter)
+        for filter_ in worker_module.logging.lastResort.filters
+    )
+    assert "Could not decompress" in caplog.text
+    assert "[redacted-url]" in caplog.text
+    assert "user" not in caplog.text
+    assert "password" not in caplog.text
+    assert "private" not in caplog.text
+
+
+@pytest.mark.parametrize(
+    ("message", "args", "secret"),
+    [
+        pytest.param(
+            "failed %s",
+            ("HTTP://user:password@example.test/channel),",),
+            "password",
+            id="uppercase-http-argument",
+        ),
+        pytest.param(
+            "failed FTP://user:password@example.test/channel",
+            (),
+            "password",
+            id="ftp-message",
+        ),
+        pytest.param(
+            {"url": "s3://access:secret@example.test/bucket"},
+            (),
+            "secret",
+            id="non-string-message",
+        ),
+        pytest.param(
+            "failed https://repo.example/pkg?X-Amz-Signature=abc,TOPSECRET",
+            (),
+            "TOPSECRET",
+            id="signed-query-comma-suffix",
+        ),
+        pytest.param(
+            "failed https://repo.example/t/abc,TOPSECRET/channel",
+            (),
+            "TOPSECRET",
+            id="token-path-comma-suffix",
+        ),
+    ],
+)
+def test_credential_redaction_filter_handles_complete_log_records(
+    message,
+    args,
+    secret,
+):
+    record = worker_module.logging.LogRecord(
+        "dependency",
+        worker_module.logging.WARNING,
+        __file__,
+        1,
+        message,
+        args,
+        None,
+    )
+
+    assert CredentialRedactionFilter().filter(record)
+    assert record.msg.count("[redacted-url]") == 1
+    assert secret not in record.msg
+    assert record.args == ()
+
+
+def test_credential_redaction_filter_redacts_exception_traceback():
+    try:
+        raise RuntimeError("S3://access:secret@example.test/bucket")
+    except RuntimeError as error:
+        exc_info = type(error), error, error.__traceback__
+    record = worker_module.logging.LogRecord(
+        "dependency",
+        worker_module.logging.ERROR,
+        __file__,
+        1,
+        "dependency failed",
+        (),
+        exc_info,
+    )
+
+    assert CredentialRedactionFilter().filter(record)
+    assert "[redacted-url]" in record.msg
+    assert "secret" not in record.msg
+    assert record.exc_info is None
 
 
 def test_persistent_solve_worker_entrypoint_reports_startup_failure(monkeypatch):

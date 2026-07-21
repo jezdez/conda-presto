@@ -34,7 +34,7 @@ from conda.cli.helpers import (
 )
 
 from .config import DEFAULT_CHANNELS, DEFAULT_HOST, DEFAULT_PORT
-from .exceptions import SAFE_ERROR_TYPES, UnknownFormatError
+from .exceptions import SAFE_ERROR_TYPES, UnknownFormatError, safe_error_message
 from .exporter import OutputFormat
 from .inputs import ParsedInputFile
 from .resolve import NATIVE_SUBDIR, solve, solve_environments
@@ -203,7 +203,7 @@ def cmd_solve(args: argparse.Namespace):
             print(str(exc), file=sys.stderr)
             raise SystemExit(1)
         except SAFE_ERROR_TYPES as exc:
-            print(f"Solver error: {exc}", file=sys.stderr)
+            print(f"Solver error: {safe_error_message(exc)}", file=sys.stderr)
             raise SystemExit(1)
         sys.stdout.write(body.rstrip() + "\n")
 

@@ -28,6 +28,11 @@ response status for public HTTP access logs. It does not record headers,
 cookies, query parameters, request bodies, response headers, or response
 bodies. The exact private `/solver/v1` route is excluded from access logging
 because its body can contain channel credentials and installed-prefix state.
+Operational messages record channel counts rather than raw channel URLs.
+Before application and propagated conda log records are emitted, URL-shaped
+strings and conda `Current channels:` blocks are replaced. This catches URLs
+that embed credentials, but it is not generic secret detection. Keep other
+secrets out of specs, filenames, and free-form values that can reach logs.
 
 `conda presto --serve`, including the Docker and broker entrypoints, disables
 uvicorn's separate access log so raw query strings are not logged twice. When

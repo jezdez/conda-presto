@@ -6,6 +6,7 @@ on:
       - main
     paths:
       - ".github/workflows/docs.yml"
+      - ".github/scripts/install-pixi"
       - "CHANGELOG.md"
       - "conda_presto/**"
       - "docs/**"
@@ -14,6 +15,7 @@ on:
   pull_request:
     paths:
       - ".github/workflows/docs.yml"
+      - ".github/scripts/install-pixi"
       - "CHANGELOG.md"
       - "docs/**"
       - "pyproject.toml"
@@ -36,6 +38,8 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
+      - name: Install verified Pixi
+        run: bash .github/scripts/install-pixi
       - uses: prefix-dev/setup-pixi@a09b6247153796b190642a2b53fac4241043cf6f # v0.10.0
         with:
           environments: docs

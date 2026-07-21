@@ -7,15 +7,17 @@ underlying evidence supports.
 
 ## Questions and evidence
 
+The table describes the public HTTP operations.
+
 | Operation | Question | Contacts channels | Runs a solver |
 |---|---|:---:|:---:|
 | `/parse` | What specs and channels does this file declare? | no | no |
 | `/preflight` | Is the input locally well formed and does it trigger known review findings? | no | no |
 | `/resolve` | Which package records satisfy this request? | normally | normally |
 | `/repair` | Does one supported single-spec relaxation make an infeasible request solvable? | yes | yes, repeatedly |
-| `/diff` | How do two selected package states differ? | when an input is not a covered lockfile | when needed |
-| `/explain` | Which dependency chains connect requested specs to one selected package? | when the input is not a covered lockfile | when needed |
-| `/transcode` | Can existing lockfile records be rendered as another lockfile format? | no | no |
+| `/diff` | How do two resolved package states differ? | yes | yes |
+| `/explain` | Which dependency chains connect requested specs to one selected package? | yes | yes |
+| `/transcode` | Does the request require lockfile package-record materialization? | no | no |
 
 These operations never install packages. A later conda command or another
 installer owns any prefix transaction.
@@ -50,24 +52,25 @@ candidate was exhausted, or a limit ended the search.
 
 ## Diff compares states, not intent
 
-Diff resolves each side or reuses package records from a covered lockfile. It
-then classifies package additions, removals, version changes, and build changes
-per platform. The result describes package state. It does not label a change as
-safe, compatible, or desirable.
+Diff resolves each side, then classifies package additions, removals, version
+changes, and build changes per platform. The result describes package state. It
+does not label a change as safe, compatible, or desirable. An uploaded lockfile
+is rejected when the comparison would require its package records.
 
 ## Explain follows selected metadata
 
 Explain walks dependency records from requested specs to one selected package.
-The traversal is bounded and operates on the solved or lockfile package state.
+The traversal is bounded and operates on the solved package state.
 `complete: false` records that the local graph could not account for every edge.
 It is not a claim that the selected environment is incomplete.
 
 ## Why lockfiles can skip work
 
-A lockfile already contains selected package records. Diff and explain can use
-those records when the requested platform is present. Transcode requires this
-condition and refuses requests that add specs or override channels because
-either change would require a new solve.
+A lockfile already describes selected package records, but some environment
+specifier plugins fetch package URLs when materializing conda's record objects.
+The trusted local CLI can use that adapter path for direct lockfile transcoding.
+HTTP inspects only format and platform metadata, then rejects operations that
+would materialize package records from an untrusted upload.
 
 Use {doc}`../tutorials/review-and-repair` for a guided workflow and
 {doc}`../reference/http-api` for exact request and response contracts.

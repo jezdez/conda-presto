@@ -112,10 +112,10 @@ a multi-platform request can still use the worker's internal process pool.
 
 ## Lockfile conversion
 
-Covered lockfile conversion is usually the smallest work path. It parses
-existing records and renders another lockfile format without channel access or
-SAT solving. If requested platforms are missing or the request adds specs or
-channel overrides, conda-presto refuses transcode rather than silently solving.
+Trusted local lockfile conversion through the CLI is usually the smallest work
+path. It parses existing records and renders another lockfile format without SAT
+solving. HTTP uploads remain metadata-only and are rejected when conversion
+would require package-record materialization.
 
 ## Measure your workload
 
