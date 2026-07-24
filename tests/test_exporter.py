@@ -4,6 +4,7 @@ The native JSON output produced by the CLI and HTTP API is covered by
 ``tests/test_resolve.py`` and ``tests/test_app.py``; those paths do
 not go through this module.
 """
+
 from __future__ import annotations
 
 from types import SimpleNamespace
@@ -11,6 +12,7 @@ from types import SimpleNamespace
 import pytest
 from conda.models.environment import Environment
 
+import conda_presto.exporter as exporter_module
 from conda_presto.exceptions import UnknownFormatError
 from conda_presto.exporter import OutputFormat
 
@@ -27,30 +29,14 @@ def env_with_records(make_package_record):
 @pytest.mark.parametrize(
     "format_name, expected",
     [
-        pytest.param(
-            "environment-json", "application/json", id="environment-json"
-        ),
-        pytest.param(
-            "json", "application/json", id="json-alias"
-        ),
-        pytest.param(
-            "environment-yaml", "application/yaml", id="yaml"
-        ),
-        pytest.param(
-            "yaml", "application/yaml", id="yaml-alias"
-        ),
-        pytest.param(
-            "conda-lock-v1", "application/yaml", id="conda-lock-v1"
-        ),
-        pytest.param(
-            "pixi-lock-v6", "application/yaml", id="pixi-lock-v6"
-        ),
-        pytest.param(
-            "explicit", "text/plain; charset=utf-8", id="explicit"
-        ),
-        pytest.param(
-            "requirements", "text/plain; charset=utf-8", id="requirements"
-        ),
+        pytest.param("environment-json", "application/json", id="environment-json"),
+        pytest.param("json", "application/json", id="json-alias"),
+        pytest.param("environment-yaml", "application/yaml", id="yaml"),
+        pytest.param("yaml", "application/yaml", id="yaml-alias"),
+        pytest.param("conda-lock-v1", "application/yaml", id="conda-lock-v1"),
+        pytest.param("pixi-lock-v6", "application/yaml", id="pixi-lock-v6"),
+        pytest.param("explicit", "text/plain; charset=utf-8", id="explicit"),
+        pytest.param("requirements", "text/plain; charset=utf-8", id="requirements"),
     ],
 )
 def test_output_format_media_type(format_name, expected):
@@ -86,6 +72,23 @@ def test_output_format_available_includes_conda_lockfiles():
     assert "pixi-lock-v6" in formats
 
 
+def test_output_format_cache_identity_versions_provider():
+    identity = OutputFormat.named("explicit").cache_identity()
+
+    assert identity is not None
+    assert identity[0] == "explicit"
+    assert identity[1].endswith(":export_explicit")
+    assert any(distribution == "conda" for distribution, _ in identity[2])
+
+
+def test_output_format_cache_identity_requires_installed_provider(monkeypatch):
+    OutputFormat.provider_versions.cache_clear()
+    monkeypatch.setattr(exporter_module, "packages_distributions", lambda: {})
+
+    assert OutputFormat.named("explicit").cache_identity() is None
+    OutputFormat.provider_versions.cache_clear()
+
+
 def test_output_format_unknown_format_raises():
     with pytest.raises(UnknownFormatError) as excinfo:
         OutputFormat.named("nope-not-a-format")
@@ -101,9 +104,7 @@ def test_output_format_renders_explicit(env_with_records):
 
 
 def test_output_format_renders_environment_yaml(env_with_records):
-    body, media_type = OutputFormat.named("environment-yaml").render(
-        [env_with_records]
-    )
+    body, media_type = OutputFormat.named("environment-yaml").render([env_with_records])
     assert media_type == "application/yaml"
     assert "dependencies:" in body
 
@@ -153,7 +154,8 @@ def test_output_format_dispatches_to_exporter_methods(
 def test_output_format_no_export_method_raises(monkeypatch):
     """An exporter with neither method raises UnknownFormatError."""
     fake = SimpleNamespace(
-        multiplatform_export=None, export=None,
+        multiplatform_export=None,
+        export=None,
         default_filenames=("out.txt",),
     )
     monkeypatch.setattr(

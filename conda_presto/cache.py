@@ -6,18 +6,29 @@ import hashlib
 import json
 import logging
 from collections import OrderedDict
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from importlib.metadata import version as pkg_version
 from pathlib import Path
 from typing import Literal
 
 import anyio
 import msgspec
+from conda.base.context import context
+from conda.core.index import Index
+from conda.models.channel import Channel
+from conda.models.match_spec import MatchSpec
 from litestar.response import Response
 from litestar.stores.base import Store
 from litestar.stores.file import FileStore
 
-from .resolve import NATIVE_SUBDIR, VIRTUAL_PACKAGES, RepodataSnapshot
+from .exceptions import contains_credentials
+from .exporter import ExporterCacheIdentity
+from .resolve import (
+    NATIVE_SUBDIR,
+    RepodataSnapshot,
+    configure_platform,
+    platform_lock,
+)
 from .solver import (
     PrestoSolveError,
     PrestoSolveOutcome,
@@ -29,18 +40,19 @@ from .worker import PersistentSolveWorker
 
 log = logging.getLogger(__name__)
 
-RESULT_CACHE_CONTROL = "public, max-age=86400, immutable"
-DEFAULT_RESOLVE_FORMAT = "conda-presto-json-v1"
-CACHE_ENVELOPE_VERSION = 3
+RESULT_RESPONSE_CACHE_CONTROL = "no-store"
+PERMALINK_CACHE_CONTROL = "public, max-age=86400, immutable"
+CACHE_ENVELOPE_VERSION = 6
 RESULT_CACHE_STORE_PREFIX = "resolve-v1:"
 SOLVER_CACHE_STORE_PREFIX = "solver-v1:"
 RESULT_CACHE_STORE_TIMEOUT_S = 2
+RESULT_CACHE_STORE_MAX_AGE_S = 24 * 60 * 60
+RESULT_CACHE_MAX_STORED_BYTES = 64 * 1024 * 1024
 CACHE_DEPENDENCY_PACKAGES = (
     "conda-presto",
     "conda",
     "conda-rattler-solver",
     "py-rattler",
-    "conda-lockfiles",
 )
 
 
@@ -97,6 +109,53 @@ class SolverServiceProbe:
     persistence_failed: bool = False
 
 
+@dataclass(frozen=True)
+class ResolveCacheContext:
+    """Conda state that can change a public resolve result."""
+
+    channel_priority: str
+    use_only_tar_bz2: bool
+    pinned_packages: tuple[str, ...]
+    allow_cycles: bool
+    add_pip_as_python_dependency: bool
+    virtual_packages: tuple[tuple[str, tuple[str, ...]], ...]
+
+    @classmethod
+    def capture(cls, platforms: list[str]) -> ResolveCacheContext:
+        """Capture effective conda settings and virtual packages by platform."""
+        virtual_packages = []
+        with platform_lock:
+            for platform in platforms:
+                configure_platform(platform)
+                records = Index().system_packages
+                virtual_packages.append(
+                    (
+                        platform,
+                        tuple(
+                            sorted(
+                                json.dumps(
+                                    record.dump(),
+                                    sort_keys=True,
+                                    separators=(",", ":"),
+                                    default=str,
+                                )
+                                for record in records
+                            )
+                        ),
+                    )
+                )
+            return cls(
+                channel_priority=context.channel_priority.value,
+                use_only_tar_bz2=bool(context.use_only_tar_bz2),
+                pinned_packages=tuple(
+                    sorted(str(MatchSpec(spec)) for spec in context.pinned_packages)
+                ),
+                allow_cycles=bool(context.allow_cycles),
+                add_pip_as_python_dependency=bool(context.add_pip_as_python_dependency),
+                virtual_packages=tuple(virtual_packages),
+            )
+
+
 @dataclass
 class ResultCache:
     max_size: int
@@ -113,6 +172,9 @@ class ResultCache:
         platforms: list[str] | None,
         format_name: str | None,
         repodata: RepodataSnapshot | None = None,
+        *,
+        solve_context: ResolveCacheContext | None = None,
+        exporter_identity: ExporterCacheIdentity | None = None,
     ) -> str:
         """Return the SHA-256 key for a canonical resolve request."""
         resolved_platforms = list(platforms or [NATIVE_SUBDIR])
@@ -126,15 +188,26 @@ class ResultCache:
         if repodata is None:
             repodata = RepodataSnapshot.capture(channels, resolved_platforms)
 
+        if solve_context is None:
+            solve_context = ResolveCacheContext.capture(resolved_platforms)
+
         envelope = {
             "version": CACHE_ENVELOPE_VERSION,
             "specs": sorted(specs),
             "channels": list(channels),
             "platforms": resolved_platforms,
-            "format": format_name or DEFAULT_RESOLVE_FORMAT,
+            "output": (
+                {"kind": "native"}
+                if format_name is None
+                else {
+                    "kind": "exporter",
+                    "name": format_name,
+                    "provider": exporter_identity,
+                }
+            ),
             "dependency_versions": versions,
-            "virtual_packages": VIRTUAL_PACKAGES,
             "repodata": repodata.records,
+            "solve_context": asdict(solve_context),
         }
         body = json.dumps(
             envelope,
@@ -142,6 +215,62 @@ class ResultCache:
             separators=(",", ":"),
         ).encode()
         return hashlib.sha256(body).hexdigest()
+
+    @staticmethod
+    def capture_state(
+        channels: list[str],
+        platforms: list[str],
+    ) -> tuple[RepodataSnapshot, ResolveCacheContext]:
+        """Capture the blocking state used by public cache lookup."""
+        return (
+            RepodataSnapshot.capture(channels, platforms),
+            ResolveCacheContext.capture(platforms),
+        )
+
+    @staticmethod
+    def channels_have_credentials(channels: list[str]) -> bool:
+        """Return whether any channel contains credentials or a signed URL."""
+        for value in channels:
+            if contains_credentials(value):
+                return True
+            try:
+                expanded = context.custom_multichannels.get(value)
+                channel_values = expanded if expanded is not None else (Channel(value),)
+                for channel in channel_values:
+                    public_urls = channel.urls(
+                        with_credentials=False,
+                        subdirs=("noarch",),
+                    )
+                    credentialed_urls = channel.urls(
+                        with_credentials=True,
+                        subdirs=("noarch",),
+                    )
+                    if (
+                        channel.auth
+                        or channel.token
+                        or public_urls != credentialed_urls
+                        or any(contains_credentials(url) for url in credentialed_urls)
+                    ):
+                        return True
+            except Exception:
+                return True
+        return False
+
+    @staticmethod
+    def specs_have_credentials(specs: list[str]) -> bool:
+        """Return whether any spec selects a credentialed channel."""
+        for value in specs:
+            if contains_credentials(value):
+                return True
+            try:
+                channel = MatchSpec(value).get_exact_value("channel")
+            except Exception:
+                return True
+            if channel is not None and ResultCache.channels_have_credentials(
+                [getattr(channel, "canonical_name", str(channel))]
+            ):
+                return True
+        return False
 
     @staticmethod
     def resolve_key(key: str) -> str:
@@ -191,7 +320,9 @@ class ResultCache:
         raise ValueError(f"Unsupported result cache backend: {backend}")
 
     def remember_memory(self, key: str, stored: StoredCacheEntry) -> bool:
-        if self.max_bytes > 0 and stored.memory_size > self.max_bytes:
+        if self.stored_entry_has_credentials(stored) or (
+            self.max_bytes > 0 and stored.memory_size > self.max_bytes
+        ):
             if previous := self.entries.pop(key, None):
                 self.current_bytes -= previous.memory_size
             return False
@@ -209,6 +340,18 @@ class ResultCache:
             self.current_bytes -= evicted.memory_size
         return key in self.entries
 
+    @staticmethod
+    def stored_entry_has_credentials(stored: StoredCacheEntry) -> bool:
+        """Return whether a produced result contains detected credentials."""
+        if isinstance(stored, StoredResult):
+            return contains_credentials(stored.body)
+        return contains_credentials(
+            {
+                "records": stored.response.records,
+                "neutered": stored.response.neutered,
+            }
+        )
+
     async def get_stored(
         self,
         key: str,
@@ -217,6 +360,10 @@ class ResultCache:
         """Load one typed cache entry from memory or persistent storage."""
         stored = self.entries.get(key)
         if isinstance(stored, entry_type):
+            if self.stored_entry_has_credentials(stored):
+                log.warning("Ignoring in-memory result cache entry with credentials")
+                await self.discard(key)
+                return None
             self.entries.move_to_end(key)
             return stored
         if stored is not None:
@@ -240,10 +387,20 @@ class ResultCache:
         if stored_payload is None:
             return None
 
+        if len(stored_payload) > RESULT_CACHE_MAX_STORED_BYTES:
+            log.warning("Ignoring oversized persistent result cache entry")
+            await self.delete_persistent(key)
+            return None
+
         try:
             stored = msgspec.msgpack.decode(stored_payload, type=entry_type)
         except (msgspec.DecodeError, msgspec.ValidationError):
             log.warning("Ignoring corrupt persistent result cache entry")
+            await self.delete_persistent(key)
+            return None
+        if self.stored_entry_has_credentials(stored):
+            log.warning("Ignoring persistent result cache entry with credentials")
+            await self.delete_persistent(key)
             return None
 
         current = self.entries.get(key)
@@ -261,11 +418,32 @@ class ResultCache:
         key: str,
         *,
         location: str,
+        immutable: bool = False,
     ) -> Response | None:
         stored = await self.get_stored(key, StoredResult)
         if not isinstance(stored, StoredResult):
             return None
-        return self.response_for(stored, location)
+        return self.response_for(stored, location, immutable=immutable)
+
+    async def delete_persistent(self, key: str) -> None:
+        """Remove one invalid persistent entry on a best-effort basis."""
+        if self.store_operations is None:
+            return
+        try:
+            completed = await self.store_operations.delete(
+                key,
+                timeout_s=RESULT_CACHE_STORE_TIMEOUT_S,
+            )
+            if not completed:
+                log.warning("Persistent result cache deletion timed out")
+        except Exception:
+            log.warning("Persistent result cache deletion failed")
+
+    async def discard(self, key: str) -> None:
+        """Remove one cache entry from memory and persistent storage."""
+        if stored := self.entries.pop(key, None):
+            self.current_bytes -= stored.memory_size
+        await self.delete_persistent(key)
 
     async def get_solver_result(
         self,
@@ -274,6 +452,8 @@ class ResultCache:
         thread_limiter: anyio.CapacityLimiter | None = None,
     ) -> StoredSolverResult | None:
         """Return a solver result only after a post-read freshness check."""
+        if request.has_detected_credentials():
+            return None
         async with self.solver_publication_lock:
             stored = await self.get_stored(
                 self.solver_key(request.cache_key()),
@@ -284,7 +464,7 @@ class ResultCache:
             try:
                 current = await anyio.to_thread.run_sync(
                     request.repodata_snapshot,
-                    abandon_on_cancel=True,
+                    abandon_on_cancel=False,
                     limiter=thread_limiter,
                 )
             except Exception:
@@ -300,13 +480,15 @@ class ResultCache:
         require_persistent: bool = False,
     ) -> SolverServiceProbe:
         """Inspect one solver cache entry and its current metadata."""
+        if request.has_detected_credentials():
+            return SolverServiceProbe(cached=False, current=None)
         async with self.solver_publication_lock:
             key = self.solver_key(request.cache_key())
             stored = await self.get_stored(key, StoredSolverResult)
             try:
                 current = await anyio.to_thread.run_sync(
                     request.repodata_snapshot,
-                    abandon_on_cancel=True,
+                    abandon_on_cancel=False,
                     limiter=thread_limiter,
                 )
             except Exception:
@@ -332,13 +514,22 @@ class ResultCache:
         stored: StoredCacheEntry,
     ) -> CacheRetention:
         """Retain one cache entry and report optional storage failure."""
+        if self.stored_entry_has_credentials(stored):
+            log.warning("Not retaining result cache entry with credentials")
+            await self.discard(key)
+            return CacheRetention(False)
         retained = self.remember_memory(key, stored)
         if self.store_operations is not None:
+            payload = msgspec.msgpack.encode(stored)
+            if len(payload) > RESULT_CACHE_MAX_STORED_BYTES:
+                log.warning("Persistent result cache entry exceeds the size limit")
+                return CacheRetention(retained, persistent_failed=True)
             try:
                 completed = await self.store_operations.set(
                     key,
-                    msgspec.msgpack.encode(stored),
+                    payload,
                     timeout_s=RESULT_CACHE_STORE_TIMEOUT_S,
+                    expires_in=RESULT_CACHE_STORE_MAX_AGE_S,
                 )
                 if not completed:
                     log.warning("Persistent result cache write timed out")
@@ -356,12 +547,15 @@ class ResultCache:
         media_type: str,
         *,
         location: str,
+        retain: bool = True,
     ) -> Response:
         stored = StoredResult(body=body, media_type=media_type)
+        if not retain:
+            return self.response_for(stored, location, retained=False)
         retention = await self.store_entry(key, stored)
         if retention.retained:
             return self.response_for(stored, location)
-        return Response(stored.body, media_type=stored.media_type)
+        return self.response_for(stored, location, retained=False)
 
     async def publish_solver(
         self,
@@ -372,13 +566,15 @@ class ResultCache:
         require_persistent: bool = False,
     ) -> tuple[StoredSolverResult | None, SolverCacheDisposition]:
         """Store a worker result unless the current entry already matches."""
+        if request.has_detected_credentials():
+            return None, "not-retained"
         async with self.solver_publication_lock:
             key = self.solver_key(request.cache_key())
             existing = await self.get_stored(key, StoredSolverResult)
             try:
                 current = await anyio.to_thread.run_sync(
                     request.repodata_snapshot,
-                    abandon_on_cancel=True,
+                    abandon_on_cancel=False,
                     limiter=thread_limiter,
                 )
             except Exception:
@@ -405,11 +601,21 @@ class ResultCache:
     def response_for(
         stored: StoredResult,
         location: str,
+        *,
+        immutable: bool = False,
+        retained: bool = True,
     ) -> Response:
+        headers = {
+            "Cache-Control": (
+                PERMALINK_CACHE_CONTROL if immutable else RESULT_RESPONSE_CACHE_CONTROL
+            )
+        }
+        if retained:
+            headers["Location"] = location
         return Response(
             stored.body,
             media_type=stored.media_type,
-            headers={"Location": location, "Cache-Control": RESULT_CACHE_CONTROL},
+            headers=headers,
         )
 
 

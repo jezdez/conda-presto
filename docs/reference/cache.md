@@ -16,13 +16,25 @@ A retained `/resolve` response includes these headers:
 
 ```text
 Location: /r/<sha256>
-Cache-Control: public, max-age=86400, immutable
+Cache-Control: no-store
 ```
 
-The cache may evict the entry before the HTTP freshness lifetime ends. A
-missing or evicted permalink returns HTTP 404. Private solver entries never
-include `Location` or public cache headers and cannot be fetched through
-`/r/<sha256>`.
+Successful responses produced through the `/resolve` cache path use `no-store`
+because a new request must reach the application's repodata freshness check.
+Validation and other error responses do not all carry this header. A retained
+`GET /r/<sha256>` response uses
+`Cache-Control: public, max-age=86400, immutable`. The cache or persistent
+expiry may remove that entry before an intermediary's HTTP freshness lifetime
+ends. A missing or expired permalink returns HTTP 404. Private solver responses
+use `Cache-Control: no-store`, never include `Location`, and cannot be fetched
+through `/r/<sha256>`.
+
+A request containing known credential patterns in a channel or package spec is
+solved but not retained. The cache applies the same check to produced package
+URLs because channel repodata can supply a separate package base URL. Detected
+patterns include authentication, a token path, query parameters, and fragments.
+The successful response uses `no-store` and has no `Location` header. Stored
+entries that fail this check on read are removed instead of returned.
 
 `GET /r/<sha256>` returns the stored body without repeating a repodata
 freshness check. A later `/resolve` request can bypass stale metadata and move
@@ -58,9 +70,24 @@ Python installations need the `redis` optional dependency.
 Persistent reads and writes are submitted in order. A cache caller waits up to
 two seconds for an operation. A timeout or store failure is logged and treated
 as a cache miss or a failed persistent write. It does not make an otherwise
-valid solve response fail. Resolve and solver entries are written without an
-application-level expiration. Retention outside the in-process cache is a
-property of the configured store.
+valid solve response fail. Resolve and solver entries expire after 24 hours.
+An encoded persistent value larger than 64 MiB is neither written nor loaded.
+Corrupt, incompatible, or oversized values are removed when encountered.
+File-backed stores attempt to remove expired values during application startup
+and once per hour. Cleanup failures do not stop the service.
+
+Expiry and per-value size checks do not bound the aggregate size of a
+persistent store. Put a file store on a filesystem or volume with a hard quota.
+Configure a dedicated Redis instance with `maxmemory` and a suitable eviction
+policy such as `allkeys-lru`. A Redis namespace does not isolate the instance's
+memory limit or eviction policy.
+
+Persistent storage is a trusted service boundary. Anyone who can write its
+files or Redis namespace can replace package results and warming inputs. Use a
+dedicated service account, mode `0700` file directory, or authenticated Redis
+instance. Do not share a namespace with less-trusted applications. The payload
+format detects corruption but does not authenticate a writer that already has
+store access.
 
 ## Resolve cache identity
 
@@ -69,24 +96,32 @@ The public digest is SHA-256 over a versioned canonical envelope containing:
 - specs sorted by their string form
 - channels in effective priority order
 - requested platforms in order, or the native platform when omitted
-- the exporter name, or `conda-presto-json-v1` for native JSON
-- the complete configured virtual-package override mapping for Linux, macOS,
-  and Windows, including families not selected by this request
+- native JSON or the requested exporter selector
+- for an exporter, its canonical provider name, selected callback module and
+  qualified name, and versions of the installed distributions that provide
+  the callback's import package
 - installed versions of conda-presto, conda, conda-rattler-solver,
-  py-rattler, and conda-lockfiles
+  and py-rattler
+- effective channel priority, package-format selection, and canonical pinned
+  package specs, plus dependency-cycle and implicit Python `pip` settings
+- the effective virtual-package records captured for each requested platform,
+  including configured target overrides and other detections or overrides
+  exposed by conda's virtual-package plugins
 - repodata records containing the public channel URL, selected metadata source,
-  file size, and modification time
+  file size, modification and change times, device, and inode
 
 Raw file content and filenames are not direct key fields. File requests are
 parsed first, then the effective specs and channels enter the key. Spec order
-does not change the digest. Channel and platform order do. Because the complete
-virtual-package mapping is hashed, changing any configured family invalidates
-resolve keys for every target platform.
+does not change the digest. Channel and platform order do. Exporter responses
+are not retained when conda-presto cannot identify the callback and its
+providing distribution versions.
 
 A lookup is skipped when the captured initial repodata snapshot is marked
-stale. After a solve, conda-presto captures the records again and retains the
-response only when the resulting snapshot is fresh and the metadata transition
-is safe. Changed cache-file markers produce a different digest. A post-solve
+stale. A cached value is returned only after another capture confirms that the
+repodata markers did not change during the lookup. After a solve, conda-presto
+captures the records again and publishes the response only when the markers
+are unchanged, the resulting snapshot is fresh, and the metadata transition is
+safe. Changed cache-file markers produce a different digest. A post-solve
 snapshot with missing metadata files or local `file://` channels is not
 retained. An ambiguous sharded-repodata fallback is also not retained.
 
@@ -106,9 +141,22 @@ regardless of that TTL. Sharded repodata still uses conda's stale check.
 
 Repodata markers are stored with the final state instead of being included in
 the digest. A hit requires the current snapshot to be fresh and its records to
-equal those stored with the response. Solver errors and results without a safe
-before-and-after metadata transition are not retained. A current result
-replaces an older entry under the same private key after repodata changes.
+equal those stored with the response. Publication requires the worker's
+before-solve and used markers to match, followed by another current snapshot
+that still matches. Solver errors and results without that unchanged, safe
+metadata transition are not retained. A current result replaces an older entry
+under the same private key after repodata changes.
+
+## Timeout boundary
+
+The configured solve timeout supplies the deadline for solver work. Cache-state
+inspection runs in non-abandoned worker threads because it temporarily changes
+conda's process-global platform context. The request waits for that inspection
+to finish rather than leaving it active after returning a timeout. If metadata
+inspection blocks inside conda, filesystem, or operating-system code, the
+observed request duration can therefore exceed the configured timeout. Channel,
+platform, body, state, and concurrency limits still bound admitted work. Use
+process or container resource limits when serving untrusted callers.
 
 ## Recorded solver requests
 
@@ -126,8 +174,10 @@ recorded uses and expires seven days after its most recent use.
 Recorded requests are process-local by default. Set
 `CONDA_PRESTO_SOLVER_CACHE_WARM_CANDIDATE_PERSIST=true` to checkpoint them in a
 configured file or Redis store. This setting is rejected with the memory-only
-backend. Requests with detected credentials or tokenized URLs remain
-memory-only. Persistent catalogs are loaded at startup and checkpointed after
+backend. Requests whose serialized state contains detected credential patterns
+or tokenized URLs remain memory-only. Persistent catalogs larger than 8 MiB,
+invalid counters, non-finite or future timestamps, and corrupt payloads are
+rejected. Persistent catalogs are loaded at startup and checkpointed after
 refresh cycles and during graceful shutdown. Persistence is best effort. A
 process crash can lose requests recorded since the most recent checkpoint.
 
@@ -147,10 +197,11 @@ cycle considers at most `CONDA_PRESTO_SOLVER_CACHE_WARM_BATCH_SIZE` requests,
 which defaults to 8. With a memory-only result cache, the batch is also capped
 by its entry limit.
 
-Each metadata inspection, refresh-worker startup, or solve is limited to 30
-seconds and respects a lower `CONDA_PRESTO_SOLVE_TIMEOUT_S`. A cycle stops
-starting work after 60 seconds. No replay starts while foreground solver work
-is active or waiting.
+Each metadata inspection, refresh-worker startup, or solve receives a
+30-second deadline and respects a lower `CONDA_PRESTO_SOLVE_TIMEOUT_S`. A
+non-abandoned metadata inspection can delay completion beyond that deadline.
+A cycle stops starting work after 60 seconds. No replay starts while foreground
+solver work is active or waiting.
 If foreground work arrives during a replay, that replay finishes or times out
 and the cycle starts no further request.
 

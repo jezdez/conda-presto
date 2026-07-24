@@ -43,7 +43,8 @@ with new inherited settings.
 The broker runs the current Python interpreter with
 `-m conda_presto.broker`. That command reads `CONDA_PRESTO_URL`, requests
 `/health` with a two-second timeout, and succeeds for an HTTP status from 200
-through 399.
+through 299. It accepts only a plain HTTP loopback URL and does not use
+environment proxies or follow redirects.
 
 | Setting | Value |
 |---|---:|
@@ -87,8 +88,10 @@ authenticate other users on the same host. The service exposes the public HTTP
 API at its reported root. The server process enables the private `/solver/v1`
 route because its environment contains
 `CONDA_BROKER_SERVICE_NAME=conda-presto.server`. The identity is process state,
-not a request credential. Any loopback caller can reach the route while that
-service is running.
+not a request credential. The route also requires the broker-assigned host,
+JSON media type, no browser `Origin`, and a loopback peer. These checks exclude
+ordinary browser requests and unrelated loopback authorities. They do not
+authenticate another local process that can discover and reproduce the request.
 
 Starting this service does not alter normal `conda presto` commands. It is not
 started by the Docker image.

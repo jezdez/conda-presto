@@ -66,9 +66,9 @@ environment. Run the remaining commands inside the activated conda environment
 or Pixi shell.
 
 :::{note}
-The site built from `main` includes the `[Unreleased]` features in the
-changelog. Use the current-main or source-checkout tab until those features are
-part of a published release.
+The documentation site is built from `main`. If the `[Unreleased]` changelog
+section is not empty, use the current-main or source-checkout tab for those
+changes.
 :::
 
 conda-presto requires conda 26.5 or newer and Python 3.13 or newer. Verify that
@@ -129,7 +129,7 @@ curl -sS http://127.0.0.1:8000/health
 ```
 
 The response is `{"status":"ok"}` when the server can accept solve requests.
-Open `http://127.0.0.1:8000/` for the interactive API documentation.
+Fetch `http://127.0.0.1:8000/openapi.json` for the generated OpenAPI document.
 
 ## Choose the next guide
 

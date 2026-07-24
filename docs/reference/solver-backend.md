@@ -80,12 +80,29 @@ worker-lifecycle behavior. Freshness and foreground trade-offs are covered in
 
 The server process enables `POST /solver/v1` when its
 `CONDA_BROKER_SERVICE_NAME` is `conda-presto.server`. That identity is process
-state, not a request credential. Once enabled, any loopback client can reach the
-route. The handler is absent from the public OpenAPI contract and requires the
-broker's persistent worker. The Docker server does not enable it or run
-scheduled solver-cache refresh.
-Request and response logging excludes this route so channel credentials and
-installed-prefix state are not written to broker logs.
+state, not a request credential. The handler also requires a loopback peer, the
+broker-assigned HTTP authority, a JSON request without a browser `Origin`, and
+the broker's persistent worker. These checks prevent browser and DNS-rebinding
+requests, but they do not authenticate operating-system users. A local process
+that can discover the endpoint remains inside the broker service's trust
+boundary. The Docker server does not enable the route or run scheduled
+solver-cache refresh.
+
+Request and response access logging excludes this route. Unexpected service
+errors use a generic solver error. See {doc}`observability` for log filtering
+and error-redaction behavior.
+
+The handler accepts at most
+`CONDA_PRESTO_MAX_SOLVER_CHANNELS` serialized channels. It also applies
+`CONDA_PRESTO_MAX_SOLVER_STATE_ITEMS` to the combined number of requested
+additions, removals, installed records, history entries, pins, virtual packages,
+aggressive updates, and always-update entries. The defaults are 128 channels
+and 10,000 state items. The ordinary public spec and channel limits do not
+replace these protocol-specific bounds.
+
+The client accepts at most 8 MiB in the solver response body. A larger response
+closes the loopback connection and raises `PrestoSolverError` without decoding
+the body.
 
 `/solver/v1` is a private implementation detail, not an HTTP API to integrate
 against. Its message format and behavior may change or be removed without a

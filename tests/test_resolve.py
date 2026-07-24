@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import threading
 from concurrent.futures import Future, ProcessPoolExecutor, ThreadPoolExecutor
 from types import SimpleNamespace
@@ -135,7 +136,7 @@ def test_solve_result_diff_classifies_package_changes(make_package_record):
         ],
     )
 
-    diff = before.diff(after, before_category="main", after_category="main")
+    diff = before.diff(after)
 
     assert [package.name for package in diff.added] == ["new"]
     assert [package.name for package in diff.removed] == ["added", "removed"]
@@ -147,7 +148,6 @@ def test_solve_result_diff_classifies_package_changes(make_package_record):
     assert diff.unchanged_count == 0
     changed = msgspec.json.decode(msgspec.json.encode(diff))["changed"][0]["from"]
     assert changed["platform"] == "linux-64"
-    assert changed["category"] == "main"
     assert "sha256" not in changed
     assert "size" not in changed
 
@@ -171,20 +171,6 @@ def test_solve_result_diff_keeps_conda_and_pypi_names_distinct(
     assert diff.unchanged_count == 2
     assert not diff.added
     assert not diff.removed
-
-
-def test_solve_result_from_environment_keeps_external_manager():
-    result = SolveResult.from_environment(
-        Environment(
-            platform="linux-64",
-            external_packages={"pypi": ["pypi/pypi::packaging==25.0=pypi_0"]},
-        )
-    )
-
-    package = result.packages[0]
-    assert package.manager == "pypi"
-    assert package.name == "packaging"
-    assert package.version == "25.0"
 
 
 def test_solve_result_diff_rejects_mismatched_platforms(sample_resolved_package):
@@ -538,6 +524,49 @@ def test_repodata_snapshot_uses_conda_freshness(monkeypatch, tmp_path):
     ]
 
 
+def test_repodata_snapshot_detects_preserved_mtime_replacement(
+    monkeypatch,
+    tmp_path,
+):
+    cache_path = tmp_path / "repodata.json"
+    replacement = tmp_path / "replacement.json"
+    cache_path.write_bytes(b"one")
+    previous_mtime = cache_path.stat().st_mtime_ns
+    cache = SimpleNamespace(
+        cache_path_json=cache_path,
+        cache_path_shards=tmp_path / "repodata.msgpack.zst",
+        state=SimpleNamespace(should_check_format=lambda _: False),
+        load_state=lambda **_: None,
+        stale=lambda: False,
+    )
+    monkeypatch.setattr(
+        resolve_module,
+        "SubdirData",
+        lambda *_, **__: SimpleNamespace(repo_cache=cache),
+    )
+
+    before = RepodataSnapshot.capture(
+        ["https://conda.example/channel"],
+        ["linux-64"],
+    )
+    replacement.write_bytes(b"two")
+    replacement.replace(cache_path)
+    cache_path.touch()
+    os.utime(cache_path, ns=(previous_mtime, previous_mtime))
+    after = RepodataSnapshot.capture(
+        ["https://conda.example/channel"],
+        ["linux-64"],
+    )
+
+    assert {record[2] for record in before.records} == {
+        record[2] for record in after.records
+    }
+    assert {record[3][0] for record in before.records} == {
+        record[3][0] for record in after.records
+    }
+    assert before.records != after.records
+
+
 @pytest.mark.parametrize(
     ("use_shards", "use_index_cache", "source", "expected_stale"),
     [
@@ -792,6 +821,20 @@ def test_solve_result_from_exception_sanitizes_generic():
     assert result.platform == "linux-64"
     assert result.error == "Internal solver error"
     assert result.packages == []
+
+
+def test_solve_result_from_exception_redacts_parent_log(caplog):
+    exc = PackagesNotFoundError(
+        ["missing"],
+        ["https://token@example.internal/conda?auth=secret"],
+    )
+
+    SolveResult.from_exception("linux-64", exc)
+
+    assert "Current channels: [redacted]" in caplog.text
+    assert "token" not in caplog.text
+    assert "example.internal" not in caplog.text
+    assert "auth=secret" not in caplog.text
 
 
 def test_solve_only_captures_selected_error_types(monkeypatch):

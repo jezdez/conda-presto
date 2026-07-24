@@ -32,7 +32,7 @@ from .config import (
     OSX_VERSION,
     WIN_VERSION,
 )
-from .exceptions import safe_error_message
+from .exceptions import CredentialRedactionFilter, safe_error_message
 
 log = logging.getLogger(__name__)
 
@@ -64,7 +64,15 @@ SHARDED_REPODATA_SOURCE = "repodata_shards.msgpack.zst"
 class RepodataSnapshot:
     """Repodata cache-file markers and conda freshness state."""
 
-    records: tuple[tuple[str, str, int | None, int | None], ...]
+    records: tuple[
+        tuple[
+            str,
+            str,
+            int | None,
+            int | tuple[int, int, int, int] | None,
+        ],
+        ...,
+    ]
     stale: bool
 
     @property
@@ -150,7 +158,19 @@ class RepodataSnapshot:
                 records.append((public_url, source, None, None))
                 stale = True
             else:
-                records.append((public_url, source, stat.st_size, stat.st_mtime_ns))
+                records.append(
+                    (
+                        public_url,
+                        source,
+                        stat.st_size,
+                        (
+                            stat.st_mtime_ns,
+                            stat.st_ctime_ns,
+                            stat.st_dev,
+                            stat.st_ino,
+                        ),
+                    )
+                )
                 stale = (
                     stale
                     or public_url.startswith("file://")
@@ -311,14 +331,12 @@ class DiffPackage(msgspec.Struct, omit_defaults=True):
     channel: str
     subdir: str
     url: str
-    category: str | None = None
 
     @classmethod
     def from_resolved(
         cls,
         package: ResolvedPackage,
         platform: str,
-        category: str | None = None,
     ) -> DiffPackage:
         """Project a solve record without hash or size churn."""
         return cls(
@@ -330,7 +348,6 @@ class DiffPackage(msgspec.Struct, omit_defaults=True):
             channel=package.channel,
             subdir=package.subdir,
             url=package.url,
-            category=category,
         )
 
 
@@ -385,36 +402,15 @@ class SolveResult(msgspec.Struct):
         """Convert an expected platform failure into a safe result."""
         if not isinstance(exc, captured_errors):
             raise exc
-        log.warning("Solver dispatch error for %s: %s", platform, exc)
+        message = safe_error_message(exc)
+        log.warning("Solver dispatch error for %s: %s", platform, message)
         return cls(
             platform=platform,
             packages=[],
-            error=safe_error_message(exc),
+            error=message,
         )
 
-    @classmethod
-    def from_environment(cls, environment: Environment) -> SolveResult:
-        """Convert a parsed lockfile environment into a solve result."""
-        packages = [
-            ResolvedPackage.from_record(record)
-            for record in environment.explicit_packages
-        ]
-        packages.extend(
-            ResolvedPackage.from_external(manager, value, environment.platform)
-            for manager, values in environment.external_packages.items()
-            for value in values
-        )
-        return cls(
-            platform=environment.platform,
-            packages=sorted(packages, key=lambda package: package.identity),
-        )
-
-    def diff(
-        self,
-        other: SolveResult,
-        before_category: str | None = None,
-        after_category: str | None = None,
-    ) -> PlatformDiff:
+    def diff(self, other: SolveResult) -> PlatformDiff:
         """Return the resolved package difference from this result to *other*."""
         if self.platform != other.platform:
             raise ValueError("Cannot diff results for different platforms")
@@ -422,21 +418,19 @@ class SolveResult(msgspec.Struct):
         before = {package.identity: package for package in self.packages}
         after = {package.identity: package for package in other.packages}
         added = [
-            DiffPackage.from_resolved(after[key], self.platform, after_category)
+            DiffPackage.from_resolved(after[key], self.platform)
             for key in sorted(after.keys() - before.keys())
         ]
         removed = [
-            DiffPackage.from_resolved(before[key], self.platform, before_category)
+            DiffPackage.from_resolved(before[key], self.platform)
             for key in sorted(before.keys() - after.keys())
         ]
         changed = [
             ChangedPackage(
                 name=after[key].name,
                 manager=after[key].manager,
-                from_=DiffPackage.from_resolved(
-                    before[key], self.platform, before_category
-                ),
-                to=DiffPackage.from_resolved(after[key], self.platform, after_category),
+                from_=DiffPackage.from_resolved(before[key], self.platform),
+                to=DiffPackage.from_resolved(after[key], self.platform),
                 kind=before[key].change_kind(after[key]),
             )
             for key in sorted(before.keys() & after.keys())
@@ -560,14 +554,22 @@ def build_index(
             index, cached_snapshot = cached
             snapshot = RepodataSnapshot.capture(channels, [platform])
             if snapshot.stale or snapshot.records != cached_snapshot.records:
-                log.debug("Refreshing index for %s/%s", channels, platform)
+                log.debug(
+                    "Refreshing index for %d channels on %s",
+                    len(channels),
+                    platform,
+                )
                 for channel in channels:
                     index.reload_channel(Channel(channel))
                 snapshot = RepodataSnapshot.capture(channels, [platform])
                 index_cache[key] = index, snapshot
             index_cache.move_to_end(key)
             return index
-        log.debug("Building index for %s/%s", channels, platform)
+        log.debug(
+            "Building index for %d channels on %s",
+            len(channels),
+            platform,
+        )
         index = RattlerIndexHelper(
             channels=list(channels),
             subdirs=(platform, "noarch"),
@@ -612,6 +614,7 @@ def run_solver(
     into the solver plugin's internals, so this call site is the one
     place in conda-presto that couples to a specific solver backend.
     """
+    CredentialRedactionFilter.install()
     with platform_lock:
         configure_platform(platform)
         configure_context()
@@ -790,6 +793,7 @@ def get_process_pool() -> ProcessPoolExecutor:
 
 def watch_parent_process() -> None:
     """Exit a pool worker when its owning process exits unexpectedly."""
+    CredentialRedactionFilter.install()
     parent = multiprocessing.parent_process()
     if parent is None:
         return

@@ -3,10 +3,9 @@ name: Release
 on:
   push:
     tags:
-      - "*.*.*"
+      - "v[0-9]+.[0-9]+.[0-9]+"
 
-permissions:
-  contents: read
+permissions: {}
 
 concurrency:
   group: release-${{ github.ref_name }}
@@ -18,25 +17,21 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      attestations: write # Store the GitHub build provenance.
-      artifact-metadata: write # Create metadata for the attested artifacts.
-      id-token: write # Sign the provenance with GitHub's OIDC identity.
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           fetch-depth: 0
           persist-credentials: false
 
-      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+      - uses: prefix-dev/setup-pixi@a09b6247153796b190642a2b53fac4241043cf6f # v0.10.0
         with:
-          python-version: "3.13"
+          pixi-version: v0.70.1
+          run-install: false
 
-      - name: Build sdist and wheel
-        run: pipx run --spec build==1.5.0 pyproject-build
-
-      - uses: actions/attest@a1948c3f048ba23858d222213b7c278aabede763 # v4
-        with:
-          subject-path: dist/*
+      - name: Build sdist and wheel from the lockfile
+        run: |
+          SETUPTOOLS_SCM_PRETEND_VERSION="${GITHUB_REF_NAME#v}" \
+            pixi run --locked -e release python -m build --no-isolation
 
       - name: Upload distributions
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
@@ -45,14 +40,31 @@ jobs:
           path: dist/
           if-no-files-found: error
 
+  attest:
+    name: Attest distributions
+    runs-on: ubuntu-latest
+    needs: [build]
+    permissions:
+      contents: read
+      attestations: write # Store distribution provenance in GitHub.
+      artifact-metadata: write # Create metadata for the attested distributions.
+      id-token: write # Sign distribution provenance with GitHub's OIDC identity.
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: dist
+          path: dist/
+
+      - uses: actions/attest@a1948c3f048ba23858d222213b7c278aabede763 # v4
+        with:
+          subject-path: dist/*
+
   create-draft-release:
     name: Create draft GitHub Release
     runs-on: ubuntu-latest
-    needs: [build]
-
+    needs: [attest]
     permissions:
       contents: write # Create the draft release and upload its assets.
-
     steps:
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
@@ -72,10 +84,10 @@ jobs:
           files=(dist/*)
           if gh release view "$RELEASE_TAG" --repo "$GH_REPO" >/dev/null 2>&1; then
             echo "Release ${RELEASE_TAG} already exists." >&2
-            echo "Release immutability is enabled; create a new tag instead of replacing assets." >&2
+            echo "Release immutability is enabled. Create a new tag instead of replacing assets." >&2
             exit 1
           fi
-          if [ "${#files[@]}" -eq 0 ]; then
+          if test "${#files[@]}" -eq 0; then
             echo "No distribution assets found." >&2
             exit 1
           fi
@@ -101,10 +113,8 @@ jobs:
     runs-on: ubuntu-latest
     needs: [create-draft-release]
     environment: pypi
-
     permissions:
       id-token: write # Exchange GitHub's OIDC token for a PyPI token.
-
     steps:
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
@@ -120,11 +130,9 @@ jobs:
     name: Publish GitHub Release
     runs-on: ubuntu-latest
     needs: [publish-pypi]
-
     permissions:
-      actions: write # Dispatch the Docker image publish workflow.
-      contents: write # Publish the draft release after PyPI succeeds.
-
+      actions: write # Dispatch Docker publication from the release tag.
+      contents: write # Publish the draft GitHub release.
     steps:
       - name: Publish draft release
         env:
@@ -138,4 +146,4 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
           RELEASE_TAG: ${{ github.ref_name }}
-        run: gh workflow run docker.yml --repo "$GH_REPO" --ref "$RELEASE_TAG" -f tag="$RELEASE_TAG"
+        run: gh workflow run docker.yml --repo "$GH_REPO" --ref "$RELEASE_TAG"

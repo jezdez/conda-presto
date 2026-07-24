@@ -33,6 +33,7 @@ jobs:
           persist-credentials: false
       - uses: prefix-dev/setup-pixi@a09b6247153796b190642a2b53fac4241043cf6f # v0.10.0
         with:
+          pixi-version: v0.70.1
           environments: prod
           cache: true
       - name: Exercise broker-backed conda commands

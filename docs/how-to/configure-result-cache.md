@@ -7,6 +7,12 @@ retain entries across service restarts.
 Public resolve entries and private solver entries use separate key namespaces.
 Only public resolve entries have `/r/<hash>` URLs.
 
+Persistent entries expire after 24 hours. Encoded values larger than 64 MiB are
+not stored or loaded. These per-entry controls do not limit aggregate disk or
+Redis usage. The persistent backend is a trusted service boundary, so only the
+conda-presto service account should have write access to its directory or Redis
+namespace.
+
 :::{note}
 A permalink returns the stored snapshot without a new repodata freshness check.
 A new `/resolve` request performs the freshness check and can move to another
@@ -51,6 +57,10 @@ export CONDA_PRESTO_RESULT_CACHE_DIR="$HOME/.cache/conda-presto/results"
 conda presto --serve
 ```
 
+Put this directory on a filesystem or volume with a hard quota sized for the
+deployment. The file backend attempts expiry cleanup at startup and once per
+hour, but expiry cleanup is best effort and is not an aggregate storage bound.
+
 For conda-broker, stop the broker before exporting the variables so its new
 daemon inherits them:
 
@@ -82,9 +92,19 @@ export CONDA_PRESTO_RESULT_CACHE_REDIS_NAMESPACE=conda-presto
 conda presto --serve
 ```
 
+Configure a hard Redis memory limit and an eviction policy before admitting
+traffic. For a Redis instance dedicated to cache data, for example:
+
+```text
+maxmemory 1gb
+maxmemory-policy allkeys-lru
+```
+
 The published server image already contains the Redis client. Choose a unique
 namespace when deployments with different trust boundaries use the same Redis
-instance.
+instance. A namespace separates keys, but Redis applies `maxmemory` and its
+eviction policy to the whole instance. Use separate instances when deployments
+need independent memory or trust boundaries.
 
 ## Verify a public cache entry
 
@@ -133,6 +153,9 @@ these conditions:
 - the response is larger than the in-process byte limit and no persistent
   backend retained it
 - repodata markers were unavailable or changed while solving
+- a channel, package spec, or produced package URL contained a detected credential pattern
+- the selected exporter provider could not be identified by callback and
+  installed distribution version
 - the persistent store timed out or rejected the write
 
 Local `file://` repodata sources are not retained by the private solver cache.
@@ -140,7 +163,8 @@ Local `file://` repodata sources are not retained by the private solver cache.
 ## Plan for invalidation and eviction
 
 Eviction removes older in-process entries when entry or byte limits are
-exceeded. Persistent-store retention is managed by the selected backend.
+exceeded. A file-store quota or Redis `maxmemory` and eviction policy provide
+the aggregate persistent bound. Entry expiry does not replace that bound.
 
 Repodata freshness is separate. `/resolve` keys include repodata cache-file
 markers, so changed metadata produces a different public location. The private

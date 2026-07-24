@@ -203,6 +203,18 @@ def test_warming_key_excludes_dependency_versions(monkeypatch, solver_request):
             },
             id="url-fragment",
         ),
+        pytest.param(
+            {"channels": [Channel("https://repo.example/%74/secret/channel").dump()]},
+            id="encoded-channel-token",
+        ),
+        pytest.param(
+            {
+                "channels": [
+                    Channel("https://repo.example/%2574%252Fsecret/channel").dump()
+                ]
+            },
+            id="double-encoded-channel-token",
+        ),
     ],
 )
 def test_request_detects_credentials(solver_request, change):
@@ -591,6 +603,78 @@ async def test_load_filters_expired_entries(solver_request):
 
     assert restored.entries == {}
     assert restored.generation == 1
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("request_count", "last_requested"),
+    [
+        pytest.param(0, 1, id="zero-requests"),
+        pytest.param(
+            warm_candidates_module.SOLVER_WARM_CANDIDATE_MAX_REQUESTS + 1,
+            1,
+            id="excessive-requests",
+        ),
+        pytest.param(2, float("nan"), id="nan-timestamp"),
+        pytest.param(2, float("inf"), id="infinite-timestamp"),
+        pytest.param(2, 2, id="future-timestamp"),
+    ],
+)
+async def test_load_filters_invalid_candidate_metrics(
+    solver_request,
+    request_count,
+    last_requested,
+):
+    fingerprint = solver_request.warming_key()
+    payload = msgspec.msgpack.encode(
+        StoredWarmCandidates(
+            entries=[
+                warm_candidates_module.SolverWarmCandidate(
+                    fingerprint=fingerprint,
+                    request=solver_request,
+                    request_count=request_count,
+                    last_requested=last_requested,
+                )
+            ]
+        )
+    )
+    store = MemoryStore()
+    await store.set(SOLVER_WARM_CANDIDATE_STORE_KEY, payload)
+    store_operations = StoreOperationCoordinator(store)
+    warm_candidates = SolverWarmCandidates(
+        max_size=32,
+        persist=True,
+        store_operations=store_operations,
+    )
+
+    async with store_operations.lifespan():
+        await warm_candidates.load(now=1)
+
+    assert warm_candidates.entries == {}
+    assert warm_candidates.observations == {}
+    assert warm_candidates.generation == 1
+
+
+@pytest.mark.anyio
+async def test_load_deletes_oversized_candidate_catalog(monkeypatch):
+    store = MemoryStore()
+    await store.set(SOLVER_WARM_CANDIDATE_STORE_KEY, b"large")
+    monkeypatch.setattr(
+        warm_candidates_module,
+        "SOLVER_WARM_CANDIDATE_MAX_STORED_BYTES",
+        4,
+    )
+    store_operations = StoreOperationCoordinator(store)
+    warm_candidates = SolverWarmCandidates(
+        max_size=32,
+        persist=True,
+        store_operations=store_operations,
+    )
+
+    async with store_operations.lifespan():
+        await warm_candidates.load(now=1)
+
+    assert await store.get(SOLVER_WARM_CANDIDATE_STORE_KEY) is None
 
 
 @pytest.mark.anyio

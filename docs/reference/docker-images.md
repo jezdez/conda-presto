@@ -2,7 +2,8 @@
 
 Release images are published to `ghcr.io/jezdez/conda-presto` for
 `linux/amd64` and `linux/arm64`. Both flavors use `debian:bookworm-slim`, run
-from `/app`, and use UID and GID 10001.
+from `/app`, and use UID and GID 10001. Build and runtime base images are pinned
+by tag and multi-platform digest.
 
 ## Image flavors
 
@@ -20,13 +21,55 @@ For a release such as `v0.7.0`, the publishing workflow produces:
 
 | Server tag | CLI tag | Selection |
 |---|---|---|
-| `latest` | `cli` | Mutable flavor alias updated by the publishing workflow |
-| `0.7.0` | `0.7.0-cli` | Exact release |
-| `0.7` | `0.7-cli` | Mutable minor-line alias |
-| `0` | `0-cli` | Mutable major-line alias |
-| `<short-git-sha>` | `<short-git-sha>-cli` | Source revision built for that release event |
+| `latest` | `cli` | Mutable flavor alias updated by each release |
+| `0.7.0` | `0.7.0-cli` | Immutable exact release tag |
+| `0.7` | `0.7-cli` | Mutable minor-line alias updated within the release line |
+| `<short-git-sha>` | `<short-git-sha>-cli` | Immutable tag for the source revision |
 
-Pin an exact release or source revision when deployment reproducibility matters.
+Major-zero releases do not publish `0` or `0-cli` because those aliases could
+cross incompatible minor lines. Before publishing, the workflow refuses to
+overwrite an existing exact release tag or short source-SHA tag. The `latest`,
+`cli`, minor, and nonzero-major aliases move. A short SHA can theoretically
+collide, in which case publication fails rather than replacing the existing
+tag. The release workflow dispatches image publication from the released
+version tag, and publication waits for approval through the protected `ghcr`
+environment. That environment accepts only `v*` tags. Pin the image manifest
+digest when deployment reproducibility must not depend on tag policy or
+registry administration.
+
+## Provenance and image contents
+
+The release workflow publishes maximum-mode BuildKit provenance and an SPDX
+SBOM for each image manifest. A separate job signs a GitHub artifact
+attestation only after the registry returns the pushed digest. Verify an exact
+release image with GitHub CLI after authenticating to GHCR:
+
+```bash
+gh attestation verify \
+  oci://ghcr.io/jezdez/conda-presto:0.7.0 \
+  --repo jezdez/conda-presto \
+  --signer-workflow jezdez/conda-presto/.github/workflows/docker.yml
+```
+
+The production filesystem keeps application source, the entrypoint, and the
+installed Pixi environment outside its package cache owned by root. UID 10001
+can write `/app/.pixi/envs/<environment>/pkgs` and its home directory at
+`/home/app`. The build removes setuid and setgid bits from inherited utilities.
+
+## Vulnerability scans
+
+Pull requests build and scan the server and CLI images on `linux/amd64`, then
+build and scan both flavors on `linux/arm64` under QEMU. Release publication
+depends on those jobs. Trivy fails on fixed high or critical findings that it
+recognizes, subject to the narrow, expiring exception in `.trivyignore.yaml`.
+
+Each image job also uploads a nonblocking SARIF report containing all severities,
+including findings without an available fix and findings covered by the blocking
+scan's exception. Download the `trivy-<flavor>-<architecture>` artifact from the
+workflow run to inspect it. Trivy does not treat conda package records as a
+supported package ecosystem. It can recognize operating-system packages and
+language package metadata present inside a Pixi environment, but a passing scan
+is not a complete vulnerability inventory for conda packages.
 
 ## Server defaults
 

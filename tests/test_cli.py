@@ -285,7 +285,10 @@ def test_cmd_solve_format_solver_error_exits(run_cli, monkeypatch, capsys):
     """cmd_solve --format surfaces known solver errors cleanly (no traceback)."""
 
     def raise_pnf(*a, **kw):
-        raise PackagesNotFoundError(["nonexistent-package-zzzzzz"])
+        raise PackagesNotFoundError(
+            ["nonexistent-package-zzzzzz"],
+            ["https://user:password@example.test/t/private/channel"],
+        )
 
     monkeypatch.setattr("conda_presto.cli.solve_environments", raise_pnf)
     with pytest.raises(SystemExit, match="1"):
@@ -301,3 +304,7 @@ def test_cmd_solve_format_solver_error_exits(run_cli, monkeypatch, capsys):
     err = capsys.readouterr().err
     assert "Solver error:" in err
     assert "nonexistent-package-zzzzzz" in err
+    assert "Current channels: [redacted]" in err
+    assert "user" not in err
+    assert "password" not in err
+    assert "private" not in err

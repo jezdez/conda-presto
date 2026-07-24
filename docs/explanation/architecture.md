@@ -2,8 +2,8 @@
 
 conda-presto is a solve-only bridge around conda. It reads package specs or
 environment files, selects package records for one or more platforms, and emits
-native JSON or a conda exporter format. It does not download package payloads,
-create prefixes, or run installation transactions.
+native JSON or a conda exporter format. Its solve paths do not download package
+payloads, create prefixes, or run installation transactions.
 
 The internal `conda --solver=presto` plugin adds a separate local path. It
 delegates final-state selection to the broker service, then returns control to
@@ -16,32 +16,50 @@ flowchart LR
     A["Request\n(specs or file)"] --> B["Input adapter\n(conda env-spec registry)"]
     B --> C{"Operation"}
     C -->|"resolve"| D["Rattler solve"]
-    C -->|"covered lockfile"| E["Reuse package records"]
+    C -->|"covered lockfile transcode"| E["Render in parser process"]
+    C -->|"HTTP review lockfile"| H["Inspect metadata or reject"]
     D --> F["Native JSON or\nconda exporter"]
     E --> F
+    H --> G
     F --> G["CLI output or\nHTTP response"]
 ```
 
-`/transcode` and the CLI lockfile conversion path reuse records only when the
+The CLI and `/transcode` lockfile conversion paths load records only when the
 input is a lockfile, every requested platform is present, the output is another
-lockfile format, and no extra specs or channel overrides require a solve.
-`/diff` and `/explain` can also use covered lockfile records.
+lockfile format, and no extra specs or channel overrides require a solve. The
+HTTP path uses a concrete conda-presto compatibility adapter to reconstruct and
+serialize the lockfile atomically inside the isolated parser process. Temporary
+package records do not cross the process boundary, and package archives are not
+fetched. Other HTTP operations inspect lockfile format and platform metadata but
+reject work that needs those records. Transcoding rejects source structures
+that would change selected package identity, dependency constraints, features,
+or the supported environment set.
 
 ## Input adapters
 
 File detection and parsing are delegated to conda's environment specifier
 registry. The supported adapters cover environment YAML, requirements files,
 and the conda-lock and rattler-lock formats supplied by conda-lockfiles. Other
-installed plugins can participate when they return conda's `Environment` model
-or the multi-platform lockfile interface used by the adapter.
+installed plugins can participate in normal input handling when they return
+conda's `Environment` model.
+
+HTTP transcoding currently adds one project-owned compatibility boundary for
+the exact conda-lock v1 and rattler-lock v6 adapters. It returns serialized
+content without exposing temporary records. Once conda-lockfiles releases its
+atomic transcode method, this boundary can be replaced without changing the
+parser-process or HTTP contract.
 
 Conda's explicit-file specifier does not expose that multi-platform lockfile
 interface, so explicit files are not accepted as input. The explicit exporter
 remains available as an output format.
 
-The CLI and HTTP layer turn parsed files and inline arguments into the same
-spec, channel, and platform inputs. HTTP raw uploads use Litestar's parsed media
-type plus an optional filename hint to select the file adapter.
+The CLI and HTTP layer turn parsed environment files and inline arguments into
+the same spec, channel, and platform inputs. HTTP raw uploads use Litestar's
+parsed media type plus an optional filename hint to select the file adapter.
+The CLI uses the adapter's normal record path. `/transcode` uses the isolated
+compatibility path to render one of conda-lockfiles' registered formats without
+fetching. Other HTTP operations do not request records from an uploaded
+lockfile.
 
 ## Review operations
 
@@ -61,9 +79,10 @@ solver. See {doc}`environment-review` for the complete model.
 ## Direct solve engine
 
 Direct CLI and public HTTP solves use `conda-rattler-solver`. conda-presto sets
-the target platform and deterministic target virtual-package overrides on
-conda's context before building the solver input, including for the host's
-native subdir. The direct engine is fixed to the rattler backend.
+the target platform and configured target virtual-package overrides on conda's
+context before building the solver input, including for the host's native
+subdir. Other effective virtual-package plugin detections and overrides can
+also participate. The direct engine is fixed to the rattler backend.
 
 Multi-platform requests dispatch one solve per platform. A process pool keeps
 platform work isolated from conda's process-global context. Persistent server

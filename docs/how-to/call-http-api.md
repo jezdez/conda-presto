@@ -54,15 +54,9 @@ curl --fail --silent --show-error \
 ```
 
 Use `filename` when a generic YAML media type could describe several installed
-formats. This example selects the pixi-lock parser before transcoding:
-
-```bash
-curl --fail --silent --show-error \
-  --data-binary @pixi.lock \
-  --header 'Content-Type: application/yaml' \
-  "$CONDA_PRESTO_URL/transcode?filename=pixi.lock&platform=linux-64&format=conda-lock-v1" \
-  --output conda-lock.yml
-```
+formats. For an uploaded lockfile, HTTP parsing inspects format and platform
+metadata only unless you call `/transcode`. Resolve and review operations that
+would require package records return HTTP 400.
 
 Accepted raw upload types and the full request schema are listed in
 {doc}`../reference/http-api`.
@@ -101,10 +95,9 @@ grep -i '^location:' response-headers.txt
 See {doc}`configure-result-cache` for persistent storage and retrieval through
 `/r/<hash>`.
 
-## Inspect the generated API documentation
+## Inspect the generated API document
 
-Open the server root in a browser for the Scalar interface or fetch the
-generated OpenAPI document:
+Fetch the generated OpenAPI document:
 
 ```bash
 curl --fail --silent --show-error \
@@ -116,7 +109,9 @@ curl --fail --silent --show-error \
 The generated schema does not describe the manually dispatched request bodies
 for `POST /resolve`, `POST /preflight`, or `POST /transcode`. Use
 {doc}`../reference/http-api` for those body contracts.
+The server intentionally provides JSON rather than an interactive browser
+renderer.
 :::
 
 Use {doc}`inspect-environments` for preflight, repair, diff, and explain tasks.
-Use {doc}`transcode-lockfiles` when conversion does not require a solve.
+Use {doc}`transcode-lockfiles` for CLI or HTTP conversion without a solve.

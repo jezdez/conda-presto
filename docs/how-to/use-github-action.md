@@ -24,14 +24,15 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: jezdez/conda-presto@v0.6.0
+      - uses: jezdez/conda-presto@v0.7.0
         with:
           file: environment.yml
           platforms: linux-64,osx-arm64
 ```
 
-Local mode is the default. The Action installs Pixi and runs conda-presto from
-the pinned Action checkout. It does not require a running server.
+Local mode is the default. The Action uses a commit-pinned `setup-pixi` action
+to install Pixi 0.70.1 and runs conda-presto from the pinned Action checkout.
+It does not require a running server.
 
 ## Write and upload a lockfile
 
@@ -44,7 +45,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: jezdez/conda-presto@v0.6.0
+      - uses: jezdez/conda-presto@v0.7.0
         id: solve
         with:
           file: environment.yml
@@ -67,7 +68,7 @@ request that exits unsuccessfully fails the Action step.
 Pass comma-separated specs, channels, and platforms:
 
 ```yaml
-- uses: jezdez/conda-presto@v0.6.0
+- uses: jezdez/conda-presto@v0.7.0
   with:
     specs: python=3.13,numpy,pandas
     channels: conda-forge
@@ -83,7 +84,7 @@ Remote mode sends a JSON request to the deployment's `/resolve` endpoint:
 ```yaml
 - uses: actions/checkout@v4
 
-- uses: jezdez/conda-presto@v0.6.0
+- uses: jezdez/conda-presto@v0.7.0
   with:
     mode: remote
     endpoint: ${{ vars.CONDA_PRESTO_URL }}
@@ -98,14 +99,22 @@ variable `CONDA_PRESTO_URL`. Use a secret instead if the URL itself contains
 sensitive information.
 
 Remote mode requires `jq` and `curl` on the runner. GitHub-hosted Ubuntu
-runners provide both tools.
+runners provide both tools. It sends the complete environment file and channel
+configuration to the endpoint. Use only a trusted HTTPS deployment whose
+operators are permitted to read that data.
+
+The Action rejects plain HTTP except for `localhost`, `127.0.0.1`, and `::1`.
+It disables curl's default `curlrc` configuration, accepts only HTTP 2xx, and
+validates the native JSON result shape when no exporter format is selected.
+It does not print response bodies automatically. Use `output` to write the body
+to a workspace file, or read the bounded `result` output in a later step.
 
 ## Read outputs in another step
 
 Give the solve step an ID, then use its `solved` and `result` outputs:
 
 ```yaml
-- uses: jezdez/conda-presto@v0.6.0
+- uses: jezdez/conda-presto@v0.7.0
   id: solve
   with:
     specs: python=3.13,numpy

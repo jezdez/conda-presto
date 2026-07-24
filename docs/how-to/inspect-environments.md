@@ -89,8 +89,9 @@ curl --fail --silent --show-error \
   | jq '.diff["linux-64"]'
 ```
 
-If an input lockfile already contains the requested platform, `/diff` reads
-its package records directly. Other inputs are solved before comparison.
+Use specs or environment files for `/diff`. HTTP lockfile uploads are rejected
+when comparison would require package-record materialization. The parser still
+inspects their format and platform metadata without fetching package URLs.
 
 ## Explain one selected package
 

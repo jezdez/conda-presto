@@ -5,9 +5,10 @@ and served by uvicorn. Start it with `conda presto --serve` or
 `uvicorn conda_presto.app:app --no-access-log`. The conda-presto command is the
 preferred entry point because it applies the documented server configuration.
 
-Data endpoints return JSON unless a `format` parameter routes a resolve or
-transcode response through a conda exporter plugin. The root serves the Scalar
-API interface, and `/openapi.json` serves the generated OpenAPI document.
+Data endpoints return JSON unless a `format` parameter routes a resolve
+response through a conda exporter plugin. Both `/` and
+`/openapi.json` serve the generated OpenAPI document as JSON. conda-presto does
+not load an interactive API interface or third-party browser assets.
 
 The generated schema covers route discovery and typed request models. It does
 not describe the manually dispatched request bodies for `POST /resolve`,
@@ -29,14 +30,14 @@ An unretained response is still valid but has no `Location` header.
 | `POST` | `/repair` | Test bounded single-spec relaxations |
 | `POST` | `/diff` | Compare two selected package states |
 | `POST` | `/explain` | Trace dependency chains to one package |
-| `POST` | `/transcode` | Convert a covered lockfile without solving |
+| `POST` | `/transcode` | Convert one lockfile format to another without solving |
 | `POST` | `/parse` | Extract specs and channels from a file |
 | `GET` | `/r/{hash}` | Fetch one retained resolve response |
 | `GET` | `/formats` | List registered exporter names and aliases |
 | `GET` | `/platforms` | List conda's known platform subdirectories |
 | `GET` | `/version` | Report installed component versions |
 | `GET` | `/health` | Report persistent-worker readiness |
-| `GET` | `/` | Serve the interactive Scalar interface |
+| `GET` | `/` | Serve the generated OpenAPI 3.1 document |
 | `GET` | `/openapi.json` | Serve the generated OpenAPI 3.1 document |
 
 The broker-only `/solver/v1` protocol is guarded, omitted from OpenAPI, and not
@@ -101,8 +102,13 @@ Retained responses include:
 
 ```text
 Location: /r/3a7f...e91b
-Cache-Control: public, max-age=86400, immutable
+Cache-Control: no-store
 ```
+
+Successful responses produced through the mutable resolve cache path use
+`no-store` so an HTTP intermediary cannot bypass the server's repodata
+freshness check. Validation and other error responses do not all carry this
+header. The `Location` points to the separately cacheable immutable resource.
 
 #### Raw file upload
 
@@ -140,7 +146,17 @@ HTTP input deliberately rejects files whose first content line is
 `@EXPLICIT`. Use explicit files as exporter output, not as `/resolve`,
 `/parse`, `/preflight`, or `/transcode` input.
 
-Use `POST /transcode` to convert an existing lockfile without solving.
+The isolated HTTP parser rejects YAML aliases and inputs with more than 10,000
+structural nodes. This limit is applied before conda constructs environment,
+package, or match-spec objects.
+
+HTTP lockfile parsing normally stops after format and platform metadata.
+`/resolve`, `/diff`, and `/explain` return HTTP 400 when an uploaded lockfile
+would require package records. `/transcode` is the exception. Conda-presto's
+format-specific compatibility path reconstructs and serializes temporary
+records inside the isolated parser process using the URL and metadata already
+present in the lockfile. It does not fetch package archives or return those
+records to the server process.
 
 ---
 
@@ -227,8 +243,8 @@ already solved.
 
 Compare two resolve inputs. Both `from` and `to` use the `ResolveRequest`
 shape from `POST /resolve`. An outer `platforms` list applies to both sides.
-When a supplied lockfile already covers a requested platform, the endpoint
-compares its package records directly instead of solving it again.
+HTTP lockfile uploads are rejected when comparison would require their package
+records.
 
 ```bash
 curl -sS http://localhost:8000/diff \
@@ -295,10 +311,9 @@ listed platform to its `added`, `removed`, and `changed` package arrays plus
 
 Every package in `added` and `removed`, and each `from` and `to` object in
 `changed`, has the `DiffPackage` fields `manager`, `name`, `platform`,
-`version`, `build`, `channel`, `subdir`, and `url`. The optional `category`
-field is present when a parsed conda-lock source provides one. A
-`ChangedPackage` has `name`, `manager`, `from`, `to`, and `kind`. `kind` is
-`upgrade`, `downgrade`, `version-change`, or `build-change`.
+`version`, `build`, `channel`, `subdir`, and `url`. A `ChangedPackage` has
+`name`, `manager`, `from`, `to`, and `kind`. `kind` is `upgrade`, `downgrade`,
+`version-change`, or `build-change`.
 
 Solver failures return HTTP 422. Inputs that resolve to no common platform
 return HTTP 400.
@@ -332,11 +347,40 @@ packages return HTTP 404, and solver failures return HTTP 422.
 
 ---
 
+(http-transcode)=
 ### `POST /transcode`
 
-Convert one lockfile format to another without running the solver. The
-input must already be a lockfile, and `format` must name a lockfile
-exporter such as `conda-lock-v1` or `pixi-lock-v6`.
+Convert one lockfile format to another without running the solver. The input
+must already be a lockfile, and `format` must name a lockfile exporter such as
+`conda-lock-v1` or `pixi-lock-v6`. Package records are reconstructed from the
+lockfile metadata without fetching the referenced package archives.
+
+The no-fetch path supports conda-lockfiles' `conda-lock-v1` and
+`rattler-lock-v6` exporters and their aliases. Other registered exporters remain
+available to normal solve and CLI export paths but are not assumed to accept
+metadata-only records.
+
+Cross-format conda-pypi wheel conversion returns HTTP 400. Rattler lock v6
+omits the mapped conda package name, so conversion to conda-lock v1 would need
+to guess it. Conversion in the other direction would discard the mapped name
+that conda-lock v1 does retain.
+
+The temporary compatibility path also returns HTTP 400 when it cannot carry
+source data through conda's environment model without changing package
+selection or solver constraints. This can apply even when the source and target
+formats match. For conda-lock v1, pip, optional, and non-main packages on a
+requested platform are rejected. For rattler lock v6, multiple environments and
+PyPI package references are rejected. Constraints, features, Python
+site-package paths, duplicate dependency names, and dependency selectors are
+rejected when the target is conda-lock v1. Duplicate package metadata,
+duplicate or dangling references on a requested platform, mismatched URL
+identity, package URLs for the wrong platform, and nonempty Rattler fields that
+the installed compatibility model cannot represent are also rejected.
+Informational metadata that the model does represent but the target lacks may
+be normalized by the exporter.
+
+Successful responses include `Cache-Control: no-store` because the serialized
+lockfile can contain credential-bearing package URLs.
 
 Query parameters
 : `format`
@@ -375,9 +419,8 @@ returns HTTP 400 because applying it would require a solve.
 
 #### Raw lockfile upload
 
-Upload a lockfile directly by setting an appropriate Content-Type
-header. Use `filename` when the content type does not identify the
-lockfile format.
+Upload a lockfile directly by setting an appropriate Content-Type header. Use
+`filename` when the content type does not identify the lockfile format.
 
 ```bash
 curl -sS --data-binary @pixi.lock \
@@ -385,10 +428,10 @@ curl -sS --data-binary @pixi.lock \
   'http://localhost:8000/transcode?filename=pixi.lock&platform=linux-64&format=conda-lock-v1'
 ```
 
-The request fails with HTTP 400 and a `reasons` array if the input is
-not a lockfile, the output format is not a lockfile, the requested
-platforms are missing from the input lockfile, or the request includes
-specs or channel overrides that would require solving.
+The request fails with HTTP 400 and a `reasons` array if the input is not a
+lockfile, the output format is not a lockfile, the requested platforms are
+missing from the input lockfile, or the request includes specs or channel
+overrides that would require solving.
 
 ---
 
@@ -513,6 +556,9 @@ Parse an input file and extract its specs and channels without
 solving. Useful for validation or for building a UI on top of the
 solver.
 
+For a lockfile, HTTP parsing does not materialize package records. The response
+therefore contains no specs or channels derived from those records.
+
 ```bash
 curl -sS http://localhost:8000/parse \
   --json '{
@@ -550,15 +596,16 @@ If the persistent worker stops or becomes unavailable, the endpoint returns HTTP
 
 ### `GET /`
 
-Interactive API documentation powered by [Scalar UI](https://scalar.com/).
-Open this URL in a browser to explore and test the API interactively.
+The generated OpenAPI 3.1 document as JSON. conda-presto intentionally exposes
+no interactive renderer because remotely loaded browser code would execute in
+the API's origin.
 
 ---
 
 ### `GET /openapi.json`
 
-The raw OpenAPI 3.1 schema generated by Litestar. This is the same
-schema that powers the Scalar UI at `/`. Manually dispatched bodies for
+The OpenAPI 3.1 schema generated by Litestar. This is the same document served
+at `/`. Manually dispatched bodies for
 `POST /resolve`, `POST /preflight`, and `POST /transcode` are not represented.
 
 ## Resolve response formats
@@ -580,11 +627,17 @@ canonical schemas, media types, aliases, and failure behavior.
 | 429 | Per-client request rate exceeded when rate limiting is enabled |
 | 500 | Unexpected solve or exporter failure |
 | 503 | Persistent worker unavailable on `/health` or the private solver route |
-| 504 | Solve timed out (exceeds `CONDA_PRESTO_SOLVE_TIMEOUT_S`) |
+| 504 | The solve deadline was reached (`CONDA_PRESTO_SOLVE_TIMEOUT_S`) |
 
 Errors returned explicitly by conda-presto handlers are JSON objects with an
 `error` field. Framework-level request validation and middleware responses can
 use Litestar's own error shape.
+
+Cache-state inspection runs in non-abandoned worker threads because it uses
+conda's process-global platform context. If inspection blocks in dependency,
+filesystem, or operating-system code, observed request duration can exceed the
+configured solve deadline before the handler returns HTTP 504. See
+{doc}`cache` for the complete timeout boundary.
 
 ```json
 {"error": "Unknown format 'bogus'. Available: conda-lock-v1, environment-json, ..."}

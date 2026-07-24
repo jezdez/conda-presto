@@ -77,10 +77,10 @@ conda broker start conda-presto.server
 conda broker wait conda-presto.server --timeout 180
 ```
 
-Candidate persistence requires a file or Redis backend. Requests with detected
-channel credentials or tokenized URLs remain memory-only. Treat persisted
-requests as private service data because they include installed and channel
-state.
+Candidate persistence requires a file or Redis backend. Requests whose
+serialized state contains detected credential patterns or tokenized URLs remain
+memory-only. Treat persisted requests as private service data because they
+include installed and channel state.
 
 Persistence is best effort. The service checkpoints after refresh cycles and
 during graceful shutdown, so a crash can lose recent observations.
@@ -94,10 +94,11 @@ broker-managed service per catalog.
 cycle considers. For a memory-only result cache, that value is also capped by
 the in-process entry limit.
 
-Each inspection or solve has a 30-second ceiling and also respects a lower
-`CONDA_PRESTO_SOLVE_TIMEOUT_S`. A cycle stops starting work after 60 seconds.
-The refresh worker is created lazily for a cycle, reused within that cycle, and
-stopped when the cycle finishes.
+Each inspection or solve receives a 30-second deadline and also respects a
+lower `CONDA_PRESTO_SOLVE_TIMEOUT_S`. A non-abandoned metadata inspection can
+delay completion beyond its deadline. A cycle stops starting work after 60
+seconds. The refresh worker is created lazily for a cycle, reused within that
+cycle, and stopped when the cycle finishes.
 
 Increase the interval or reduce the batch size if refresh work competes for
 network, CPU, or repodata cache access on the host.

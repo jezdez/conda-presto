@@ -92,10 +92,9 @@ curl -sS --data-binary @environment.yml \
 The media type selects raw file handling. The `filename` query parameter can
 select a more specific parser when the media type is ambiguous.
 
-## Explore the generated API documentation
+## Download the generated API document
 
-Open `$CONDA_PRESTO_URL/` in a browser for the interactive Scalar interface, or
-download the generated OpenAPI schema:
+Download the generated OpenAPI schema:
 
 ```bash
 curl -sS "$CONDA_PRESTO_URL/openapi.json" > openapi.json
@@ -105,6 +104,8 @@ curl -sS "$CONDA_PRESTO_URL/openapi.json" > openapi.json
 The generated schema does not describe the manually dispatched request bodies
 for `POST /resolve`, `POST /preflight`, or `POST /transcode`. Use the
 {doc}`../reference/http-api` page for those body contracts.
+conda-presto does not serve a browser interface or load third-party API-renderer
+assets.
 :::
 
 ## What you learned

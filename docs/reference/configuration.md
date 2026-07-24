@@ -29,6 +29,7 @@ Additional validation rejects:
 - candidate persistence with a memory-only backend
 - a negative refresh interval
 - a refresh batch size below one
+- private solver channel or state limits below one
 - repair suggestion, attempt, or time limits below one
 
 ## Deployment profiles
@@ -61,9 +62,14 @@ platform is requested.
 
 The HTTP server checks requested channels against
 `CONDA_PRESTO_ALLOWED_CHANNELS`. The default allowlist is the configured
-fallback channel list. A value of `*` accepts arbitrary caller-selected
-channels and should be used only inside an appropriate trust and network-egress
-boundary.
+fallback channel list. Named channels and multichannels are expanded through
+conda, then compared by exact credential-free URL, including scheme, authority,
+and path.
+This prevents another host or an HTTP downgrade from borrowing an approved
+canonical channel name. A value of `*` accepts arbitrary caller-selected HTTP
+and HTTPS channels, but not local `file://` paths. A local channel must be
+listed explicitly. Use the wildcard only inside an appropriate trust and
+network-egress boundary.
 
 ## Startup and readiness
 
@@ -112,7 +118,7 @@ URL is supplied. The published server image contains the Redis client.
 
 Public resolve and private solver entries share the in-process entry and byte
 limits. They use separate persistent key namespaces. See {doc}`cache` for
-identity, retention, failure fallback, and invalidation.
+identity, retention, capacity, failure fallback, and invalidation.
 
 ## HTTP middleware and limits
 
@@ -124,6 +130,8 @@ The Litestar application configures:
 - response compression
 - structured request logging
 - solve and parse time limits in the handlers
+
+See {doc}`cache` for cache-specific deadline behavior.
 
 Behind a reverse proxy, uvicorn must trust the intended proxy addresses through
 `--forwarded-allow-ips` before forwarded client addresses can be used for rate
@@ -142,6 +150,7 @@ The Pixi workspace defines these environments:
 | `redis` | server | Server runtime with Redis support |
 | `cli` | base | CLI and composite Action local mode |
 | `docs` | documentation | Sphinx and documentation extensions |
+| `release` | release | Isolated package-build environment |
 
 The workspace exposes these tasks:
 

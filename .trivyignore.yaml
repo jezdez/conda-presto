@@ -1,0 +1,7 @@
+vulnerabilities:
+  - id: GHSA-36hh-v3qg-5jq4
+    paths:
+      - app/.pixi/envs/prod/lib/python3.13/site-packages/rattler/rattler.abi3.so
+      - app/.pixi/envs/cli/lib/python3.13/site-packages/rattler/rattler.abi3.so
+    statement: The locked images use py-rattler 0.25.0 through conda-rattler-solver 0.1.1. conda-presto does not call the affected pyo3 PyList iterator nth or nth_back APIs through this extension.
+    expired_at: 2026-09-30

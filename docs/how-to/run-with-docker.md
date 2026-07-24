@@ -1,7 +1,7 @@
 # Run conda-presto with Docker
 
-conda-presto provides an HTTP server image and a one-shot CLI image. The 0.7
-documentation describes current `main` until 0.7.0 is published.
+conda-presto provides an HTTP server image and a one-shot CLI image. The
+examples pin the 0.7.0 release.
 
 ## Choose image versions
 
@@ -9,33 +9,38 @@ Set the image variables once, then use the remaining commands unchanged.
 
 `````{tab-set}
 
+````{tab-item} 0.7.0 release
+Select the exact server and CLI release tags:
+
+```bash
+export CONDA_PRESTO_SERVER_IMAGE=ghcr.io/jezdez/conda-presto:0.7.0
+export CONDA_PRESTO_CLI_IMAGE=ghcr.io/jezdez/conda-presto:0.7.0-cli
+```
+
+The publishing workflow does not overwrite exact release tags. Pin the image
+manifest digest when reproducibility must also be independent of registry
+administration.
+````
+
 ````{tab-item} Current main
-From a source checkout, build both targets with explicit local names:
+To test unpublished changes, build both targets from a source checkout with
+explicit local names:
 
 ```bash
 docker build -f docker/Dockerfile \
   --target server \
   --build-arg PIXI_ENV=prod \
-  --build-arg CONDA_PRESTO_VERSION=0.7.0.dev0 \
+  --build-arg CONDA_PRESTO_VERSION=0.7.1.dev0 \
   --tag conda-presto-server:main .
 
 docker build -f docker/Dockerfile \
   --target cli \
   --build-arg PIXI_ENV=cli \
-  --build-arg CONDA_PRESTO_VERSION=0.7.0.dev0 \
+  --build-arg CONDA_PRESTO_VERSION=0.7.1.dev0 \
   --tag conda-presto-cli:main .
 
 export CONDA_PRESTO_SERVER_IMAGE=conda-presto-server:main
 export CONDA_PRESTO_CLI_IMAGE=conda-presto-cli:main
-```
-````
-
-````{tab-item} 0.7.0 release
-After 0.7.0 is published, select its immutable server and CLI tags:
-
-```bash
-export CONDA_PRESTO_SERVER_IMAGE=ghcr.io/jezdez/conda-presto:0.7.0
-export CONDA_PRESTO_CLI_IMAGE=ghcr.io/jezdez/conda-presto:0.7.0-cli
 ```
 ````
 
@@ -49,6 +54,8 @@ Start the server on the loopback interface:
 docker run --detach \
   --name conda-presto \
   --publish 127.0.0.1:8000:8000 \
+  --cap-drop ALL \
+  --security-opt no-new-privileges \
   "$CONDA_PRESTO_SERVER_IMAGE"
 ```
 
@@ -56,6 +63,8 @@ docker run --detach \
 The explicit `127.0.0.1` binding keeps the published port local to the Docker
 host. Do not replace it with an all-interface binding unless the deployment has
 an appropriate network and authentication boundary.
+The image already runs as UID 10001. Dropping capabilities and setting
+`no-new-privileges` also constrains inherited container privileges.
 :::
 
 The image has a built-in health check. Wait for it before sending solves:
@@ -81,6 +90,8 @@ The `cli` image passes its arguments to `conda presto`:
 
 ```bash
 docker run --rm \
+  --cap-drop ALL \
+  --security-opt no-new-privileges \
   "$CONDA_PRESTO_CLI_IMAGE" \
   --channel conda-forge \
   --platform linux-64 \
@@ -93,6 +104,8 @@ Mount the current directory before referring to a host file:
 
 ```bash
 docker run --rm \
+  --cap-drop ALL \
+  --security-opt no-new-privileges \
   --mount type=bind,source="$PWD",target=/work,readonly \
   --workdir /work \
   "$CONDA_PRESTO_CLI_IMAGE" \
@@ -113,6 +126,8 @@ Pass application settings as environment variables:
 docker run --detach \
   --name conda-presto \
   --publish 127.0.0.1:8000:8000 \
+  --cap-drop ALL \
+  --security-opt no-new-privileges \
   --env CONDA_PRESTO_CHANNELS=conda-forge,bioconda \
   --env CONDA_PRESTO_ALLOWED_CHANNELS=conda-forge,bioconda \
   --env CONDA_PRESTO_PLATFORMS=linux-64,osx-arm64 \
@@ -146,12 +161,17 @@ docker run --rm \
   10001:10001 /var/cache/conda-presto
 ```
 
+Apply a hard size quota to the backing volume or filesystem. The file backend
+performs best-effort expiry cleanup, but expiry does not cap aggregate disk use.
+
 Start the server with that volume:
 
 ```bash
 docker run --detach \
   --name conda-presto \
   --publish 127.0.0.1:8000:8000 \
+  --cap-drop ALL \
+  --security-opt no-new-privileges \
   --mount source=conda-presto-results,target=/var/cache/conda-presto \
   --env CONDA_PRESTO_RESULT_CACHE_BACKEND=file \
   --env CONDA_PRESTO_RESULT_CACHE_DIR=/var/cache/conda-presto/results \

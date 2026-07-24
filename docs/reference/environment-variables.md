@@ -20,11 +20,13 @@ conda process instead.
 | `CONDA_PRESTO_OSX_VERSION` | `11.0` | Direct macOS solves | Injected virtual `__osx` version. |
 | `CONDA_PRESTO_WIN_VERSION` | `0` | Direct Windows solves | Injected virtual `__win` version. |
 
-Direct CLI and public HTTP solves apply these target-model overrides for every
-Linux, macOS, or Windows target, including the host's native subdir. They do
-not reuse host-detected virtual packages. The internal Presto solver does not
-use these four defaults. It serializes and restores the calling conda process's
-effective virtual package records, including overrides such as CUDA. Those
+Direct CLI and public HTTP solves apply these target-model overrides for each
+requested Linux, macOS, or Windows target, including the host's native subdir.
+The resulting effective records can also include other virtual-package plugin
+detections or overrides, such as CUDA or architecture records. The public
+result-cache identity captures those effective records per requested platform.
+The internal Presto solver does not use these four defaults. It serializes and
+restores the calling conda process's effective virtual-package records. Those
 records also participate in private solver cache identity.
 
 ## HTTP server settings
@@ -32,16 +34,18 @@ records also participate in private solver cache identity.
 | Variable | Default | Purpose |
 |---|---|---|
 | `CONDA_PRESTO_PLATFORMS` | `linux-64,osx-arm64,osx-64` | Platforms whose configured channels are warmed before readiness. This is not the default platform list for a request. |
-| `CONDA_PRESTO_ALLOWED_CHANNELS` | value of `CONDA_PRESTO_CHANNELS` | Accepted HTTP request channels. `*` permits any channel. |
+| `CONDA_PRESTO_ALLOWED_CHANNELS` | value of `CONDA_PRESTO_CHANNELS` | Accepted HTTP request channels after exact resolved-URL comparison. `*` permits HTTP and HTTPS channels but not local file URLs. |
 | `CONDA_PRESTO_CONCURRENCY` | `4` | Maximum simultaneous foreground solve requests. Docker and the broker provider set `1`. |
 | `CONDA_PRESTO_MAX_BODY_BYTES` | `1048576` | Maximum HTTP request body. Excess returns HTTP 413. |
 | `CONDA_PRESTO_MAX_SPECS` | `200` | Maximum specs in one request. |
 | `CONDA_PRESTO_MAX_CHANNELS` | `8` | Maximum channels in one request. |
 | `CONDA_PRESTO_MAX_PLATFORMS` | `8` | Maximum platforms in one request. |
+| `CONDA_PRESTO_MAX_SOLVER_CHANNELS` | `128` | Maximum channels in the private broker solver protocol. |
+| `CONDA_PRESTO_MAX_SOLVER_STATE_ITEMS` | `10000` | Maximum combined items across requested additions, removals, installed records, history, pins, virtual packages, aggressive updates, and always-update entries in the private broker solver protocol. |
 | `CONDA_PRESTO_MAX_REPAIR_SUGGESTIONS` | `5` | Server ceiling for returned repair suggestions. |
 | `CONDA_PRESTO_MAX_REPAIR_ATTEMPTS` | `20` | Server ceiling for evaluated repair candidates. |
 | `CONDA_PRESTO_MAX_REPAIR_TIME_BUDGET_MS` | `5000` | Server ceiling for repair wall time in milliseconds. |
-| `CONDA_PRESTO_SOLVE_TIMEOUT_S` | `60` | HTTP solve timeout. Also sets the internal solver client and scheduled refresh ceiling where lower than their fixed limits. |
+| `CONDA_PRESTO_SOLVE_TIMEOUT_S` | `60` | Solver deadline used by HTTP requests, the internal solver client, and scheduled refresh where lower than fixed limits. Non-abandoned cache-state inspection can extend observed request duration. |
 | `CONDA_PRESTO_PARSE_TIMEOUT_S` | `10` | HTTP file-parse timeout. |
 | `CONDA_PRESTO_HOST` | `127.0.0.1` | Default for the `--host` server flag. The Docker command fixes `0.0.0.0`, and the broker provider fixes `127.0.0.1`. |
 | `CONDA_PRESTO_PORT` | `8000` | Default for the `--port` server flag. The broker assigns it. The Docker health check remains fixed to port 8000. |

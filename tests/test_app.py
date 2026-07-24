@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import tempfile
 import threading
 import time
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from types import SimpleNamespace
 
 import anyio
@@ -12,14 +14,15 @@ import pytest
 import yaml
 from conda.exceptions import PackagesNotFoundError
 from conda.models.environment import Environment
-from conda.plugins.types import EnvironmentFormat
 from httpx import ASGITransport, AsyncClient
 from litestar import Litestar
 from litestar.openapi import OpenAPIConfig
+from litestar.openapi.plugins import JsonRenderPlugin
 from litestar.stores.memory import MemoryStore
 
 import conda_presto.app as app_module
 import conda_presto.cache as cache_module
+import conda_presto.inputs as inputs_module
 from conda_presto.app import (
     build_cors_config,
     diff_post,
@@ -75,6 +78,7 @@ def test_app():
             title="conda-presto",
             version="test",
             path="/",
+            render_plugins=[JsonRenderPlugin()],
         ),
         request_max_body_size=1_024 * 1_024,
     )
@@ -91,8 +95,46 @@ async def client(test_app):
 
 
 @pytest.fixture()
+def package_url_probe():
+    requests = []
+    payload = b"not a conda package"
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            requests.append((self.command, self.path))
+            self.send_response(200)
+            self.send_header("Content-Length", str(len(payload)))
+            self.end_headers()
+            self.wfile.write(payload)
+
+        def do_HEAD(self):
+            requests.append((self.command, self.path))
+            self.send_response(200)
+            self.send_header("Content-Length", str(len(payload)))
+            self.end_headers()
+
+        def log_message(self, _format, *_args):
+            pass
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    server_thread = threading.Thread(target=server.serve_forever, daemon=True)
+    server_thread.start()
+    package_url = (
+        f"http://127.0.0.1:{server.server_address[1]}"
+        "/conda-forge/linux-64/probe-1.0-h123_0.conda"
+    )
+    try:
+        yield package_url, requests
+    finally:
+        server.shutdown()
+        server.server_close()
+        server_thread.join()
+
+
+@pytest.fixture()
 def enabled_solver_endpoint(monkeypatch):
     monkeypatch.setenv("CONDA_BROKER_SERVICE_NAME", PrestoSolverClient.service_name)
+    monkeypatch.setenv("CONDA_PRESTO_URL", "http://test")
 
 
 @pytest.fixture()
@@ -224,6 +266,187 @@ async def test_solver_v1_rejects_unknown_request_fields(
 
 @pytest.mark.anyio
 @pytest.mark.parametrize(
+    "headers",
+    [
+        pytest.param(
+            {"content-type": "application/json", "origin": "https://evil.example"},
+            id="browser-origin",
+        ),
+        pytest.param(
+            {"content-type": "application/json", "host": "other.example"},
+            id="wrong-host",
+        ),
+        pytest.param({}, id="missing-content-type"),
+        pytest.param({"content-type": "text/plain"}, id="text"),
+        pytest.param(
+            {"content-type": "application/x-www-form-urlencoded"},
+            id="form",
+        ),
+    ],
+)
+async def test_solver_v1_rejects_untrusted_transport_before_parsing(
+    client,
+    enabled_solver_endpoint,
+    headers,
+):
+    response = await client.post("/solver/v1", content=b"{", headers=headers)
+
+    assert response.status_code == 404
+
+
+@pytest.mark.anyio
+async def test_solver_v1_accepts_json_content_type_parameters(
+    client,
+    enabled_solver_endpoint,
+):
+    response = await client.post(
+        "/solver/v1",
+        content=b"{",
+        headers={"content-type": "application/json; charset=utf-8"},
+    )
+
+    assert response.status_code == 400
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("field", "values", "limit_name"),
+    [
+        pytest.param(
+            "channels",
+            [{}, {}],
+            "MAX_SOLVER_CHANNELS",
+            id="channels",
+        ),
+        pytest.param(
+            "subdirs",
+            ["linux-64", "linux-64"],
+            "MAX_PLATFORMS",
+            id="subdirs",
+        ),
+        pytest.param(
+            "specs_to_add",
+            ["a", "b"],
+            "MAX_SOLVER_STATE_ITEMS",
+            id="add-specs",
+        ),
+        pytest.param(
+            "specs_to_remove",
+            ["a", "b"],
+            "MAX_SOLVER_STATE_ITEMS",
+            id="remove-specs",
+        ),
+        pytest.param(
+            "history",
+            ["a", "b"],
+            "MAX_SOLVER_STATE_ITEMS",
+            id="history",
+        ),
+        pytest.param(
+            "pinned",
+            ["a", "b"],
+            "MAX_SOLVER_STATE_ITEMS",
+            id="pinned",
+        ),
+        pytest.param(
+            "aggressive_updates",
+            ["a", "b"],
+            "MAX_SOLVER_STATE_ITEMS",
+            id="aggressive-updates",
+        ),
+        pytest.param(
+            "always_update",
+            ["a", "b"],
+            "MAX_SOLVER_STATE_ITEMS",
+            id="always-update",
+        ),
+        pytest.param(
+            "installed",
+            [{}, {}],
+            "MAX_SOLVER_STATE_ITEMS",
+            id="installed",
+        ),
+        pytest.param(
+            "virtual",
+            [{}, {}],
+            "MAX_SOLVER_STATE_ITEMS",
+            id="virtual",
+        ),
+    ],
+)
+async def test_solver_v1_bounds_every_request_array(
+    client,
+    test_app,
+    monkeypatch,
+    presto_solver_request,
+    enabled_solver_endpoint,
+    field,
+    values,
+    limit_name,
+):
+    monkeypatch.setattr(app_module, limit_name, 1)
+    test_app.state.solve_worker = SimpleNamespace(
+        solve_final_state=lambda *_: pytest.fail("oversized request reached solver")
+    )
+    body = msgspec.to_builtins(presto_solver_request)
+    body[field] = values
+
+    response = await client.post("/solver/v1", json=body)
+
+    assert response.status_code == 400
+
+
+@pytest.mark.anyio
+async def test_solver_v1_bounds_combined_state_entries(
+    client,
+    test_app,
+    monkeypatch,
+    presto_solver_request,
+    enabled_solver_endpoint,
+):
+    monkeypatch.setattr(app_module, "MAX_SOLVER_STATE_ITEMS", 1)
+    test_app.state.solve_worker = SimpleNamespace(
+        solve_final_state=lambda *_: pytest.fail("oversized request reached solver")
+    )
+    body = msgspec.to_builtins(presto_solver_request)
+    body["specs_to_remove"] = ["bzip2"]
+
+    response = await client.post("/solver/v1", json=body)
+
+    assert response.status_code == 400
+
+
+@pytest.mark.anyio
+async def test_solver_v1_does_not_apply_public_spec_cap_to_installed_state(
+    client,
+    test_app,
+    monkeypatch,
+    presto_solver_request,
+    enabled_solver_endpoint,
+):
+    monkeypatch.setattr(app_module, "MAX_SPECS", 1)
+    test_app.state.solve_worker = SimpleNamespace()
+    test_app.state.solver_limiter = app_module.ForegroundCapacity(
+        anyio.CapacityLimiter(1)
+    )
+
+    async def cached_result(_service, _request):
+        return SimpleNamespace(
+            result=PrestoSolveResponse(records=[], neutered=[]),
+            should_record_for_warming=False,
+        )
+
+    monkeypatch.setattr(cache_module.SolverResultService, "probe", cached_result)
+    body = msgspec.to_builtins(presto_solver_request)
+    body["installed"] = [{} for _ in range(2)]
+
+    response = await client.post("/solver/v1", json=body)
+
+    assert response.status_code == 200
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
     ("candidate_size", "expected_recorded"),
     [
         pytest.param(32, 2, id="recorded"),
@@ -280,6 +503,7 @@ async def test_solver_v1_caches_successful_final_state(
     assert first.status_code == second.status_code == 200
     assert first.content == second.content
     assert first.json() == {"records": [], "neutered": []}
+    assert second.headers["cache-control"] == "no-store"
     assert "location" not in second.headers
     assert [data for data, _ in calls] == [presto_solver_request]
     assert calls[0][1] > time.monotonic()
@@ -340,7 +564,7 @@ async def test_solver_v1_cache_hit_bypasses_solver_capacity(
 
 
 @pytest.mark.anyio
-async def test_solver_v1_timeout_does_not_wait_for_cache_hit_snapshot(
+async def test_solver_v1_cache_hit_times_out_after_snapshot_cleanup(
     client,
     test_app,
     monkeypatch,
@@ -361,29 +585,29 @@ async def test_solver_v1_timeout_does_not_wait_for_cache_hit_snapshot(
 
     def snapshot(_):
         started.set()
-        release.wait(1)
+        release.wait()
         return fresh_repodata_snapshot
 
-    monkeypatch.setattr(app_module, "SOLVE_TIMEOUT_S", 0.02)
+    monkeypatch.setattr(app_module, "SOLVE_TIMEOUT_S", 0.01)
     monkeypatch.setattr(PrestoSolveRequest, "repodata_snapshot", snapshot)
     test_app.state.solve_worker = SimpleNamespace(
         solve_final_state=lambda *_: pytest.fail("cache hit must not solve")
     )
 
+    timer = threading.Timer(0.05, release.set)
+    timer.start()
     before = time.monotonic()
-    try:
-        response = await client.post(
-            "/solver/v1",
-            content=msgspec.json.encode(presto_solver_request),
-            headers={"content-type": "application/json"},
-        )
-        elapsed = time.monotonic() - before
-    finally:
-        release.set()
+    response = await client.post(
+        "/solver/v1",
+        content=msgspec.json.encode(presto_solver_request),
+        headers={"content-type": "application/json"},
+    )
+    elapsed = time.monotonic() - before
+    timer.join()
 
     assert started.is_set()
     assert response.status_code == 504
-    assert elapsed < 0.5
+    assert elapsed >= 0.04
 
 
 @pytest.mark.anyio
@@ -475,7 +699,7 @@ async def test_solver_v1_timeout_does_not_wait_for_worker_cleanup(
 
 
 @pytest.mark.anyio
-async def test_solver_v1_timeout_does_not_wait_for_publication_snapshot(
+async def test_solver_v1_publication_times_out_after_snapshot_cleanup(
     client,
     test_app,
     monkeypatch,
@@ -489,10 +713,10 @@ async def test_solver_v1_timeout_does_not_wait_for_publication_snapshot(
 
     def snapshot(_):
         started.set()
-        release.wait(1)
+        release.wait()
         return fresh_repodata_snapshot
 
-    monkeypatch.setattr(app_module, "SOLVE_TIMEOUT_S", 0.02)
+    monkeypatch.setattr(app_module, "SOLVE_TIMEOUT_S", 0.01)
     monkeypatch.setattr(PrestoSolveRequest, "repodata_snapshot", snapshot)
     test_app.state.solve_worker = SimpleNamespace(
         solve_final_state=lambda *_: presto_solver_outcome(
@@ -504,20 +728,20 @@ async def test_solver_v1_timeout_does_not_wait_for_publication_snapshot(
         anyio.CapacityLimiter(1)
     )
 
+    timer = threading.Timer(0.05, release.set)
+    timer.start()
     before = time.monotonic()
-    try:
-        response = await client.post(
-            "/solver/v1",
-            content=msgspec.json.encode(presto_solver_request),
-            headers={"content-type": "application/json"},
-        )
-        elapsed = time.monotonic() - before
-    finally:
-        release.set()
+    response = await client.post(
+        "/solver/v1",
+        content=msgspec.json.encode(presto_solver_request),
+        headers={"content-type": "application/json"},
+    )
+    elapsed = time.monotonic() - before
+    timer.join()
 
     assert started.is_set()
     assert response.status_code == 504
-    assert elapsed < 0.5
+    assert elapsed >= 0.04
 
 
 @pytest.mark.anyio
@@ -636,7 +860,7 @@ async def test_solver_v1_returns_structured_conda_error(
 
 
 @pytest.mark.anyio
-async def test_solver_v1_bypasses_stale_cached_state(
+async def test_solver_v1_does_not_publish_after_repodata_changes(
     client,
     test_app,
     monkeypatch,
@@ -691,7 +915,8 @@ async def test_solver_v1_bypasses_stale_cached_state(
     assert response.status_code == 200
     assert response.json()["records"] == [{"name": "zlib"}]
     assert [data for data, _ in calls] == [presto_solver_request]
-    assert refreshed_key in test_app.state.result_cache.entries
+    stored = test_app.state.result_cache.entries[refreshed_key]
+    assert stored.response.records == []
 
 
 @pytest.mark.anyio
@@ -836,27 +1061,14 @@ def test_http_logging_excludes_sensitive_request_data():
     assert logging_config.response_log_fields == ("status_code",)
 
 
+def test_http_logging_disables_client_error_stack_traces():
+    assert app_module.app.logging_config.disable_stack_trace == set(range(400, 500))
+
+
 def test_build_cors_config_enabled_for_explicit_origins():
     cors = build_cors_config(["https://app.example.com"])
     assert cors is not None
     assert cors.allow_origins == ["https://app.example.com"]
-
-
-def test_resolve_input_retains_conda_lock_main_category():
-    source = app_module.ResolveInput(
-        specs=[],
-        channels=[],
-        platforms=["linux-64"],
-        parsed_file=ParsedInputFile(
-            specs=[],
-            channels=[],
-            environment_format=EnvironmentFormat.lockfile,
-            source_format="conda-lock-v1",
-        ),
-        direct_lockfile=True,
-    )
-
-    assert source.lockfile_category == "main"
 
 
 @pytest.mark.anyio
@@ -957,7 +1169,7 @@ async def test_resolve_post_returns_content_addressed_location(client, monkeypat
     assert calls == 1
     assert first.headers["location"].startswith("/r/")
     assert second.headers["location"] == first.headers["location"]
-    assert first.headers["cache-control"] == cache_module.RESULT_CACHE_CONTROL
+    assert first.headers["cache-control"] == cache_module.RESULT_RESPONSE_CACHE_CONTROL
     assert second.json() == [{"platform": "linux-64", "packages": [], "error": None}]
 
 
@@ -984,7 +1196,144 @@ async def test_result_permalink_returns_stored_body_and_media_type(client, monke
     assert cached.status_code == 200
     assert cached.content == resolved.content
     assert cached.headers["content-type"].startswith("application/json")
-    assert cached.headers["cache-control"] == cache_module.RESULT_CACHE_CONTROL
+    assert cached.headers["cache-control"] == cache_module.PERMALINK_CACHE_CONTROL
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("channel", "spec"),
+    [
+        pytest.param(
+            "https://user:password@example.test/channel",
+            "zlib",
+            id="channel-userinfo",
+        ),
+        pytest.param(
+            "https://example.test/t/token/channel",
+            "zlib",
+            id="channel-token",
+        ),
+        pytest.param(
+            "https://example.test/%74/encoded/channel",
+            "zlib",
+            id="channel-encoded-token-segment",
+        ),
+        pytest.param(
+            "https://example.test/t%2Fencoded/channel",
+            "zlib",
+            id="channel-encoded-token-path",
+        ),
+        pytest.param(
+            "https://example.test/channel?signature=secret",
+            "zlib",
+            id="channel-query",
+        ),
+        pytest.param(
+            "https://example.test/channel#secret",
+            "zlib",
+            id="channel-fragment",
+        ),
+        pytest.param(
+            "conda-forge",
+            "https://user:password@example.test/channel::zlib",
+            id="spec-channel-url",
+        ),
+        pytest.param(
+            "conda-forge",
+            "zlib[url=https://user:password@example.test/pkg.conda]",
+            id="spec-url-field",
+        ),
+    ],
+)
+async def test_resolve_does_not_retain_credentialed_request_values(
+    client,
+    test_app,
+    monkeypatch,
+    fresh_repodata_snapshot,
+    channel,
+    spec,
+):
+    calls = []
+    monkeypatch.setattr(app_module, "CHANNEL_ALLOWLIST", ["*"])
+    monkeypatch.setattr(
+        app_module.RepodataSnapshot,
+        "capture",
+        staticmethod(lambda *_args, **_kwargs: fresh_repodata_snapshot),
+    )
+    monkeypatch.setattr(
+        app_module,
+        "solve",
+        lambda *_args, **_kwargs: (
+            calls.append("solve") or [SolveResult(platform="linux-64", packages=[])]
+        ),
+    )
+    body = {
+        "channels": [channel],
+        "specs": [spec],
+        "platforms": ["linux-64"],
+    }
+
+    first = await client.post("/resolve", json=body)
+    second = await client.post("/resolve", json=body)
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert calls == ["solve", "solve"]
+    assert first.headers["cache-control"] == cache_module.RESULT_RESPONSE_CACHE_CONTROL
+    assert "location" not in first.headers
+    assert test_app.state.result_cache.entries == {}
+
+
+@pytest.mark.anyio
+async def test_resolve_validates_exporter_before_cache_lookup(
+    client,
+    test_app,
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        test_app.state.result_cache,
+        "capture_state",
+        lambda *_: pytest.fail("unknown exporter reached cache lookup"),
+    )
+
+    response = await client.get("/resolve?spec=zlib&format=not-installed")
+
+    assert response.status_code == 400
+    assert response.headers["cache-control"] == "no-store"
+
+
+@pytest.mark.anyio
+async def test_resolve_does_not_retain_unversioned_exporter_results(
+    client,
+    test_app,
+    monkeypatch,
+    fresh_repodata_snapshot,
+):
+    calls = []
+    monkeypatch.setattr(
+        app_module.OutputFormat,
+        "cache_identity",
+        lambda _self: None,
+    )
+    monkeypatch.setattr(
+        app_module.RepodataSnapshot,
+        "capture",
+        staticmethod(lambda *_args, **_kwargs: fresh_repodata_snapshot),
+    )
+
+    async def run(*_args, **_kwargs):
+        calls.append("solve")
+        return b"result", "text/plain"
+
+    monkeypatch.setattr(app_module, "run_solve", run)
+
+    first = await client.get("/resolve?spec=zlib&format=explicit")
+    second = await client.get("/resolve?spec=zlib&format=explicit")
+
+    assert first.status_code == second.status_code == 200
+    assert calls == ["solve", "solve"]
+    assert "location" not in first.headers
+    assert test_app.state.result_cache.entries == {}
 
 
 @pytest.mark.anyio
@@ -1234,6 +1583,42 @@ async def test_stale_repodata_bypasses_cached_result(
     assert response.json() == [{"platform": "linux-64", "packages": [], "error": None}]
     assert calls == ["solve"]
     assert ("location" in response.headers) is expected_location
+
+
+@pytest.mark.anyio
+async def test_resolve_does_not_publish_across_repodata_marker_change(
+    client,
+    test_app,
+    monkeypatch,
+):
+    before = RepodataSnapshot(
+        (("https://conda.example/linux-64", "repodata.json", 10, 1),),
+        False,
+    )
+    after = RepodataSnapshot(
+        (("https://conda.example/linux-64", "repodata.json", 20, 2),),
+        False,
+    )
+    snapshots = iter([before, after])
+    monkeypatch.setattr(
+        app_module.RepodataSnapshot,
+        "capture",
+        lambda *_args, **_kwargs: next(snapshots),
+    )
+    monkeypatch.setattr(
+        app_module,
+        "solve",
+        lambda *_args, **_kwargs: [SolveResult(platform="linux-64", packages=[])],
+    )
+
+    response = await client.post(
+        "/resolve",
+        json={"specs": ["zlib"], "platforms": ["linux-64"]},
+    )
+
+    assert response.status_code == 200
+    assert "location" not in response.headers
+    assert test_app.state.result_cache.entries == {}
 
 
 @pytest.mark.anyio
@@ -1724,7 +2109,7 @@ def test_run_solve_in_process_returns_worker_result(fake_solve_process):
     )
 
     assert result == []
-    assert calls == ["start", "sender.close", "receiver.close", "join:None"]
+    assert calls == ["start", "sender.close", "receiver.close", "join:5"]
 
 
 def test_run_solve_in_process_executes_worker():
@@ -1759,7 +2144,7 @@ def test_run_solve_in_process_kills_timed_out_worker(fake_solve_process):
         "terminate",
         "join:5.0",
         "kill",
-        "join:None",
+        "join:5",
     ]
 
 
@@ -1772,6 +2157,7 @@ def test_run_solve_in_process_kills_timed_out_worker(fake_solve_process):
             id="unknown-format",
         ),
         pytest.param(("error", None), RuntimeError, id="worker-error"),
+        pytest.param(EOFError(), RuntimeError, id="worker-exit"),
     ],
 )
 def test_run_solve_in_process_raises_worker_error(
@@ -1786,6 +2172,17 @@ def test_run_solve_in_process_raises_worker_error(
             ["linux-64"],
             None,
             time.monotonic() + 60,
+        )
+
+
+def test_run_solve_in_process_rejects_expired_deadline():
+    with pytest.raises(TimeoutError):
+        app_module.run_solve_in_process(
+            ["conda-forge"],
+            ["zlib"],
+            ["linux-64"],
+            None,
+            0,
         )
 
 
@@ -1831,6 +2228,17 @@ async def test_resolve_rejects_too_many_platforms(client, monkeypatch):
     )
     assert resp.status_code == 400
     assert "Too many platforms" in resp.json()["error"]
+
+
+@pytest.mark.anyio
+async def test_resolve_rejects_unsupported_platform(client):
+    response = await client.post(
+        "/resolve",
+        json={"specs": ["zlib"], "platforms": ["not-a-platform"]},
+    )
+
+    assert response.status_code == 400
+    assert response.json()["error"] == "Unsupported platform(s): not-a-platform"
 
 
 @pytest.mark.anyio
@@ -1885,6 +2293,30 @@ async def test_resolve_rejects_unlisted_channel(client, monkeypatch):
 
 
 @pytest.mark.anyio
+async def test_resolve_rejects_invalid_channel_allowlist(client, monkeypatch):
+    monkeypatch.setattr(app_module, "CHANNEL_ALLOWLIST", ["https://["])
+
+    response = await client.post(
+        "/resolve",
+        json={"specs": ["zlib"], "channels": ["conda-forge"]},
+    )
+
+    assert response.status_code == 500
+    assert response.json() == {"error": "Invalid server channel configuration"}
+
+
+@pytest.mark.anyio
+async def test_resolve_rejects_malformed_channel(client):
+    response = await client.post(
+        "/resolve",
+        json={"specs": ["zlib"], "channels": ["https://["]},
+    )
+
+    assert response.status_code == 400
+    assert response.json() == {"error": "Unsupported channel(s)"}
+
+
+@pytest.mark.anyio
 async def test_resolve_accepts_allowed_channel_url(client, monkeypatch):
     monkeypatch.setattr("conda_presto.app.CHANNEL_ALLOWLIST", ["conda-forge"])
     monkeypatch.setattr(
@@ -1902,6 +2334,91 @@ async def test_resolve_accepts_allowed_channel_url(client, monkeypatch):
     )
 
     assert resp.status_code == 200
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("allowlist", "channel"),
+    [
+        pytest.param(
+            ["defaults"],
+            "http://169.254.169.254/pkgs/main",
+            id="defaults-spoof",
+        ),
+        pytest.param(
+            ["conda-forge"],
+            "http://conda.anaconda.org/conda-forge",
+            id="scheme-downgrade",
+        ),
+        pytest.param(["*"], "file:///tmp/channel", id="wildcard-local-file"),
+    ],
+)
+async def test_resolve_rejects_channel_allowlist_bypasses(
+    client,
+    monkeypatch,
+    allowlist,
+    channel,
+):
+    monkeypatch.setattr(app_module, "CHANNEL_ALLOWLIST", allowlist)
+
+    response = await client.post(
+        "/resolve",
+        json={
+            "specs": ["zlib"],
+            "channels": [channel],
+            "platforms": ["linux-64"],
+        },
+    )
+
+    assert response.status_code == 400
+    assert response.json() == {"error": "Unsupported channel(s)"}
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("allowlist", "channel"),
+    [
+        pytest.param(["defaults"], "defaults", id="defaults-name"),
+        pytest.param(
+            ["defaults"],
+            "https://repo.anaconda.com/pkgs/main",
+            id="defaults-url",
+        ),
+        pytest.param(["conda-forge"], "conda-forge", id="named-channel"),
+        pytest.param(
+            ["*"],
+            "https://packages.example.test/team",
+            id="wildcard-https",
+        ),
+        pytest.param(
+            ["*", "file:///tmp/channel"],
+            "file:///tmp/channel",
+            id="explicit-local-file",
+        ),
+    ],
+)
+async def test_resolve_accepts_resolved_channel_identities(
+    client,
+    monkeypatch,
+    allowlist,
+    channel,
+):
+    async def accepted(*_args, **_kwargs):
+        return app_module.Response([])
+
+    monkeypatch.setattr(app_module, "CHANNEL_ALLOWLIST", allowlist)
+    monkeypatch.setattr(app_module, "run_cached_solve", accepted)
+
+    response = await client.post(
+        "/resolve",
+        json={
+            "specs": ["zlib"],
+            "channels": [channel],
+            "platforms": ["linux-64"],
+        },
+    )
+
+    assert response.status_code == 200
 
 
 @pytest.mark.anyio
@@ -2531,7 +3048,7 @@ async def test_diff_post_compares_two_solve_results(client, monkeypatch):
 
 
 @pytest.mark.anyio
-async def test_diff_post_reads_lockfiles_without_solving(
+async def test_diff_post_rejects_lockfile_materialization_without_solving(
     client, monkeypatch, pixi_lock_v6_text
 ):
     async def fail_run_solve(*args, **kwargs):
@@ -2544,8 +3061,8 @@ async def test_diff_post_reads_lockfiles_without_solving(
     }
     resp = await client.post("/diff", json={"from": request, "to": request})
 
-    assert resp.status_code == 200
-    assert resp.json()["diff"]["linux-64"]["unchanged_count"] == 2
+    assert resp.status_code == 400
+    assert "cannot be loaded from HTTP input" in resp.json()["error"]
 
 
 @pytest.mark.anyio
@@ -2771,69 +3288,205 @@ async def test_explain_post_returns_solver_failure_as_unprocessable(
 
 @pytest.mark.anyio
 @pytest.mark.parametrize(
-    "url, request_kind, expected_version, content_type",
+    ("source_format", "target_format", "request_kind", "expected_version"),
     [
         pytest.param(
-            "/transcode?format=conda-lock-v1",
+            "pixi",
+            "conda-lock-v1",
             "json",
             1,
-            None,
-            id="json-to-conda-lock",
+            id="pixi-to-conda-lock",
         ),
         pytest.param(
-            "/transcode?format=pixi-lock-v6&filename=pixi.lock&platform=linux-64",
+            "conda-lock",
+            "pixi-lock-v6",
             "raw",
             6,
-            "application/yaml",
-            id="raw-to-pixi-lock",
-        ),
-        pytest.param(
-            "/transcode?format=pixi-lock-v6&filename=pixi.lock&platform=linux-64",
-            "raw",
-            6,
-            "application/yaml; charset=utf-8",
-            id="raw-with-content-type-parameters",
+            id="conda-lock-to-pixi",
         ),
     ],
 )
-async def test_transcode_post_lockfile_to_lockfile_without_solver(
+async def test_transcode_post_lockfile_to_lockfile_without_fetching_or_solving(
     client,
     monkeypatch,
-    pixi_lock_v6_text,
-    url,
+    package_url_probe,
+    source_format,
+    target_format,
     request_kind,
     expected_version,
-    content_type,
 ):
     def fail_solve(*args, **kwargs):
         raise AssertionError("solver should not run")
 
+    def fail_parent_export(*args, **kwargs):
+        raise AssertionError("lockfile export should run in the parser process")
+
+    parsed_results = []
+    parse_input = app_module.parse_input_for_request
+
+    async def record_parse_result(*args, **kwargs):
+        parsed = await parse_input(*args, **kwargs)
+        parsed_results.append(parsed)
+        return parsed
+
+    package_url, requests = package_url_probe
     monkeypatch.setattr(app_module, "solve_environments", fail_solve)
+    monkeypatch.setattr(app_module.OutputFormat, "render", fail_parent_export)
+    monkeypatch.setattr(app_module, "parse_input_for_request", record_parse_result)
+    if source_format == "pixi":
+        filename = "pixi.lock"
+        lockfile = f"""\
+version: 6
+environments:
+  default:
+    channels: []
+    packages:
+      linux-64:
+        - conda: {package_url}
+packages:
+  - conda: {package_url}
+    sha256: {"a" * 64}
+    md5: {"b" * 32}
+    depends:
+      - python >=3.13
+"""
+    else:
+        filename = "conda-lock.yml"
+        lockfile = f"""\
+version: 1
+metadata:
+  channels: []
+  platforms:
+    - linux-64
+package:
+  - name: probe
+    version: '1.0'
+    manager: conda
+    platform: linux-64
+    dependencies:
+      python: '>=3.13'
+    url: {package_url}
+    hash:
+      sha256: {"a" * 64}
+      md5: {"b" * 32}
+"""
+
+    url = f"/transcode?format={target_format}&platform=linux-64"
     if request_kind == "json":
-        resp = await client.post(
+        response = await client.post(
             url,
             json={
-                "file": pixi_lock_v6_text,
-                "filename": "pixi.lock",
+                "file": lockfile,
+                "filename": filename,
                 "platforms": ["linux-64"],
             },
         )
     else:
-        resp = await client.post(
-            url,
-            content=pixi_lock_v6_text,
-            headers={"content-type": content_type},
+        response = await client.post(
+            f"{url}&filename={filename}",
+            content=lockfile,
+            headers={"content-type": "application/yaml; charset=utf-8"},
         )
 
-    assert resp.status_code == 200
-    assert resp.headers["content-type"].startswith("application/yaml")
-    data = yaml.safe_load(resp.text)
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("application/yaml")
+    assert response.headers["cache-control"] == "no-store"
+    assert len(parsed_results) == 1
+    assert parsed_results[0].environments == ()
+    assert parsed_results[0].transcoded_content == response.text
+    data = yaml.safe_load(response.text)
     assert data["version"] == expected_version
     if expected_version == 1:
         assert data["metadata"]["platforms"] == ["linux-64"]
-        assert {pkg["name"] for pkg in data["package"]} == {"libzlib", "zlib"}
+        assert [package["name"] for package in data["package"]] == ["probe"]
+        package = data["package"][0]
+        assert package["url"] == package_url
+        assert package["dependencies"] == {"python": ">=3.13"}
+        assert package["hash"] == {"md5": "b" * 32, "sha256": "a" * 64}
     else:
         assert "linux-64" in data["environments"]["default"]["packages"]
+        package = data["packages"][0]
+        assert package["conda"] == package_url
+        assert package["depends"] == ["python >=3.13"]
+        assert package["md5"] == "b" * 32
+        assert package["sha256"] == "a" * 64
+    assert requests == []
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("package_entries", "expected_error"),
+    [
+        pytest.param(
+            "  - conda: {package_url}\n    depends:\n      - '!!!'",
+            "Invalid spec '!!!'",
+            id="invalid-dependency",
+        ),
+        pytest.param(
+            None,
+            "missing from the packages list",
+            id="dangling-reference",
+        ),
+    ],
+)
+async def test_transcode_post_rejects_invalid_lockfile_packages(
+    client,
+    package_url_probe,
+    package_entries,
+    expected_error,
+):
+    package_url, requests = package_url_probe
+    packages = (
+        "packages: []"
+        if package_entries is None
+        else "packages:\n" + package_entries.format(package_url=package_url)
+    )
+    lockfile = f"""\
+version: 6
+environments:
+  default:
+    channels: []
+    packages:
+      linux-64:
+        - conda: {package_url}
+{packages}
+"""
+
+    response = await client.post(
+        "/transcode?format=conda-lock-v1&platform=linux-64",
+        json={"file": lockfile, "filename": "pixi.lock"},
+    )
+
+    assert response.status_code == 400
+    assert expected_error in response.json()["error"]
+    assert requests == []
+
+
+@pytest.mark.anyio
+async def test_transcode_post_rejects_unrecoverable_conda_pypi_identity(client):
+    wheel_url = (
+        "https://files.pythonhosted.org/packages/ab/cd/docker-7.1.0-py3-none-any.whl"
+    )
+    lockfile = f"""\
+version: 6
+environments:
+  default:
+    channels:
+      - url: conda-pypi
+    packages:
+      linux-64:
+        - conda: {wheel_url}
+packages:
+  - conda: {wheel_url}
+"""
+
+    response = await client.post(
+        "/transcode?format=conda-lock-v1&platform=linux-64",
+        json={"file": lockfile, "filename": "pixi.lock"},
+    )
+
+    assert response.status_code == 400
+    assert "without package metadata" in response.json()["error"]
 
 
 @pytest.mark.anyio
@@ -2912,8 +3565,7 @@ async def test_transcode_post_rejections(
     assert resp.status_code == 400
     body = resp.json()
     assert body["error"] == "Request cannot be transcoded"
-    for reason in expected_reasons:
-        assert reason in body["reasons"]
+    assert body["reasons"] == expected_reasons
 
 
 @pytest.mark.anyio
@@ -3128,6 +3780,43 @@ async def test_openapi_schema(client):
         "$ref"
     ].endswith("/ParseResult")
     assert {"400", "504"} <= parse_operation["responses"].keys()
+
+
+@pytest.mark.anyio
+async def test_openapi_routes_are_json_only(client):
+    root = await client.get("/")
+
+    assert root.status_code == 200
+    assert "json" in root.headers["content-type"]
+    assert "openapi" in root.json()
+    assert (await client.get("/redoc")).status_code == 404
+    assert (await client.get("/swagger")).status_code == 404
+
+
+@pytest.mark.anyio
+async def test_solver_resources_logs_channel_counts_not_credentials(
+    monkeypatch,
+):
+    messages = []
+    secret = "https://user:password@example.test/t/private/channel"
+    monkeypatch.setattr(app_module, "DEFAULT_CHANNELS", [secret])
+    monkeypatch.setattr(app_module, "PERSISTENT_WORKER", False)
+    monkeypatch.setattr(app_module, "warmup", lambda *_: None)
+    monkeypatch.setattr(
+        app_module.log,
+        "info",
+        lambda message, *args: messages.append(message % args),
+    )
+    dummy_app = Litestar(route_handlers=[health])
+
+    async with solver_resources_lifespan(dummy_app):
+        pass
+
+    output = "\n".join(messages)
+    assert "1 channels" in output
+    assert "user" not in output
+    assert "password" not in output
+    assert "private" not in output
 
 
 @pytest.mark.anyio
@@ -3357,6 +4046,20 @@ async def test_parse_endpoint_rejects_too_many_specs(client, monkeypatch):
 
 
 @pytest.mark.anyio
+async def test_parse_endpoint_rejects_structurally_oversized_input(client):
+    response = await client.post(
+        "/parse",
+        json={
+            "file": "dependencies:\n" + "  - zlib\n" * 10_001,
+            "filename": "environment.yml",
+        },
+    )
+
+    assert response.status_code == 400
+    assert "structural complexity limit" in response.json()["error"]
+
+
+@pytest.mark.anyio
 async def test_parse_endpoint_rejects_explicit_lockfile(client):
     explicit = "@EXPLICIT\nhttps://example.invalid/linux-64/pkg-1.0-0.conda\n"
     resp = await client.post(
@@ -3368,14 +4071,238 @@ async def test_parse_endpoint_rejects_explicit_lockfile(client):
 
 
 @pytest.mark.anyio
+async def test_resolve_lockfile_does_not_fetch_package_urls(client, package_url_probe):
+    package_url, requests = package_url_probe
+    lockfile = f"""\
+version: 6
+environments:
+  default:
+    channels: []
+    packages:
+      linux-64:
+        - conda: {package_url}
+packages:
+  - conda: {package_url}
+"""
+
+    response = await client.post(
+        "/resolve",
+        json={
+            "file": lockfile,
+            "filename": "pixi.lock",
+            "platforms": ["linux-64"],
+        },
+    )
+
+    assert response.status_code == 400
+    assert "cannot be loaded from HTTP input" in response.json()["error"]
+    assert requests == []
+
+
+@pytest.mark.anyio
+async def test_parse_endpoint_does_not_expose_temporary_path(client):
+    explicit = "\ufeff@EXPLICIT\nhttps://example.invalid/linux-64/pkg-1.0-0.conda\n"
+
+    response = await client.post(
+        "/parse",
+        json={"file": explicit, "filename": "explicit.txt"},
+    )
+
+    assert response.status_code == 400
+    assert "Explicit package URL lockfiles" in response.json()["error"]
+    assert tempfile.gettempdir() not in response.text
+
+
+@pytest.mark.anyio
+async def test_parse_endpoint_does_not_expand_server_environment(client, monkeypatch):
+    monkeypatch.setenv("CONDA_PRESTO_TEST_SECRET", "super-secret-value")
+
+    response = await client.post(
+        "/parse",
+        json={
+            "file": (
+                "channels:\n"
+                "  - https://${CONDA_PRESTO_TEST_SECRET}@conda.anaconda.org/conda-forge\n"
+                "dependencies:\n"
+                "  - zlib\n"
+            ),
+            "filename": "environment.yml",
+        },
+    )
+
+    assert response.status_code == 200
+    assert "super-secret-value" not in response.text
+    assert response.json()["channels"] == [
+        "https://${CONDA_PRESTO_TEST_SECRET}@conda.anaconda.org/conda-forge"
+    ]
+
+
+@pytest.mark.anyio
+async def test_parse_endpoint_suppresses_parser_output(client, capfd):
+    marker = "workflow-command-injection-marker"
+
+    response = await client.post(
+        "/parse",
+        json={
+            "file": (f"'::warning::{marker}': value\ndependencies:\n  - zlib\n"),
+            "filename": "environment.yml",
+        },
+    )
+
+    assert response.status_code == 200
+    captured = capfd.readouterr()
+    assert marker not in captured.out
+    assert marker not in captured.err
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("filename", "error"),
+    [
+        pytest.param(f"{'a' * 10_000}.yml", "Input filename is too long", id="long"),
+        pytest.param(
+            "environment\n.yml",
+            "Input filename contains unsupported characters",
+            id="non-printable",
+        ),
+    ],
+)
+async def test_parse_endpoint_rejects_unsafe_filename_without_echoing_it(
+    client,
+    filename,
+    error,
+):
+
+    response = await client.post(
+        "/parse",
+        json={"file": "dependencies:\n  - zlib\n", "filename": filename},
+    )
+
+    assert response.status_code == 400
+    assert response.json()["error"] == error
+    assert len(response.text) < 100
+
+
+@pytest.mark.parametrize(
+    ("outcome", "status"),
+    [
+        pytest.param("parsed", "ok", id="success"),
+        pytest.param(ValueError, "invalid", id="invalid"),
+        pytest.param(RuntimeError, "error", id="internal-error"),
+    ],
+)
+def test_input_parse_process_entrypoint_sends_sanitized_result(
+    monkeypatch,
+    tmp_path,
+    outcome,
+    status,
+):
+    path = tmp_path / "environment.yml"
+    path.write_text("dependencies:\n  - zlib\n")
+    sent = []
+    sender = SimpleNamespace(send=sent.append, close=lambda: sent.append("closed"))
+
+    def parse(*_, **__):
+        if outcome is ValueError:
+            raise ValueError(f"Invalid {path} from https://user:secret@example.test")
+        if outcome is RuntimeError:
+            raise RuntimeError("internal parser failure")
+        return outcome
+
+    monkeypatch.setattr(inputs_module.os, "environ", {})
+    monkeypatch.setattr(ParsedInputFile, "from_path", parse)
+
+    ParsedInputFile._from_path_process(
+        sender,
+        path,
+        None,
+        time.monotonic() + 1,
+    )
+
+    assert sent[-1] == "closed"
+    result_status, payload = sent[0]
+    assert result_status == status
+    if status == "ok":
+        assert payload == "parsed"
+    elif status == "invalid":
+        assert str(path) not in payload
+        assert "[redacted-url]" in payload
+    else:
+        assert payload is None
+
+
+@pytest.mark.parametrize(
+    ("filename", "content", "limit", "error"),
+    [
+        pytest.param(
+            "environment.yml",
+            "dependencies: &dependencies\n  - zlib\ncopy: *dependencies\n",
+            10,
+            "YAML aliases are not accepted",
+            id="yaml-alias",
+        ),
+        pytest.param(
+            "environment.json",
+            '{"dependencies":["a","b","c"]}',
+            3,
+            "structural complexity limit",
+            id="compact-json",
+        ),
+        pytest.param(
+            "pixi.toml",
+            'dependencies = ["a", "b", "c"]\n',
+            3,
+            "structural complexity limit",
+            id="compact-toml",
+        ),
+        pytest.param(
+            "specs.txt",
+            "a\nb\nc\n",
+            2,
+            "structural complexity limit",
+            id="text-lines",
+        ),
+    ],
+)
+def test_input_parse_process_rejects_unsafe_complexity(
+    monkeypatch,
+    tmp_path,
+    filename,
+    content,
+    limit,
+    error,
+):
+    path = tmp_path / filename
+    path.write_text(content)
+    sent = []
+    sender = SimpleNamespace(send=sent.append, close=lambda: None)
+
+    monkeypatch.setattr(inputs_module.os, "environ", {})
+    monkeypatch.setattr(inputs_module, "HTTP_INPUT_MAX_NODES", limit)
+
+    ParsedInputFile._from_path_process(
+        sender,
+        path,
+        None,
+        time.monotonic() + 1,
+    )
+
+    status, payload = sent[0]
+    assert status == "invalid"
+    assert error in payload
+
+
+@pytest.mark.anyio
 async def test_parse_endpoint_timeout(client, monkeypatch):
     monkeypatch.setattr("conda_presto.app.PARSE_TIMEOUT_S", 0.1)
 
-    def slow_parse(*args, **kwargs):
-        time.sleep(2)
-        return None
+    def timed_out(*args, **kwargs):
+        raise TimeoutError
 
-    monkeypatch.setattr("conda_presto.app.ParsedInputFile.from_content", slow_parse)
+    monkeypatch.setattr(
+        "conda_presto.app.ParsedInputFile.from_content_until",
+        timed_out,
+    )
     resp = await client.post(
         "/parse",
         json={
@@ -3385,6 +4312,101 @@ async def test_parse_endpoint_timeout(client, monkeypatch):
     )
     assert resp.status_code == 504
     assert "timeout" in resp.json()["error"].lower()
+
+
+def test_parse_timeout_terminates_and_kills_the_parser_process(monkeypatch):
+    calls = []
+    parser_paths = []
+    alive = iter((True, True))
+    receiver = SimpleNamespace(
+        poll=lambda _timeout: False,
+        close=lambda: calls.append("receiver-close"),
+    )
+    sender = SimpleNamespace(close=lambda: calls.append("sender-close"))
+    process = SimpleNamespace(
+        exitcode=None,
+        start=lambda: calls.append("start"),
+        is_alive=lambda: next(alive, False),
+        terminate=lambda: calls.append("terminate"),
+        kill=lambda: calls.append("kill"),
+        join=lambda _timeout=None: calls.append("join"),
+    )
+
+    def create_process(**kwargs):
+        parser_paths.append(kwargs["args"][1])
+        assert parser_paths[0].is_file()
+        return process
+
+    process_context = SimpleNamespace(
+        Pipe=lambda **_: (receiver, sender),
+        Process=create_process,
+    )
+    monkeypatch.setattr(
+        inputs_module.multiprocessing,
+        "get_context",
+        lambda _: process_context,
+    )
+
+    with pytest.raises(TimeoutError):
+        ParsedInputFile.from_content_until(
+            "dependencies:\n  - zlib\n",
+            "environment.yml",
+            None,
+            time.monotonic() + 1,
+        )
+
+    assert calls == [
+        "start",
+        "sender-close",
+        "receiver-close",
+        "terminate",
+        "join",
+        "kill",
+        "join",
+    ]
+    assert not parser_paths[0].parent.exists()
+
+
+def test_parse_start_failure_closes_pipes_and_process(monkeypatch):
+    calls = []
+    parser_paths = []
+    receiver = SimpleNamespace(close=lambda: calls.append("receiver-close"))
+    sender = SimpleNamespace(close=lambda: calls.append("sender-close"))
+
+    def start_process():
+        raise OSError("spawn failed")
+
+    process = SimpleNamespace(
+        start=start_process,
+        is_alive=lambda: True,
+        terminate=lambda: calls.append("terminate"),
+        join=lambda timeout=None: calls.append(f"join:{timeout}"),
+    )
+
+    def create_process(**kwargs):
+        parser_paths.append(kwargs["args"][1])
+        return process
+
+    process_context = SimpleNamespace(
+        Pipe=lambda **_: (receiver, sender),
+        Process=create_process,
+    )
+    monkeypatch.setattr(
+        inputs_module.multiprocessing,
+        "get_context",
+        lambda _: process_context,
+    )
+
+    with pytest.raises(OSError, match="spawn failed"):
+        ParsedInputFile.from_content_until(
+            "dependencies:\n  - zlib\n",
+            "environment.yml",
+            None,
+            time.monotonic() + 1,
+        )
+
+    assert calls == ["receiver-close", "sender-close", "terminate", "join:5"]
+    assert not parser_paths[0].parent.exists()
 
 
 @pytest.mark.anyio

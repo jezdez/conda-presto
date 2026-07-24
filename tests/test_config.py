@@ -105,6 +105,21 @@ def test_repair_limits_must_be_positive(monkeypatch, name):
     importlib.reload(config_module)
 
 
+@pytest.mark.parametrize(
+    "name",
+    [
+        pytest.param("CONDA_PRESTO_MAX_SOLVER_CHANNELS", id="channels"),
+        pytest.param("CONDA_PRESTO_MAX_SOLVER_STATE_ITEMS", id="state-items"),
+    ],
+)
+def test_private_solver_limits_must_be_positive(monkeypatch, name):
+    monkeypatch.setenv(name, "0")
+    with pytest.raises(ValueError, match="Private solver request limits"):
+        importlib.reload(config_module)
+    monkeypatch.delenv(name)
+    importlib.reload(config_module)
+
+
 def test_solver_warm_candidate_size_must_not_be_negative(monkeypatch):
     monkeypatch.setenv("CONDA_PRESTO_SOLVER_CACHE_WARM_CANDIDATE_SIZE", "-1")
     with pytest.raises(ValueError, match="must not be negative"):

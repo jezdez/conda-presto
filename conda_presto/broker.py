@@ -4,7 +4,10 @@ from __future__ import annotations
 
 import os
 import sys
-from urllib.request import urlopen
+from contextlib import closing
+from http.client import HTTPConnection, HTTPException
+from ipaddress import ip_address
+from urllib.parse import urlsplit
 
 from conda_broker.hookspec import hookimpl
 from conda_broker.models import CondaService, EndpointSpec, HealthCheck, ProcessSpec
@@ -50,12 +53,26 @@ def conda_broker_services():
 
 def main() -> None:
     """Exit successfully only when the service health endpoint is ready."""
-    url = f"{os.environ['CONDA_PRESTO_URL'].rstrip('/')}/health"
     try:
-        with urlopen(url, timeout=2) as response:
-            if not 200 <= response.status < 400:
+        url = urlsplit(os.environ["CONDA_PRESTO_URL"])
+        hostname = url.hostname
+        if (
+            url.scheme != "http"
+            or hostname is None
+            or (hostname != "localhost" and not ip_address(hostname).is_loopback)
+            or url.username is not None
+            or url.password is not None
+            or url.path not in {"", "/"}
+            or url.query
+            or url.fragment
+        ):
+            raise ValueError("Invalid broker service URL")
+        with closing(HTTPConnection(hostname, url.port or 80, timeout=2)) as connection:
+            connection.request("GET", "/health")
+            response = connection.getresponse()
+            if not 200 <= response.status < 300:
                 raise SystemExit(1)
-    except (KeyError, OSError, ValueError):
+    except (HTTPException, KeyError, OSError, ValueError):
         raise SystemExit(1) from None
 
 

@@ -26,13 +26,22 @@ Result cache
 ## Public resolve responses
 
 A `/resolve` identity covers normalized specs, ordered channels, platforms,
-output format, configured target virtual-package defaults, dependency
-versions, and the local repodata file markers visible to the server.
+output format and exporter provider, effective conda solve settings, effective
+virtual-package records for the requested platforms, dependency versions, and
+the local repodata file markers visible to the server.
 
 Before reusing a stored result, a new GET or POST resolve request checks whether
-the relevant repodata is stale. A stale snapshot bypasses the entry. After a
-solve, conda-presto captures the markers again. If refreshed metadata changed,
-the response receives a new content address.
+the relevant repodata is stale. A stale snapshot bypasses the entry. A second
+capture must also show unchanged markers before a cache hit is returned. After
+a solve, conda-presto captures the markers again and publishes only when they
+did not change during the operation.
+
+Successful responses through the mutable cache path use
+`Cache-Control: no-store`, even when the response is retained. This keeps
+browsers and shared intermediaries from answering a new resolve request without
+the application's freshness check. This is not a guarantee about every
+validation or error response. Requests with detected credential patterns in a
+channel or package spec are returned without retention or a content address.
 
 The `/r/<hash>` resource has a different contract. It returns the stored body
 for that address without another freshness check. An older permalink therefore
@@ -67,13 +76,16 @@ for broker communication, decoding, and repodata marker checks.
 
 ## Caller virtual packages
 
-Direct CLI and public HTTP solves use conda-presto's configured target
-virtual-package defaults for every Linux, macOS, or Windows target, including
-the host's native subdir. They do not preserve host-detected virtual packages.
-The internal solver behaves differently. Its client serializes the calling
-conda process's effective virtual package records, including local overrides
-such as CUDA, and the service restores those exact records. The broker host
-does not redetect virtual packages for the request.
+Direct CLI and public HTTP solves configure conda-presto's target overrides for
+each requested Linux, macOS, or Windows platform. Conda's effective
+virtual-package records for that platform can also include other plugin
+detections or overrides, such as CUDA or architecture records. Public cache
+identity captures the resulting records for every requested platform.
+
+The internal solver's client serializes the calling conda process's effective
+virtual-package records, including local overrides, and the service restores
+those exact records. The broker host does not redetect virtual packages for the
+request.
 
 Different effective virtual packages select different solver cache entries.
 This prevents two hosts or override configurations from sharing an incompatible
@@ -95,7 +107,9 @@ change foreground cache identity.
 
 Candidate persistence is best effort. It checkpoints after refresh cycles and
 during graceful shutdown. A crash can lose observations made since the last
-checkpoint. Requests with detected channel credentials remain memory-only.
+checkpoint. Requests whose serialized state contains detected credential
+patterns remain memory-only. Catalog payload size, entry counts, counters, and
+timestamps are validated before recorded requests become eligible for refresh.
 
 ## Scheduled refresh
 
@@ -117,6 +131,18 @@ marker contract.
 There is no HTTP endpoint to list recorded requests, trigger refresh, or report
 solver cache hits. Aggregate cycle counters are written to the broker service
 log and remain process-local.
+
+## Timeout trade-off
+
+Solver work receives the configured deadline. Repodata and virtual-package
+inspection runs in non-abandoned worker threads because that inspection uses
+conda's process-global platform context. A request waits for an active
+inspection to return instead of leaving it to mutate shared state after the
+request ends. An inspection blocked in dependency, filesystem, or
+operating-system code can therefore make observed latency exceed the configured
+solve timeout. Request count, body, channel, platform, solver-state, and
+concurrency limits still constrain admitted work. An untrusted deployment also
+needs process or container resource limits.
 
 ## Effect of solver improvements
 

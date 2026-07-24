@@ -5,6 +5,7 @@ Compares the serialized (``ResolvedPackage``/``SolveResult`` ->
 (``PackageRecord``/``Environment``) to verify the msgspec path
 provides measurable serialization and memory benefits.
 """
+
 from __future__ import annotations
 
 import sys
@@ -63,13 +64,12 @@ def test_bench_solve(benchmark, deps):
 
 @pytest.mark.crossplatform
 def test_bench_solve_multi_platform(benchmark):
-    benchmark(
-        solve, ["conda-forge"], ["zlib"], ["linux-64", "osx-arm64"]
-    )
+    benchmark(solve, ["conda-forge"], ["zlib"], ["linux-64", "osx-arm64"])
 
 
 def test_bench_server_path_serialize(benchmark, many_records):
     """Server path: PackageRecord -> ResolvedPackage -> msgspec.json."""
+
     def run():
         packages = [ResolvedPackage.from_record(r) for r in many_records]
         result = SolveResult(platform="linux-64", packages=packages)
@@ -81,9 +81,7 @@ def test_bench_server_path_serialize(benchmark, many_records):
 def test_bench_cli_path_construct(benchmark, many_records):
     """CLI path: PackageRecord stays as-is in Environment."""
     benchmark(
-        lambda: Environment(
-            platform="linux-64", explicit_packages=list(many_records)
-        )
+        lambda: Environment(platform="linux-64", explicit_packages=list(many_records))
     )
 
 
@@ -94,16 +92,12 @@ def test_bench_memory_shallow_sizes(many_records, resolved_packages, solve_resul
     it reports only the container size, not internal storage.
     This test is informational only.
     """
-    env = Environment(
-        platform="linux-64", explicit_packages=list(many_records)
-    )
+    env = Environment(platform="linux-64", explicit_packages=list(many_records))
 
     server_size = sys.getsizeof(solve_result) + sum(
         sys.getsizeof(p) for p in resolved_packages
     )
-    cli_size = sys.getsizeof(env) + sum(
-        sys.getsizeof(r) for r in many_records
-    )
+    cli_size = sys.getsizeof(env) + sum(sys.getsizeof(r) for r in many_records)
 
     print(f"\n  Server (SolveResult+ResolvedPackage): {server_size:,} bytes")
     print(f"  CLI (Environment+PackageRecord):      {cli_size:,} bytes")

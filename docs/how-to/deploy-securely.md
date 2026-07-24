@@ -50,7 +50,9 @@ export CONDA_PRESTO_PARSE_TIMEOUT_S=10
 ```
 
 Avoid `CONDA_PRESTO_ALLOWED_CHANNELS=*` unless the surrounding network and
-egress policy deliberately allow callers to select arbitrary channel URLs.
+egress policy deliberately allow callers to select arbitrary HTTP and HTTPS
+channel URLs. The wildcard does not admit `file://` paths. List a required
+local channel explicitly and expose it only to a trusted deployment.
 
 Set browser origins only when a browser application needs the API:
 
@@ -76,6 +78,11 @@ export CONDA_PRESTO_RESULT_CACHE_DIR="$HOME/.cache/conda-presto/results"
 Do not share a file directory or Redis namespace between deployments that have
 different channel credentials or caller populations. Avoid a shared public
 deployment for private-channel solves.
+
+Put a file cache on a filesystem or volume with a hard quota. Configure a
+dedicated Redis instance with `maxmemory` and a cache eviction policy such as
+`allkeys-lru`. Entry expiry and per-value checks do not cap aggregate storage,
+and a Redis namespace does not isolate memory or eviction policy.
 
 See {doc}`configure-result-cache` for Redis and Docker volume configuration.
 
@@ -137,10 +144,10 @@ channel allowlist fails before enabling production traffic.
 - [ ] TLS terminates at a trusted proxy or ingress.
 - [ ] Authentication is enabled when the API is not intentionally public.
 - [ ] `CONDA_PRESTO_ALLOWED_CHANNELS` names only approved channels.
-- [ ] Request size, count, concurrency, and timeout limits match available capacity.
+- [ ] Request size, count, concurrency, and timeout settings match available capacity, with process or container limits covering blocked metadata inspection.
 - [ ] Uvicorn trusts forwarded headers only from known proxy addresses.
 - [ ] CORS is unset or contains only required browser origins.
-- [ ] Cache files or Redis keys are isolated to this deployment's trust domain.
+- [ ] Cache files or Redis keys are isolated to this deployment's trust domain, with a hard filesystem quota or Redis memory and eviction limit.
 - [ ] Uvicorn access logging is disabled and reverse-proxy logs omit sensitive fields.
 - [ ] `/health` is used for readiness without treating it as a channel or cache health probe.
 

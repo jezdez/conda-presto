@@ -11,7 +11,7 @@ from typing import Any
 
 from conda.exceptions import CondaError
 
-from .exceptions import UnknownFormatError
+from .exceptions import CredentialRedactionFilter, UnknownFormatError
 from .exporter import OutputFormat
 from .resolve import shutdown_process_pool, solve, solve_environments, warmup
 from .solver import PrestoSolveError, PrestoSolveOutcome, PrestoSolveRequest
@@ -257,6 +257,7 @@ def persistent_solve_worker_entrypoint(
     log_worker_errors: bool = True,
 ) -> None:
     """Serve solve requests while retaining the normal process pool."""
+    CredentialRedactionFilter.install()
     if warmup_on_start:
         try:
             warmup(warmup_channels, warmup_platforms)

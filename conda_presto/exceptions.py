@@ -10,9 +10,13 @@ clients.  Anything not in the list is sanitized via
 :func:`safe_error_message` to a generic message; full detail still
 lands in the server logs.
 """
+
 from __future__ import annotations
 
+import logging
 import re
+import traceback
+from urllib.parse import unquote, urlparse
 
 from conda.exceptions import PackagesNotFoundError, UnsatisfiableError
 
@@ -38,7 +42,89 @@ SAFE_ERROR_TYPES: tuple[type[Exception], ...] = (
     PackagesNotFoundError,
 )
 
-URL_RE = re.compile(r"https?://[^\s)]+")
+URL_RE = re.compile(r"[a-z][a-z0-9+.-]*://\S+", re.IGNORECASE)
+CREDENTIAL_URL_RE = re.compile(
+    r"""[a-z][a-z0-9+.-]*://[^\s"'<>\\,{}]+""", re.IGNORECASE
+)
+
+
+def contains_credentials(value: object) -> bool:
+    """Return whether nested data contains known credential patterns."""
+    pending = [value]
+    while pending:
+        item = pending.pop()
+        if isinstance(item, dict):
+            for key, child in item.items():
+                if isinstance(key, str) and key.lower() in {
+                    "auth",
+                    "password",
+                    "token",
+                }:
+                    if child:
+                        return True
+                pending.append(child)
+        elif isinstance(item, (list, tuple, set)):
+            pending.extend(item)
+        elif isinstance(item, bytes):
+            pending.append(item.decode("utf-8", errors="replace"))
+        elif isinstance(item, str):
+            decoded = item
+            for _ in range(3):
+                next_value = unquote(decoded)
+                if next_value == decoded:
+                    break
+                decoded = next_value
+            if "%" in decoded:
+                return True
+            candidates = [decoded]
+            candidates.extend(
+                match.group() for match in CREDENTIAL_URL_RE.finditer(decoded)
+            )
+            for candidate in candidates:
+                try:
+                    parsed = urlparse(candidate)
+                except ValueError:
+                    return True
+                path_parts = [part for part in parsed.path.split("/") if part]
+                if (
+                    parsed.username
+                    or parsed.password
+                    or parsed.query
+                    or parsed.fragment
+                    or "t" in path_parts[:-1]
+                ):
+                    return True
+    return False
+
+
+class CredentialRedactionFilter(logging.Filter):
+    """Redact URLs from dependency logs before they leave a solve process."""
+
+    @classmethod
+    def install(cls) -> None:
+        """Attach one filter to every handler configured in this process."""
+        handlers = set(logging.getLogger().handlers)
+        if logging.lastResort is not None:
+            handlers.add(logging.lastResort)
+        for logger in logging.root.manager.loggerDict.values():
+            if isinstance(logger, logging.Logger):
+                handlers.update(logger.handlers)
+        for handler in handlers:
+            if not any(isinstance(filter_, cls) for filter_ in handler.filters):
+                handler.addFilter(cls())
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        """Render and redact the complete record before formatting."""
+        message = record.getMessage()
+        if record.exc_info:
+            message = "\n".join(
+                (message, "".join(traceback.format_exception(*record.exc_info)))
+            )
+        record.msg = redact_safe_error(message)
+        record.args = ()
+        record.exc_info = None
+        record.exc_text = None
+        return True
 
 
 def safe_error_message(exc: Exception) -> str:
@@ -56,11 +142,6 @@ def safe_error_message(exc: Exception) -> str:
 
 def redact_safe_error(message: str) -> str:
     """Redact channel and URL details from a known user-facing error."""
-    return URL_RE.sub("[redacted-url]", redact_current_channels(message))
-
-
-def redact_current_channels(message: str) -> str:
-    """Replace conda's ``Current channels`` block with a placeholder."""
     redacted: list[str] = []
     lines = message.splitlines()
     idx = 0
@@ -78,4 +159,4 @@ def redact_current_channels(message: str) -> str:
         redacted.append(line)
         idx += 1
 
-    return "\n".join(redacted)
+    return URL_RE.sub("[redacted-url]", "\n".join(redacted))
