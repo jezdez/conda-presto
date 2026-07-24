@@ -19,6 +19,7 @@ conda create --name conda-presto \
   'conda>=26.5,<27' \
   'conda-rattler-solver>=0.1.1,<0.2' \
   'conda-lockfiles>=0.2.1' \
+  'jinja2>=3.1.2' \
   'litestar>=2.18' \
   'pyjwt>=2.0' \
   'uvicorn>=0.34' \
@@ -130,10 +131,9 @@ curl -sS http://127.0.0.1:8000/health
 ```
 
 The response is `{"status":"ok"}` when the server can accept solve requests.
-Current main serves the browser workbench at `http://127.0.0.1:8000/`. The
-0.7.0 release still serves OpenAPI JSON at that path. Fetch
-`http://127.0.0.1:8000/openapi.json` for the generated document in either
-version.
+The 0.8.0 release and current main serve the browser workbench at
+`http://127.0.0.1:8000/`. Fetch
+`http://127.0.0.1:8000/openapi.json` for the generated OpenAPI document.
 
 ## Choose the next guide
 
