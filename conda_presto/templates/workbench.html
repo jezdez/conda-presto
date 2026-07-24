@@ -1,0 +1,168 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta
+      name="description"
+      content="Resolve, inspect, and export conda environments without creating them."
+    >
+    <meta
+      name="htmx-config"
+      content='{"allowEval":false,"allowScriptTags":false,"historyCacheSize":0,"includeIndicatorStyles":false,"responseHandling":[{"code":"204","swap":false},{"code":"[23]..","swap":true},{"code":"[45]..","swap":true,"error":true},{"code":"...","swap":false}],"selfRequestsOnly":true}'
+    >
+    <title>Presto — conda environment workbench</title>
+    <link rel="stylesheet" href="/assets/presto.css?v={{ version }}">
+    <script defer src="/assets/vendor/htmx-2.0.10.min.js"></script>
+  </head>
+  <body hx-history="false">
+    <header class="site-header">
+      <div class="site-identity">
+        <a class="wordmark" href="/" aria-label="Presto home">presto</a>
+        <span class="running-version">v{{ version }}</span>
+      </div>
+      <div class="site-utility">
+        <span class="running-mode">Dry run only</span>
+        <nav aria-label="Project links">
+          <a href="/openapi.json">OpenAPI</a>
+          <a href="https://jezdez.github.io/conda-presto/">Documentation</a>
+          <a href="https://github.com/jezdez/conda-presto">GitHub</a>
+        </nav>
+      </div>
+    </header>
+
+    <main class="workbench-shell" aria-label="Conda environment workbench">
+      <section class="request-pane">
+        <form
+          id="environment-request"
+          class="request-form"
+          action="/ui/resolve"
+          method="post"
+          hx-target="#workbench-result"
+          hx-swap="innerHTML"
+          hx-indicator="#request-indicator"
+          hx-disabled-elt="#environment-request button"
+        >
+          <h1>Environment request</h1>
+
+          <label class="field">
+            <span>Package specs</span>
+            <small>One conda MatchSpec per line</small>
+            <textarea
+              name="specs"
+              rows="6"
+              spellcheck="false"
+              placeholder="python=3.13&#10;numpy&#10;pandas"
+            >python=3.13
+numpy</textarea>
+          </label>
+
+          <div class="field-row">
+            <label class="field">
+              <span>Channels</span>
+              <small>Comma- or line-separated</small>
+              <input
+                name="channels"
+                value="{{ channels }}"
+                spellcheck="false"
+                autocomplete="off"
+              >
+            </label>
+            <label class="field">
+              <span>Platforms</span>
+              <small>Comma- or line-separated</small>
+              <input
+                name="platforms"
+                value="{{ platforms }}"
+                spellcheck="false"
+                autocomplete="off"
+              >
+            </label>
+          </div>
+
+          <label class="field output-field">
+            <span>Output</span>
+            <small>Native output shows an inspectable package table</small>
+            <select name="format">
+              <option value="">Native package table</option>
+              {% for format in formats %}
+                <option value="{{ format }}">{{ format }}</option>
+              {% endfor %}
+            </select>
+          </label>
+
+          <details class="file-input">
+            <summary>Paste an environment file</summary>
+            <div class="file-fields">
+              <label class="field">
+                <span>Filename</span>
+                <small>Selects the registered conda parser</small>
+                <input
+                  name="filename"
+                  value="environment.yml"
+                  spellcheck="false"
+                  autocomplete="off"
+                >
+              </label>
+              <label class="field">
+                <span>File content</span>
+                <textarea
+                  name="file"
+                  rows="8"
+                  spellcheck="false"
+                  placeholder="channels:&#10;  - conda-forge&#10;dependencies:&#10;  - python=3.13"
+                ></textarea>
+              </label>
+            </div>
+          </details>
+
+          <div class="form-actions">
+            <button
+              class="button secondary"
+              type="button"
+              hx-post="/ui/preflight"
+            >
+              Check input
+            </button>
+            <button
+              class="button primary"
+              type="submit"
+              hx-post="/ui/resolve"
+            >
+              Resolve environment
+            </button>
+            <span
+              id="request-indicator"
+              class="request-indicator htmx-indicator"
+              role="status"
+            >
+              Working…
+            </span>
+          </div>
+
+          <p class="request-note">
+            Dry run only. Nothing is installed or changed.
+          </p>
+        </form>
+      </section>
+
+      <section
+        id="workbench-result"
+        class="result-stage"
+        aria-label="Workbench result"
+      >
+        <div class="result-empty">
+          <div>
+            <p class="result-label">Result</p>
+            <h2>No solve yet</h2>
+            <p>
+              Resolve the request to inspect pinned packages or exporter
+              output.
+            </p>
+          </div>
+          <p>Check input validates locally without contacting a channel.</p>
+        </div>
+      </section>
+    </main>
+  </body>
+</html>

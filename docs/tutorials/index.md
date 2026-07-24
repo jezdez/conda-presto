@@ -22,6 +22,14 @@ Start a local server, submit a solve, follow a result location, and upload a
 file.
 :::
 
+:::{grid-item-card} {octicon}`browser` Use the browser workbench
+:link: workbench
+:link-type: doc
+
+Prepare, resolve, examine, and export an environment through the first-party
+interface.
+:::
+
 :::{grid-item-card} {octicon}`checklist` Review and repair an environment
 :link: review-and-repair
 :link-type: doc
@@ -46,6 +54,7 @@ For a specific operational task, use {doc}`../how-to/index` instead.
 
 cli-resolve
 http-api
+workbench
 review-and-repair
 local-service
 ```

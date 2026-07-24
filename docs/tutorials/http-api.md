@@ -104,8 +104,8 @@ curl -sS "$CONDA_PRESTO_URL/openapi.json" > openapi.json
 The generated schema does not describe the manually dispatched request bodies
 for `POST /resolve`, `POST /preflight`, or `POST /transcode`. Use the
 {doc}`../reference/http-api` page for those body contracts.
-conda-presto does not serve a browser interface or load third-party API-renderer
-assets.
+The first-party workbench is available at the server root. It uses packaged
+assets rather than a third-party API renderer.
 :::
 
 ## What you learned

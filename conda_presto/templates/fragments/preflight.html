@@ -1,0 +1,64 @@
+<article class="result-card">
+  <header
+    class="result-heading"
+    role="status"
+    aria-live="polite"
+    aria-atomic="true"
+  >
+    <div>
+      <p class="result-label">Check input</p>
+      <h2>
+        {% if result.ok %}
+          Input ready
+        {% else %}
+          Input needs attention
+        {% endif %}
+      </h2>
+    </div>
+  </header>
+
+  <dl class="result-metrics">
+    <div>
+      <dt>Errors</dt>
+      <dd>{{ result.summary.errors }}</dd>
+    </div>
+    <div>
+      <dt>Warnings</dt>
+      <dd>{{ result.summary.warnings }}</dd>
+    </div>
+    <div>
+      <dt>Notes</dt>
+      <dd>{{ result.summary.info }}</dd>
+    </div>
+    <div>
+      <dt>Time</dt>
+      <dd>{{ duration_ms }} ms</dd>
+    </div>
+  </dl>
+
+  {% if result.findings %}
+    <ol class="finding-list">
+      {% for finding in result.findings %}
+        <li class="finding {{ finding.severity }}">
+          <div>
+            <span class="finding-code">{{ finding.code }}</span>
+            <span class="finding-severity">{{ finding.severity }}</span>
+          </div>
+          <p>{{ finding.message }}</p>
+          {% if finding.spec %}
+            <code>{{ finding.spec }}</code>
+          {% endif %}
+          {% if finding.line %}
+            <small>Line {{ finding.line }}</small>
+          {% endif %}
+        </li>
+      {% endfor %}
+    </ol>
+  {% else %}
+    <div class="quiet-result">
+      <p>No deterministic input findings.</p>
+    </div>
+  {% endif %}
+
+  <p class="result-note">Preflight does not run a solver or contact a channel.</p>
+</article>

@@ -12,6 +12,7 @@ The same solve engine is available through the `conda presto` CLI, a Litestar HT
 - Convert covered lockfiles through the CLI without solving
 - Inspect lockfile metadata over HTTP without loading package records
 - Parse and review inputs through `/parse`, `/preflight`, `/repair`, `/diff`, and `/explain`
+- Prepare, resolve, examine, and export environments in the first-party browser workbench
 - Retain HTTP results under content-addressed `/r/<hash>` locations with memory, file, or Redis storage
 - Run a persistent public HTTP worker in the server container
 - Run an opt-in broker-managed loopback service for repeated local work
@@ -59,6 +60,8 @@ curl --fail --silent --show-error http://127.0.0.1:8000/health
 ```
 
 The server image listens on port 8000 inside the container and runs one persistent foreground worker. It does not start conda-broker, expose the internal solver route, or run scheduled solver-cache refresh.
+
+Current main serves the browser workbench at `http://127.0.0.1:8000/`. The 0.7.0 image still serves OpenAPI JSON at that path. Both expose the generated document at `http://127.0.0.1:8000/openapi.json`.
 
 See [Run conda-presto with Docker](https://jezdez.github.io/conda-presto/how-to/run-with-docker/) and the [Docker image reference](https://jezdez.github.io/conda-presto/reference/docker-images/).
 

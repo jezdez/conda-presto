@@ -13,7 +13,9 @@ by tag and multi-platform digest.
 | CLI | `cli` | `cli` | `conda presto` | None |
 
 Arguments after the CLI image name are passed directly to `conda presto`. The
-server exposes container port 8000.
+server exposes container port 8000. The server flavor includes the packaged
+browser workbench and serves it at `/`. The CLI flavor contains the package
+files but does not start an HTTP server.
 
 ## Published tags
 

@@ -1,0 +1,25 @@
+<article
+  class="result-card error-result"
+  role="alert"
+  aria-atomic="true"
+>
+  <header class="result-heading">
+    <div>
+      <p class="result-label">{{ operation }}</p>
+      <h2>Request failed</h2>
+      <p class="result-summary">
+        <span>HTTP {{ status_code }}</span>
+      </p>
+    </div>
+  </header>
+  <p class="error-message">
+    {% if error.error is defined %}
+      {{ error.error }}
+    {% else %}
+      {{ error }}
+    {% endif %}
+  </p>
+  {% if error.supported is defined and error.supported %}
+    <p class="result-note">Supported values: {{ error.supported | join(", ") }}</p>
+  {% endif %}
+</article>

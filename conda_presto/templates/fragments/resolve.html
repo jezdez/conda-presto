@@ -1,0 +1,121 @@
+<article class="result-card">
+  <header
+    class="result-heading"
+    role="status"
+    aria-live="polite"
+    aria-atomic="true"
+  >
+    <div>
+      <h2>
+        {% if format_name %}
+          Output ready
+        {% elif failed_platforms == results | length %}
+          Solve failed
+        {% elif failed_platforms %}
+          Partially solved
+        {% else %}
+          Solved
+        {% endif %}
+      </h2>
+      <p class="result-summary">
+        {% if format_name %}
+          <span>{{ format_name }}</span>
+        {% else %}
+          <span>{{ total_packages }} packages</span>
+          {% if results | length == 1 %}
+            <span>{{ results[0].platform }}</span>
+          {% else %}
+            <span>{{ results | length }} platforms</span>
+          {% endif %}
+          {% if failed_platforms %}
+            <span>{{ failed_platforms }} failed</span>
+          {% endif %}
+        {% endif %}
+        <span>{{ duration_ms }} ms</span>
+        {% if location %}
+          <a class="result-location" href="{{ location }}">
+            Open retained {% if format_name %}output{% else %}JSON{% endif %}
+          </a>
+        {% endif %}
+      </p>
+    </div>
+  </header>
+
+  {% if format_name %}
+    <pre class="export-output" hx-disable><code>{{ output }}</code></pre>
+  {% else %}
+    <div class="platform-results">
+      {% for result in results %}
+        <section class="platform-result">
+          {% if results | length > 1 or result.error %}
+            <header>
+              <div>
+                <p class="platform-name">{{ result.platform }}</p>
+                <p>{{ result.packages | length }} packages</p>
+              </div>
+              {% if result.error %}
+                <span class="status-badge error">Failed</span>
+              {% else %}
+                <span class="status-badge success">Solved</span>
+              {% endif %}
+            </header>
+          {% endif %}
+
+          {% if result.error %}
+            <p class="error-message">{{ result.error }}</p>
+          {% else %}
+            <div class="package-table-wrap">
+              <table class="package-table">
+                <caption class="visually-hidden">
+                  Packages resolved for {{ result.platform }}
+                </caption>
+                <thead>
+                  <tr>
+                    <th scope="col">Package</th>
+                    <th scope="col">Version</th>
+                    <th scope="col">Build</th>
+                    <th scope="col">Channel</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {% for package in result.packages %}
+                    <tr>
+                      <td>
+                        <div class="package-identity">
+                          <strong>{{ package.name }}</strong>
+                          <details class="dependency-details">
+                            <summary>
+                              {{ package.subdir }},
+                              {{ package.depends | length }}
+                              {% if package.depends | length == 1 %}
+                                dependency
+                              {% else %}
+                                dependencies
+                              {% endif %}
+                            </summary>
+                            {% if package.depends %}
+                              <ul>
+                                {% for dependency in package.depends %}
+                                  <li><code>{{ dependency }}</code></li>
+                                {% endfor %}
+                              </ul>
+                            {% else %}
+                              <p>No dependencies</p>
+                            {% endif %}
+                          </details>
+                        </div>
+                      </td>
+                      <td><code>{{ package.version }}</code></td>
+                      <td><code>{{ package.build }}</code></td>
+                      <td>{{ package.channel }}</td>
+                    </tr>
+                  {% endfor %}
+                </tbody>
+              </table>
+            </div>
+          {% endif %}
+        </section>
+      {% endfor %}
+    </div>
+  {% endif %}
+</article>
