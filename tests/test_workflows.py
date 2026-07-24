@@ -92,13 +92,32 @@ def test_arm64_scan_builds_server_and_cli_images():
     )
 
 
-def test_trivy_exception_is_narrow_and_expires():
+@pytest.mark.parametrize(
+    ("advisory", "statement", "expiry"),
+    [
+        pytest.param(
+            "GHSA-36hh-v3qg-5jq4",
+            "PyList iterator nth or nth_back",
+            "2026-09-30",
+            id="pyo3-iterator",
+        ),
+        pytest.param(
+            "GHSA-4w2j-m93h-cj5j",
+            "SubdirData and passes local SparseRepoData to "
+            "rattler.solve_with_sparse_repodata",
+            "2026-08-31",
+            id="quinn-receive-stream",
+        ),
+    ],
+)
+def test_trivy_exceptions_are_narrow_and_expire(advisory, statement, expiry):
     ignore = (ROOT / ".trivyignore.yaml").read_text()
-    assert "GHSA-36hh-v3qg-5jq4" in ignore
-    assert "rattler/rattler.abi3.so" in ignore
-    assert ".pixi/envs/cli/" in ignore
-    assert "PyList iterator nth or nth_back" in ignore
-    assert "expired_at: 2026-09-30" in ignore
+    exception = ignore.split(f"- id: {advisory}", 1)[1].split("\n  - id:", 1)[0]
+
+    assert ".pixi/envs/prod/" in exception
+    assert ".pixi/envs/cli/" in exception
+    assert statement in exception
+    assert f"expired_at: {expiry}" in exception
 
 
 def test_cli_image_is_scanned_before_publish():

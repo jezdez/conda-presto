@@ -5,3 +5,9 @@ vulnerabilities:
       - app/.pixi/envs/cli/lib/python3.13/site-packages/rattler/rattler.abi3.so
     statement: The locked images use py-rattler 0.25.0 through conda-rattler-solver 0.1.1. conda-presto does not call the affected pyo3 PyList iterator nth or nth_back APIs through this extension.
     expired_at: 2026-09-30
+  - id: GHSA-4w2j-m93h-cj5j
+    paths:
+      - app/.pixi/envs/prod/lib/python3.13/site-packages/rattler/rattler.abi3.so
+      - app/.pixi/envs/cli/lib/python3.13/site-packages/rattler/rattler.abi3.so
+    statement: The locked images use py-rattler 0.25.0 through conda-rattler-solver 0.1.1. conda-rattler-solver fetches repodata through conda SubdirData and passes local SparseRepoData to rattler.solve_with_sparse_repodata, so conda-presto does not invoke the affected quinn-proto receive-stream code.
+    expired_at: 2026-08-31
