@@ -24,10 +24,15 @@ Input handling
   process. Timeout cleanup terminates and then kills a parser that does not
   exit. Before conda's plugin constructs environment objects, the child rejects
   YAML aliases and inputs with more than 10,000 structural nodes. The temporary
-  directory is removed after process cleanup. HTTP lockfile parsing inspects
-  metadata without asking a plugin to materialize package records, which can
-  fetch package URLs. Operations that require those records are rejected.
-  Trusted local CLI lockfile conversion is unchanged.
+  directory is removed after process cleanup. HTTP lockfile parsing normally
+  inspects metadata without constructing package records. `/transcode` opts in
+  inside the same isolated process. Conda-presto's format-specific compatibility
+  path constructs and serializes temporary records from lockfile URLs and
+  embedded metadata without fetching package archives. Only serialized content
+  returns to the server process. Successful responses use `Cache-Control:
+  no-store` because a lockfile can contain credential-bearing URLs. Installed
+  third-party parser plugins are trusted server code and must preserve that
+  boundary.
 
 Error handling
 : solver failures expose detailed messages only for known conda error types

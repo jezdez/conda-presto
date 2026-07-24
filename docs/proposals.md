@@ -14,7 +14,7 @@ codebase.
 
 | Issue | Status | Summary |
 |---|:---:|---|
-| [Lockfile transcoder mode](https://github.com/jezdez/conda-presto/issues/11) | {bdg-success}`shipped` | CLI lockfile-in / lockfile-out fast path and metadata-only HTTP validation |
+| [Lockfile transcoder mode](https://github.com/jezdez/conda-presto/issues/11) | {bdg-success}`shipped` | CLI and HTTP lockfile-in / lockfile-out conversion without solving |
 | [GitHub Action for CI workflows](https://github.com/jezdez/conda-presto/issues/17) | {bdg-success}`shipped` | Composite action for local CLI or hosted API solve workflows |
 | [Content-addressed solve cache](https://github.com/jezdez/conda-presto/issues/19) | {bdg-success}`shipped` | HTTP result cache with durable `/r/<hash>` lookup while entries are retained |
 
@@ -75,10 +75,11 @@ graph TD
     class T,P,GH,PF,D,E,RPR,B,FS,WC,CW shipped;
 ```
 
-HTTP lockfile uploads remain metadata-only because materializing their package
-records can fetch package URLs. Repair stays separate from explain because it
-may run repeated solver attempts under an explicit budget. The internal Presto
-solver backend
+HTTP lockfile transcoding reconstructs package records from embedded metadata
+without fetching the referenced archives. Other review paths remain
+metadata-only for uploaded lockfiles. Repair stays separate from explain
+because it may run repeated solver attempts under an explicit budget. The
+internal Presto solver backend
 uses the broker-managed local process and does not define a remote protocol.
 Its final-state entries share the configured cache storage and
 in-memory bounds, but remain separate from public `/resolve` permalinks.

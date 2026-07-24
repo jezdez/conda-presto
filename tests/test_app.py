@@ -95,6 +95,43 @@ async def client(test_app):
 
 
 @pytest.fixture()
+def package_url_probe():
+    requests = []
+    payload = b"not a conda package"
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            requests.append((self.command, self.path))
+            self.send_response(200)
+            self.send_header("Content-Length", str(len(payload)))
+            self.end_headers()
+            self.wfile.write(payload)
+
+        def do_HEAD(self):
+            requests.append((self.command, self.path))
+            self.send_response(200)
+            self.send_header("Content-Length", str(len(payload)))
+            self.end_headers()
+
+        def log_message(self, _format, *_args):
+            pass
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    server_thread = threading.Thread(target=server.serve_forever, daemon=True)
+    server_thread.start()
+    package_url = (
+        f"http://127.0.0.1:{server.server_address[1]}"
+        "/conda-forge/linux-64/probe-1.0-h123_0.conda"
+    )
+    try:
+        yield package_url, requests
+    finally:
+        server.shutdown()
+        server.server_close()
+        server_thread.join()
+
+
+@pytest.fixture()
 def enabled_solver_endpoint(monkeypatch):
     monkeypatch.setenv("CONDA_BROKER_SERVICE_NAME", PrestoSolverClient.service_name)
     monkeypatch.setenv("CONDA_PRESTO_URL", "http://test")
@@ -3250,27 +3287,206 @@ async def test_explain_post_returns_solver_failure_as_unprocessable(
 
 
 @pytest.mark.anyio
-async def test_transcode_post_rejects_lockfile_materialization(
-    client, monkeypatch, pixi_lock_v6_text
+@pytest.mark.parametrize(
+    ("source_format", "target_format", "request_kind", "expected_version"),
+    [
+        pytest.param(
+            "pixi",
+            "conda-lock-v1",
+            "json",
+            1,
+            id="pixi-to-conda-lock",
+        ),
+        pytest.param(
+            "conda-lock",
+            "pixi-lock-v6",
+            "raw",
+            6,
+            id="conda-lock-to-pixi",
+        ),
+    ],
+)
+async def test_transcode_post_lockfile_to_lockfile_without_fetching_or_solving(
+    client,
+    monkeypatch,
+    package_url_probe,
+    source_format,
+    target_format,
+    request_kind,
+    expected_version,
 ):
     def fail_solve(*args, **kwargs):
         raise AssertionError("solver should not run")
 
+    def fail_parent_export(*args, **kwargs):
+        raise AssertionError("lockfile export should run in the parser process")
+
+    parsed_results = []
+    parse_input = app_module.parse_input_for_request
+
+    async def record_parse_result(*args, **kwargs):
+        parsed = await parse_input(*args, **kwargs)
+        parsed_results.append(parsed)
+        return parsed
+
+    package_url, requests = package_url_probe
     monkeypatch.setattr(app_module, "solve_environments", fail_solve)
-    resp = await client.post(
-        "/transcode?format=conda-lock-v1",
-        json={
-            "file": pixi_lock_v6_text,
-            "filename": "pixi.lock",
-            "platforms": ["linux-64"],
-        },
+    monkeypatch.setattr(app_module.OutputFormat, "render", fail_parent_export)
+    monkeypatch.setattr(app_module, "parse_input_for_request", record_parse_result)
+    if source_format == "pixi":
+        filename = "pixi.lock"
+        lockfile = f"""\
+version: 6
+environments:
+  default:
+    channels: []
+    packages:
+      linux-64:
+        - conda: {package_url}
+packages:
+  - conda: {package_url}
+    sha256: {"a" * 64}
+    md5: {"b" * 32}
+    depends:
+      - python >=3.13
+"""
+    else:
+        filename = "conda-lock.yml"
+        lockfile = f"""\
+version: 1
+metadata:
+  channels: []
+  platforms:
+    - linux-64
+package:
+  - name: probe
+    version: '1.0'
+    manager: conda
+    platform: linux-64
+    dependencies:
+      python: '>=3.13'
+    url: {package_url}
+    hash:
+      sha256: {"a" * 64}
+      md5: {"b" * 32}
+"""
+
+    url = f"/transcode?format={target_format}&platform=linux-64"
+    if request_kind == "json":
+        response = await client.post(
+            url,
+            json={
+                "file": lockfile,
+                "filename": filename,
+                "platforms": ["linux-64"],
+            },
+        )
+    else:
+        response = await client.post(
+            f"{url}&filename={filename}",
+            content=lockfile,
+            headers={"content-type": "application/yaml; charset=utf-8"},
+        )
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("application/yaml")
+    assert response.headers["cache-control"] == "no-store"
+    assert len(parsed_results) == 1
+    assert parsed_results[0].environments == ()
+    assert parsed_results[0].transcoded_content == response.text
+    data = yaml.safe_load(response.text)
+    assert data["version"] == expected_version
+    if expected_version == 1:
+        assert data["metadata"]["platforms"] == ["linux-64"]
+        assert [package["name"] for package in data["package"]] == ["probe"]
+        package = data["package"][0]
+        assert package["url"] == package_url
+        assert package["dependencies"] == {"python": ">=3.13"}
+        assert package["hash"] == {"md5": "b" * 32, "sha256": "a" * 64}
+    else:
+        assert "linux-64" in data["environments"]["default"]["packages"]
+        package = data["packages"][0]
+        assert package["conda"] == package_url
+        assert package["depends"] == ["python >=3.13"]
+        assert package["md5"] == "b" * 32
+        assert package["sha256"] == "a" * 64
+    assert requests == []
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("package_entries", "expected_error"),
+    [
+        pytest.param(
+            "  - conda: {package_url}\n    depends:\n      - '!!!'",
+            "Invalid spec '!!!'",
+            id="invalid-dependency",
+        ),
+        pytest.param(
+            None,
+            "missing from the packages list",
+            id="dangling-reference",
+        ),
+    ],
+)
+async def test_transcode_post_rejects_invalid_lockfile_packages(
+    client,
+    package_url_probe,
+    package_entries,
+    expected_error,
+):
+    package_url, requests = package_url_probe
+    packages = (
+        "packages: []"
+        if package_entries is None
+        else "packages:\n" + package_entries.format(package_url=package_url)
+    )
+    lockfile = f"""\
+version: 6
+environments:
+  default:
+    channels: []
+    packages:
+      linux-64:
+        - conda: {package_url}
+{packages}
+"""
+
+    response = await client.post(
+        "/transcode?format=conda-lock-v1&platform=linux-64",
+        json={"file": lockfile, "filename": "pixi.lock"},
     )
 
-    assert resp.status_code == 400
-    assert resp.json() == {
-        "error": "Request cannot be transcoded",
-        "reasons": ["lockfile package records cannot be loaded from HTTP input"],
-    }
+    assert response.status_code == 400
+    assert expected_error in response.json()["error"]
+    assert requests == []
+
+
+@pytest.mark.anyio
+async def test_transcode_post_rejects_unrecoverable_conda_pypi_identity(client):
+    wheel_url = (
+        "https://files.pythonhosted.org/packages/ab/cd/docker-7.1.0-py3-none-any.whl"
+    )
+    lockfile = f"""\
+version: 6
+environments:
+  default:
+    channels:
+      - url: conda-pypi
+    packages:
+      linux-64:
+        - conda: {wheel_url}
+packages:
+  - conda: {wheel_url}
+"""
+
+    response = await client.post(
+        "/transcode?format=conda-lock-v1&platform=linux-64",
+        json={"file": lockfile, "filename": "pixi.lock"},
+    )
+
+    assert response.status_code == 400
+    assert "without package metadata" in response.json()["error"]
 
 
 @pytest.mark.anyio
@@ -3349,8 +3565,7 @@ async def test_transcode_post_rejections(
     assert resp.status_code == 400
     body = resp.json()
     assert body["error"] == "Request cannot be transcoded"
-    for reason in expected_reasons:
-        assert reason in body["reasons"]
+    assert body["reasons"] == expected_reasons
 
 
 @pytest.mark.anyio
@@ -3856,31 +4071,8 @@ async def test_parse_endpoint_rejects_explicit_lockfile(client):
 
 
 @pytest.mark.anyio
-async def test_resolve_lockfile_does_not_fetch_package_urls(client):
-    requests = []
-    payload = b"not a conda package"
-
-    class Handler(BaseHTTPRequestHandler):
-        def do_GET(self):
-            requests.append((self.command, self.path))
-            self.send_response(200)
-            self.send_header("Content-Length", str(len(payload)))
-            self.end_headers()
-            self.wfile.write(payload)
-
-        def do_HEAD(self):
-            requests.append((self.command, self.path))
-            self.send_response(200)
-            self.send_header("Content-Length", str(len(payload)))
-            self.end_headers()
-
-        def log_message(self, _format, *_args):
-            pass
-
-    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
-    server_thread = threading.Thread(target=server.serve_forever, daemon=True)
-    server_thread.start()
-    package_url = f"http://127.0.0.1:{server.server_address[1]}/probe-1.0-0.conda"
+async def test_resolve_lockfile_does_not_fetch_package_urls(client, package_url_probe):
+    package_url, requests = package_url_probe
     lockfile = f"""\
 version: 6
 environments:
@@ -3893,19 +4085,14 @@ packages:
   - conda: {package_url}
 """
 
-    try:
-        response = await client.post(
-            "/resolve",
-            json={
-                "file": lockfile,
-                "filename": "pixi.lock",
-                "platforms": ["linux-64"],
-            },
-        )
-    finally:
-        server.shutdown()
-        server.server_close()
-        server_thread.join()
+    response = await client.post(
+        "/resolve",
+        json={
+            "file": lockfile,
+            "filename": "pixi.lock",
+            "platforms": ["linux-64"],
+        },
+    )
 
     assert response.status_code == 400
     assert "cannot be loaded from HTTP input" in response.json()["error"]

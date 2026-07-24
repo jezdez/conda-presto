@@ -55,8 +55,8 @@ curl --fail --silent --show-error \
 
 Use `filename` when a generic YAML media type could describe several installed
 formats. For an uploaded lockfile, HTTP parsing inspects format and platform
-metadata only. Operations that require package-record materialization return
-HTTP 400. Use the CLI for trusted local lockfile conversion.
+metadata only unless you call `/transcode`. Resolve and review operations that
+would require package records return HTTP 400.
 
 Accepted raw upload types and the full request schema are listed in
 {doc}`../reference/http-api`.
@@ -114,4 +114,4 @@ renderer.
 :::
 
 Use {doc}`inspect-environments` for preflight, repair, diff, and explain tasks.
-Use {doc}`transcode-lockfiles` for trusted local conversion without a solve.
+Use {doc}`transcode-lockfiles` for CLI or HTTP conversion without a solve.

@@ -20,6 +20,7 @@ from ruamel.yaml.error import YAMLError
 from ruamel.yaml.events import AliasEvent, NodeEvent
 
 from .exceptions import CredentialRedactionFilter, redact_safe_error
+from .lockfile_transcode import CondaLockfilesTranscoder
 
 ALLOWED_EXTENSIONS = {".yml", ".yaml", ".txt", ".lock", ".toml", ".json"}
 HTTP_INPUT_MAX_NODES = 10_000
@@ -27,7 +28,7 @@ HTTP_INPUT_MAX_NODES = 10_000
 
 @dataclass(frozen=True)
 class ParsedInputFile:
-    """Parsed conda input file with optional lockfile environments."""
+    """Parsed conda input file with optional lockfile results."""
 
     specs: list[str]
     channels: list[str]
@@ -35,6 +36,7 @@ class ParsedInputFile:
     source_format: str
     available_platforms: tuple[str, ...] = ()
     environments: tuple[Environment, ...] = ()
+    transcoded_content: str | None = None
 
     @property
     def is_lockfile(self) -> bool:
@@ -47,15 +49,17 @@ class ParsedInputFile:
         target_platforms: list[str] | tuple[str, ...] | None = None,
         *,
         materialize_lockfiles: bool = True,
+        transcode_format: str | None = None,
     ) -> ParsedInputFile:
         """Parse an input file through conda's plugin registry.
 
         ``target_platforms`` is only used for lockfiles. When every target
         platform is present and ``materialize_lockfiles`` is true,
         ``environments`` contains the corresponding parsed ``Environment``
-        objects. When materialization is disabled or a target is missing,
-        parsing still succeeds but ``environments`` is empty so callers can
-        decide whether to fall back to solving or fail a no-solve request.
+        objects. When ``transcode_format`` is set, a supporting lockfile adapter
+        renders the requested platforms without returning temporary package
+        records. Disabled materialization and missing targets leave both results
+        empty.
         """
         path_str = str(path)
         specifier = context.plugin_manager.detect_environment_specifier(path_str)
@@ -68,13 +72,19 @@ class ParsedInputFile:
             available = tuple(getattr(spec, "available_platforms", ()) or ())
             targets = tuple(target_platforms or ())
             envs: tuple[Environment, ...] = ()
-            if (
-                materialize_lockfiles
-                and targets
-                and available
-                and set(targets).issubset(available)
-            ):
-                envs = tuple(spec.env_for(platform) for platform in targets)
+            transcoded_content = None
+            if targets and available and set(targets).issubset(available):
+                if transcode_format is not None:
+                    # Compatibility for conda-lockfiles 0.2.1. Replace this
+                    # adapter with spec.transcode() after
+                    # conda/conda-lockfiles#161 ships and the minimum dependency
+                    # version is raised.
+                    transcoded_content = CondaLockfilesTranscoder(spec).render(
+                        targets,
+                        format_name=transcode_format,
+                    )
+                elif materialize_lockfiles:
+                    envs = tuple(spec.env_for(platform) for platform in targets)
             return cls(
                 specs=[str(spec) for env in envs for spec in env.requested_packages],
                 channels=list(
@@ -89,6 +99,7 @@ class ParsedInputFile:
                 source_format=specifier.name,
                 available_platforms=available,
                 environments=envs,
+                transcoded_content=transcoded_content,
             )
 
         env = spec.env
@@ -110,6 +121,8 @@ class ParsedInputFile:
         filename: str | None,
         target_platforms: list[str] | tuple[str, ...] | None,
         deadline: float,
+        *,
+        transcode_format: str | None = None,
     ) -> ParsedInputFile:
         """Parse content in an isolated process before an absolute deadline."""
         if deadline <= time.monotonic():
@@ -144,7 +157,13 @@ class ParsedInputFile:
             try:
                 process = process_context.Process(
                     target=cls._from_path_process,
-                    args=(sender, path, target_platforms, deadline),
+                    args=(
+                        sender,
+                        path,
+                        target_platforms,
+                        deadline,
+                        transcode_format,
+                    ),
                 )
                 process.start()
             except BaseException:
@@ -189,6 +208,7 @@ class ParsedInputFile:
         path: Path,
         target_platforms: list[str] | tuple[str, ...] | None,
         deadline: float,
+        transcode_format: str | None = None,
     ) -> None:
         """Send an input parse result from an isolated process."""
         CredentialRedactionFilter.install()
@@ -259,6 +279,7 @@ class ParsedInputFile:
                         path,
                         target_platforms,
                         materialize_lockfiles=False,
+                        transcode_format=transcode_format,
                     )
             sender.send(("ok", parsed))
         except TimeoutError:

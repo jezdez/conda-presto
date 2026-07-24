@@ -17,7 +17,7 @@ The table describes the public HTTP operations.
 | `/repair` | Does one supported single-spec relaxation make an infeasible request solvable? | yes | yes, repeatedly |
 | `/diff` | How do two resolved package states differ? | yes | yes |
 | `/explain` | Which dependency chains connect requested specs to one selected package? | yes | yes |
-| `/transcode` | Does the request require lockfile package-record materialization? | no | no |
+| `/transcode` | Can this lockfile be rendered in another lockfile format? | no | no |
 
 These operations never install packages. A later conda command or another
 installer owns any prefix transaction.
@@ -66,11 +66,11 @@ It is not a claim that the selected environment is incomplete.
 
 ## Why lockfiles can skip work
 
-A lockfile already describes selected package records, but some environment
-specifier plugins fetch package URLs when materializing conda's record objects.
-The trusted local CLI can use that adapter path for direct lockfile transcoding.
-HTTP inspects only format and platform metadata, then rejects operations that
-would materialize package records from an untrusted upload.
+A lockfile already describes selected packages, so transcoding does not require
+another solve. The CLI can use the adapter's normal package-record path.
+`/transcode` instead requests an export-only view reconstructed from the URLs
+and metadata in the file without fetching package archives. Other HTTP
+operations reject uploaded lockfiles when they need package records.
 
 Use {doc}`../tutorials/review-and-repair` for a guided workflow and
 {doc}`../reference/http-api` for exact request and response contracts.

@@ -30,7 +30,7 @@ An unretained response is still valid but has no `Location` header.
 | `POST` | `/repair` | Test bounded single-spec relaxations |
 | `POST` | `/diff` | Compare two selected package states |
 | `POST` | `/explain` | Trace dependency chains to one package |
-| `POST` | `/transcode` | Validate an HTTP lockfile conversion request |
+| `POST` | `/transcode` | Convert one lockfile format to another without solving |
 | `POST` | `/parse` | Extract specs and channels from a file |
 | `GET` | `/r/{hash}` | Fetch one retained resolve response |
 | `GET` | `/formats` | List registered exporter names and aliases |
@@ -150,12 +150,13 @@ The isolated HTTP parser rejects YAML aliases and inputs with more than 10,000
 structural nodes. This limit is applied before conda constructs environment,
 package, or match-spec objects.
 
-HTTP lockfile parsing stops after format and platform metadata. It does not ask
-the environment-specifier plugin to materialize package records because that
-operation can fetch package URLs. `/resolve`, `/diff`, `/explain`, and
-`/transcode` return HTTP 400 when an uploaded lockfile would require those
-records. Use `conda presto --file ... --format ...` for a trusted local lockfile
-conversion.
+HTTP lockfile parsing normally stops after format and platform metadata.
+`/resolve`, `/diff`, and `/explain` return HTTP 400 when an uploaded lockfile
+would require package records. `/transcode` is the exception. Conda-presto's
+format-specific compatibility path reconstructs and serializes temporary
+records inside the isolated parser process using the URL and metadata already
+present in the lockfile. It does not fetch package archives or return those
+records to the server process.
 
 ---
 
@@ -346,13 +347,40 @@ packages return HTTP 404, and solver failures return HTTP 422.
 
 ---
 
+(http-transcode)=
 ### `POST /transcode`
 
-Validate a request to convert one lockfile format to another without running the
-solver. HTTP parsing inspects lockfile format and platform metadata but does not
-materialize package records from uploaded package URLs. A request that reaches
-that boundary returns HTTP 400. Use the CLI for trusted local lockfile
-transcoding.
+Convert one lockfile format to another without running the solver. The input
+must already be a lockfile, and `format` must name a lockfile exporter such as
+`conda-lock-v1` or `pixi-lock-v6`. Package records are reconstructed from the
+lockfile metadata without fetching the referenced package archives.
+
+The no-fetch path supports conda-lockfiles' `conda-lock-v1` and
+`rattler-lock-v6` exporters and their aliases. Other registered exporters remain
+available to normal solve and CLI export paths but are not assumed to accept
+metadata-only records.
+
+Cross-format conda-pypi wheel conversion returns HTTP 400. Rattler lock v6
+omits the mapped conda package name, so conversion to conda-lock v1 would need
+to guess it. Conversion in the other direction would discard the mapped name
+that conda-lock v1 does retain.
+
+The temporary compatibility path also returns HTTP 400 when it cannot carry
+source data through conda's environment model without changing package
+selection or solver constraints. This can apply even when the source and target
+formats match. For conda-lock v1, pip, optional, and non-main packages on a
+requested platform are rejected. For rattler lock v6, multiple environments and
+PyPI package references are rejected. Constraints, features, Python
+site-package paths, duplicate dependency names, and dependency selectors are
+rejected when the target is conda-lock v1. Duplicate package metadata,
+duplicate or dangling references on a requested platform, mismatched URL
+identity, package URLs for the wrong platform, and nonempty Rattler fields that
+the installed compatibility model cannot represent are also rejected.
+Informational metadata that the model does represent but the target lacks may
+be normalized by the exporter.
+
+Successful responses include `Cache-Control: no-store` because the serialized
+lockfile can contain credential-bearing package URLs.
 
 Query parameters
 : `format`
@@ -400,17 +428,10 @@ curl -sS --data-binary @pixi.lock \
   'http://localhost:8000/transcode?filename=pixi.lock&platform=linux-64&format=conda-lock-v1'
 ```
 
-The request returns HTTP 400:
-
-```json
-{
-  "error": "Request cannot be transcoded",
-  "reasons": ["lockfile package records cannot be loaded from HTTP input"]
-}
-```
-
-The `reasons` array can instead report a non-lockfile input or output, requested
-platforms missing from the input lockfile, or fields that would require solving.
+The request fails with HTTP 400 and a `reasons` array if the input is not a
+lockfile, the output format is not a lockfile, the requested platforms are
+missing from the input lockfile, or the request includes specs or channel
+overrides that would require solving.
 
 ---
 

@@ -16,27 +16,38 @@ flowchart LR
     A["Request\n(specs or file)"] --> B["Input adapter\n(conda env-spec registry)"]
     B --> C{"Operation"}
     C -->|"resolve"| D["Rattler solve"]
-    C -->|"CLI covered lockfile"| E["Reuse package records"]
-    C -->|"HTTP lockfile"| H["Inspect metadata or reject"]
+    C -->|"covered lockfile transcode"| E["Render in parser process"]
+    C -->|"HTTP review lockfile"| H["Inspect metadata or reject"]
     D --> F["Native JSON or\nconda exporter"]
     E --> F
     H --> G
     F --> G["CLI output or\nHTTP response"]
 ```
 
-The CLI lockfile conversion path reuses records only when the input is a
-lockfile, every requested platform is present, the output is another lockfile
-format, and no extra specs or channel overrides require a solve. HTTP parsing
-inspects lockfile format and platform metadata but rejects `/resolve`, `/diff`,
-`/explain`, or `/transcode` work that would materialize uploaded package URLs.
+The CLI and `/transcode` lockfile conversion paths load records only when the
+input is a lockfile, every requested platform is present, the output is another
+lockfile format, and no extra specs or channel overrides require a solve. The
+HTTP path uses a concrete conda-presto compatibility adapter to reconstruct and
+serialize the lockfile atomically inside the isolated parser process. Temporary
+package records do not cross the process boundary, and package archives are not
+fetched. Other HTTP operations inspect lockfile format and platform metadata but
+reject work that needs those records. Transcoding rejects source structures
+that would change selected package identity, dependency constraints, features,
+or the supported environment set.
 
 ## Input adapters
 
 File detection and parsing are delegated to conda's environment specifier
 registry. The supported adapters cover environment YAML, requirements files,
 and the conda-lock and rattler-lock formats supplied by conda-lockfiles. Other
-installed plugins can participate when they return conda's `Environment` model
-or the multi-platform lockfile interface used by the adapter.
+installed plugins can participate in normal input handling when they return
+conda's `Environment` model.
+
+HTTP transcoding currently adds one project-owned compatibility boundary for
+the exact conda-lock v1 and rattler-lock v6 adapters. It returns serialized
+content without exposing temporary records. Once conda-lockfiles releases its
+atomic transcode method, this boundary can be replaced without changing the
+parser-process or HTTP contract.
 
 Conda's explicit-file specifier does not expose that multi-platform lockfile
 interface, so explicit files are not accepted as input. The explicit exporter
@@ -45,7 +56,10 @@ remains available as an output format.
 The CLI and HTTP layer turn parsed environment files and inline arguments into
 the same spec, channel, and platform inputs. HTTP raw uploads use Litestar's
 parsed media type plus an optional filename hint to select the file adapter.
-For lockfiles, only the trusted local CLI asks the adapter for package records.
+The CLI uses the adapter's normal record path. `/transcode` uses the isolated
+compatibility path to render one of conda-lockfiles' registered formats without
+fetching. Other HTTP operations do not request records from an uploaded
+lockfile.
 
 ## Review operations
 

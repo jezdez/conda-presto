@@ -8,7 +8,7 @@ Endpoints:
 - ``POST /repair`` — suggest relaxations for infeasible specs
 - ``POST /diff`` — compare two resolved inputs
 - ``POST /explain`` — show dependency chains for one resolved package
-- ``POST /transcode`` — validate an HTTP lockfile conversion request
+- ``POST /transcode`` — convert one lockfile format to another
 - ``GET /r/{hash}`` — fetch a stored content-addressed resolve result
 - ``GET /formats`` — list registered output format names
 - ``GET /platforms`` — list known conda platform subdirs
@@ -80,6 +80,7 @@ import time
 from collections.abc import AsyncIterator, Iterator
 from contextlib import AsyncExitStack, asynccontextmanager
 from dataclasses import dataclass, field, replace
+from functools import partial
 from importlib.metadata import version as pkg_version
 from typing import Annotated, Literal
 from urllib.parse import urlsplit
@@ -725,6 +726,8 @@ async def parse_input_for_request(
     content: str,
     filename: str | None,
     target_platforms: list[str] | None = None,
+    *,
+    transcode_format: str | None = None,
 ) -> ParsedInputFile | Response:
     """Parse input off the event loop with a bounded wall-clock time."""
     capacity = request.app.state.solver_limiter
@@ -732,11 +735,14 @@ async def parse_input_for_request(
     try:
         with anyio.fail_after(PARSE_TIMEOUT_S):
             return await anyio.to_thread.run_sync(
-                ParsedInputFile.from_content_until,
-                content,
-                filename,
-                target_platforms,
-                deadline,
+                partial(
+                    ParsedInputFile.from_content_until,
+                    content,
+                    filename,
+                    target_platforms,
+                    deadline,
+                    transcode_format=transcode_format,
+                ),
                 limiter=capacity.arrive() if capacity is not None else None,
                 abandon_on_cancel=False,
             )
@@ -1071,7 +1077,7 @@ async def run_cached_solve(
 
 def transcode_rejection(
     parsed: ParsedInputFile | None,
-    format_name: str | None,
+    output_format: OutputFormat | None,
     target_platforms: list[str],
     has_extra_specs: bool,
     has_channel_override: bool,
@@ -1088,20 +1094,20 @@ def transcode_rejection(
             reasons.append(
                 "requested platforms not present in lockfile: " + ", ".join(missing)
             )
-        elif not parsed.environments:
-            reasons.append("lockfile package records cannot be loaded from HTTP input")
-    if format_name is None:
+        elif (
+            output_format is not None
+            and output_format.is_lockfile
+            and not has_extra_specs
+            and not has_channel_override
+        ):
+            if parsed.transcoded_content is None:
+                reasons.append(
+                    "input lockfile format does not support no-download transcoding"
+                )
+    if output_format is None:
         reasons.append("no output format was requested")
-    else:
-        try:
-            output_format = OutputFormat.named(format_name)
-        except UnknownFormatError as exc:
-            return Response(
-                {"error": str(exc), "available_formats": exc.available},
-                status_code=HTTP_400_BAD_REQUEST,
-            )
-        if not output_format.is_lockfile:
-            reasons.append("output format is not a lockfile")
+    elif not output_format.is_lockfile:
+        reasons.append("output format is not a lockfile")
     if has_extra_specs:
         reasons.append("additional specs require solving")
     if has_channel_override:
@@ -1546,7 +1552,7 @@ async def transcode_post(
     format: FromQuery[str | None] = None,
     filename: FromQuery[str | None] = None,
 ) -> Response:
-    """Validate an HTTP lockfile conversion request without solving."""
+    """Convert one lockfile format to another without solving."""
     content_type, _ = request.content_type
 
     file_content: str | None = None
@@ -1608,25 +1614,60 @@ async def transcode_post(
 
     has_extra_specs = bool(spec) or bool(body_specs)
     has_channel_override = bool(channel) or bool(body_channels)
+    output_format = None
+    if format is not None:
+        try:
+            output_format = OutputFormat.named(format)
+        except UnknownFormatError as exc:
+            return Response(
+                {"error": str(exc), "available_formats": exc.available},
+                status_code=HTTP_400_BAD_REQUEST,
+            )
     if file_content is None:
         return transcode_rejection(
             None,
-            format,
+            output_format,
             target_platforms,
             has_extra_specs,
             has_channel_override,
         )
 
+    transcode_format = (
+        output_format.exporter.name
+        if output_format is not None
+        and output_format.is_lockfile
+        and not has_extra_specs
+        and not has_channel_override
+        else None
+    )
     parsed = await parse_input_for_request(
-        request, file_content, file_name, target_platforms
+        request,
+        file_content,
+        file_name,
+        target_platforms,
+        transcode_format=transcode_format,
     )
     if isinstance(parsed, Response):
         return parsed
     parsed_file = parsed
 
+    if (
+        parsed_file.is_lockfile
+        and output_format is not None
+        and not has_extra_specs
+        and not has_channel_override
+        and output_format.is_lockfile
+        and parsed_file.transcoded_content is not None
+    ):
+        return Response(
+            parsed_file.transcoded_content,
+            media_type=output_format.media_type,
+            headers={"Cache-Control": "no-store"},
+        )
+
     return transcode_rejection(
         parsed_file,
-        format,
+        output_format,
         target_platforms,
         has_extra_specs,
         has_channel_override,

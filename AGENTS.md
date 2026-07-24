@@ -16,10 +16,11 @@
   - `warmer.py` owns foreground-capacity coordination, scheduled cache refresh, and process-local refresh statistics.
   - `worker.py` owns persistent solver-process lifecycle and request dispatch.
   - `inputs.py` owns input-file parsing through conda's environment specifier plugin registry.
+  - `lockfile_transcode.py` owns the temporary no-fetch compatibility path for conda-lockfiles formats until the upstream atomic transcode API is released.
   - `exporter.py` owns output-format rendering through conda's exporter plugin registry.
   - `config.py`, `exceptions.py`, and `plugin.py` keep configuration, safe error surfaces, and conda plugin registration separate.
 
-- Tests live in `tests/` and mirror the module or behavior under test: `tests/test_app.py` for HTTP handlers and result-cache integration, `tests/test_broker.py` for conda-broker registration, `tests/test_cache.py` for cache behavior and storage adapters, `tests/test_cli.py` for CLI behavior, `tests/test_resolve.py` for solver internals, `tests/test_solver.py` for the internal solver protocol, `tests/test_warm_candidates.py` and `tests/test_warmer.py` for scheduled cache refresh, `tests/test_storage.py` for persistent-store ordering, `tests/test_worker.py` for persistent process management, `tests/test_exporter.py` for output formats, and `tests/test_plugin.py` for conda plugin registration. Cross-cutting fixtures belong in `tests/conftest.py`.
+- Tests live in `tests/` and mirror the module or behavior under test: `tests/test_app.py` for HTTP handlers and result-cache integration, `tests/test_broker.py` for conda-broker registration, `tests/test_cache.py` for cache behavior and storage adapters, `tests/test_cli.py` for CLI behavior, `tests/test_resolve.py` for solver internals, `tests/test_solver.py` for the internal solver protocol, `tests/test_lockfile_transcode.py` for no-fetch lockfile conversion, `tests/test_warm_candidates.py` and `tests/test_warmer.py` for scheduled cache refresh, `tests/test_storage.py` for persistent-store ordering, `tests/test_worker.py` for persistent process management, `tests/test_exporter.py` for output formats, and `tests/test_plugin.py` for conda plugin registration. Cross-cutting fixtures belong in `tests/conftest.py`.
 
 - Documentation uses Sphinx with MyST, `conda-sphinx-theme`, `sphinx-design`, `sphinx-copybutton`, and `sphinxcontrib-mermaid`. Keep docs source under `docs/`; generated `docs/_build/` output is not source.
 

@@ -112,10 +112,9 @@ a multi-platform request can still use the worker's internal process pool.
 
 ## Lockfile conversion
 
-Trusted local lockfile conversion through the CLI is usually the smallest work
-path. It parses existing records and renders another lockfile format without SAT
-solving. HTTP uploads remain metadata-only and are rejected when conversion
-would require package-record materialization.
+Lockfile conversion through the CLI or `/transcode` skips SAT solving. The HTTP
+endpoint reconstructs its export-only records from lockfile metadata without
+package downloads. The CLI uses the input adapter's normal package-record path.
 
 ## Measure your workload
 
