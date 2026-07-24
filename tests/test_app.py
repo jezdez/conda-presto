@@ -14,11 +14,15 @@ import pytest
 import yaml
 from conda.exceptions import PackagesNotFoundError
 from conda.models.environment import Environment
+from conda.plugins.types import EnvironmentFormat
 from httpx import ASGITransport, AsyncClient
 from litestar import Litestar
+from litestar.datastructures import CacheControlHeader
 from litestar.openapi import OpenAPIConfig
 from litestar.openapi.plugins import JsonRenderPlugin
+from litestar.static_files import create_static_files_router
 from litestar.stores.memory import MemoryStore
+from litestar.template.config import TemplateConfig
 
 import conda_presto.app as app_module
 import conda_presto.cache as cache_module
@@ -29,6 +33,7 @@ from conda_presto.app import (
     explain_post,
     formats,
     health,
+    openapi_json,
     parse,
     platforms,
     preflight_post,
@@ -40,6 +45,9 @@ from conda_presto.app import (
     solver_v1,
     transcode_post,
     version,
+    workbench,
+    workbench_preflight,
+    workbench_resolve,
 )
 from conda_presto.cache import ResultCache
 from conda_presto.inputs import ParsedInputFile
@@ -54,11 +62,26 @@ from conda_presto.solver import (
 from conda_presto.storage import StoreOperationCoordinator
 from conda_presto.warm_candidates import SolverWarmCandidates
 
+HTMX_HEADERS = {"HX-Request": "true"}
+
 
 @pytest.fixture()
 def test_app():
     app = Litestar(
         route_handlers=[
+            workbench,
+            openapi_json,
+            workbench_preflight,
+            workbench_resolve,
+            create_static_files_router(
+                path="/assets",
+                directories=[app_module.PACKAGE_DIR / "static"],
+                cache_control=CacheControlHeader(
+                    max_age=31_536_000,
+                    public=True,
+                    immutable=True,
+                ),
+            ),
             resolve_get,
             resolve_post,
             preflight_post,
@@ -77,10 +100,14 @@ def test_app():
         openapi_config=OpenAPIConfig(
             title="conda-presto",
             version="test",
-            path="/",
+            path="/schema",
             render_plugins=[JsonRenderPlugin()],
         ),
         request_max_body_size=1_024 * 1_024,
+        template_config=TemplateConfig(
+            directory=app_module.PACKAGE_DIR / "templates",
+            engine=app_module.JinjaTemplateEngine,
+        ),
     )
     app.state.solver_limiter = None
     app.state.result_cache = ResultCache(max_size=256)
@@ -3740,6 +3767,8 @@ async def test_openapi_schema(client):
     assert "/parse" in data["paths"]
     assert "/r/{key}" in data["paths"]
     assert "/health" in data["paths"]
+    assert "/solver/v1" not in data["paths"]
+    assert not any(path.startswith("/ui/") for path in data["paths"])
 
     health_endpoint = data["paths"]["/health"]["get"]
     assert {"200", "503"} <= health_endpoint["responses"].keys()
@@ -3783,14 +3812,391 @@ async def test_openapi_schema(client):
 
 
 @pytest.mark.anyio
-async def test_openapi_routes_are_json_only(client):
+async def test_workbench_root_and_openapi_routes(client):
     root = await client.get("/")
 
     assert root.status_code == 200
-    assert "json" in root.headers["content-type"]
-    assert "openapi" in root.json()
+    assert "html" in root.headers["content-type"]
+    assert "Environment request" in root.text
+    assert "No solve yet" in root.text
+    assert 'hx-post="/ui/preflight"' in root.text
+    assert 'hx-post="/ui/resolve"' in root.text
+    assert 'hx-disabled-elt="#environment-request button"' in root.text
+    assert 'class="button secondary"\n              type="button"' in root.text
+    assert 'src="/assets/vendor/htmx-2.0.10.min.js"' in root.text
+    assert "Package Resolution" not in root.text
+    assert '"allowEval":false' in root.text
+    assert '"allowScriptTags":false' in root.text
+    assert '"historyCacheSize":0' in root.text
+    assert '"includeIndicatorStyles":false' in root.text
+    assert '"selfRequestsOnly":true' in root.text
+    assert '"[45]..","swap":true,"error":true' in root.text
+    assert "https://" not in "\n".join(
+        line
+        for line in root.text.splitlines()
+        if "<script" in line or 'rel="stylesheet"' in line
+    )
+    policy = root.headers["content-security-policy"]
+    assert "default-src 'none'" in policy
+    assert "script-src 'self'" in policy
+    assert "style-src 'self'" in policy
+    assert "unsafe-inline" not in policy
+    assert "unsafe-eval" not in policy
+    assert root.headers["cache-control"] == "no-store"
+
+    schema = await client.get("/openapi.json")
+    assert schema.status_code == 200
+    assert "json" in schema.headers["content-type"]
+    assert "openapi" in schema.json()
     assert (await client.get("/redoc")).status_code == 404
     assert (await client.get("/swagger")).status_code == 404
+    for path in ("/schema", "/schema/openapi.json"):
+        alias = await client.get(path)
+        assert alias.status_code == 200
+        assert alias.json() == schema.json()
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("path", ["/ui/preflight", "/ui/resolve"])
+async def test_workbench_rejects_non_htmx_form_posts(client, path):
+    response = await client.post(
+        path,
+        data={
+            "specs": "python",
+            "channels": "conda-forge",
+            "platforms": "linux-64",
+        },
+    )
+
+    assert response.status_code == 400
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("path", "content_type", "content"),
+    [
+        pytest.param(
+            "/assets/presto.css",
+            "text/css",
+            'font-family: "IBM Plex Sans"',
+            id="stylesheet",
+        ),
+        pytest.param(
+            "/assets/vendor/htmx-2.0.10.min.js",
+            "text/javascript",
+            "var htmx=",
+            id="htmx",
+        ),
+    ],
+)
+async def test_workbench_assets_are_local_and_immutable(
+    client,
+    path,
+    content_type,
+    content,
+):
+    response = await client.get(path)
+
+    assert response.status_code == 200
+    assert content_type in response.headers["content-type"]
+    assert content in response.text
+    assert set(response.headers["cache-control"].split(", ")) == {
+        "public",
+        "max-age=31536000",
+        "immutable",
+    }
+
+
+@pytest.mark.anyio
+async def test_workbench_font_asset_is_local_and_immutable(client):
+    response = await client.get("/assets/fonts/ibm-plex-sans-latin1.woff2")
+
+    assert response.status_code == 200
+    assert "font/woff2" in response.headers["content-type"]
+    assert len(response.content) == 68_988
+    assert set(response.headers["cache-control"].split(", ")) == {
+        "public",
+        "max-age=31536000",
+        "immutable",
+    }
+
+
+@pytest.mark.anyio
+async def test_workbench_preflight_renders_autoescaped_findings(client):
+    response = await client.post(
+        "/ui/preflight",
+        headers=HTMX_HEADERS,
+        data={
+            "specs": "python\npython\n<img src=x onerror=alert(1)>",
+            "channels": "conda-forge",
+            "platforms": "linux-64",
+        },
+    )
+
+    assert response.status_code == 200
+    assert "html" in response.headers["content-type"]
+    assert "DUP001" in response.text
+    assert "<img src=x onerror=alert(1)>" not in response.text
+    assert "&lt;img src=x onerror=alert(1)&gt;" in response.text
+    assert response.headers["cache-control"] == "no-store"
+
+
+@pytest.mark.anyio
+async def test_workbench_preflight_preserves_error_status(client, monkeypatch):
+    async def preflight(_data, _request):
+        return app_module.Response(
+            {"error": "Parsing timed out"},
+            status_code=504,
+        )
+
+    monkeypatch.setattr(app_module.ResolveRequest, "preflight", preflight)
+    response = await client.post(
+        "/ui/preflight",
+        headers=HTMX_HEADERS,
+        data={
+            "specs": "python",
+            "channels": "conda-forge",
+            "platforms": "linux-64",
+        },
+    )
+
+    assert response.status_code == 504
+    assert "HTTP 504" in response.text
+    assert "Parsing timed out" in response.text
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("errors", "expected_heading"),
+    [
+        pytest.param([None], "Solved", id="solved"),
+        pytest.param(["package not found"], "Solve failed", id="failed"),
+        pytest.param([None, "package not found"], "Partially solved", id="partial"),
+    ],
+)
+async def test_workbench_resolve_labels_native_result_state(
+    client,
+    monkeypatch,
+    errors,
+    expected_heading,
+):
+    results = [
+        SolveResult(
+            platform=f"test-{index}",
+            packages=[],
+            error=error,
+        )
+        for index, error in enumerate(errors)
+    ]
+
+    async def cached_response(_source, _request, _selected_format=None):
+        return app_module.Response(
+            msgspec.json.encode(results),
+            media_type="application/json",
+        )
+
+    monkeypatch.setattr(app_module.ResolveInput, "cached_response", cached_response)
+    response = await client.post(
+        "/ui/resolve",
+        headers=HTMX_HEADERS,
+        data={
+            "specs": "python",
+            "channels": "conda-forge",
+            "platforms": "linux-64",
+        },
+    )
+
+    heading = response.text.split("<h2>", 1)[1].split("</h2>", 1)[0]
+    assert " ".join(heading.split()) == expected_heading
+
+
+@pytest.mark.anyio
+async def test_workbench_resolve_uses_native_platform_default(
+    client,
+    monkeypatch,
+):
+    parse_calls = []
+
+    async def parse_input(
+        _request,
+        _content,
+        _filename,
+        target_platforms,
+        *,
+        transcode_format=None,
+    ):
+        parse_calls.append((target_platforms, transcode_format))
+        return ParsedInputFile(
+            specs=["python"],
+            channels=["conda-forge"],
+            environment_format=EnvironmentFormat.lockfile,
+            source_format="test-lockfile",
+            available_platforms=("linux-64", "osx-arm64"),
+        )
+
+    async def cached_response(source, _request, _selected_format=None):
+        return app_module.Response(
+            msgspec.json.encode(
+                [SolveResult(platform=source.platforms[0], packages=[])]
+            ),
+            media_type="application/json",
+        )
+
+    monkeypatch.setattr(app_module, "parse_input_for_request", parse_input)
+    monkeypatch.setattr(app_module.ResolveInput, "cached_response", cached_response)
+    response = await client.post(
+        "/ui/resolve",
+        headers=HTMX_HEADERS,
+        data={
+            "file": "lockfile content",
+            "filename": "pixi.lock",
+        },
+    )
+
+    assert response.status_code == 200
+    assert app_module.NATIVE_SUBDIR in response.text
+    assert parse_calls == [([app_module.NATIVE_SUBDIR], None)]
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("format_name", "content", "expected"),
+    [
+        pytest.param(
+            "",
+            msgspec.json.encode(
+                [
+                    SolveResult(
+                        platform="linux-64",
+                        packages=[
+                            ResolvedPackage(
+                                name="<unsafe>",
+                                version="1.0",
+                                build="h123_0",
+                                build_number=0,
+                                channel="conda-forge",
+                                subdir="linux-64",
+                                url="https://example.test/unsafe.conda",
+                                sha256="a" * 64,
+                                md5="b" * 32,
+                                size=10,
+                                depends=("python >=3.13",),
+                                constrains=(),
+                            )
+                        ],
+                    )
+                ]
+            ),
+            "Solved",
+            id="native-table",
+        ),
+        pytest.param(
+            "environment-yaml",
+            b"name: <unsafe>\ndependencies:\n  - python=3.13\n",
+            "Output ready",
+            id="exporter-output",
+        ),
+    ],
+)
+async def test_workbench_resolve_renders_cached_results(
+    client,
+    monkeypatch,
+    format_name,
+    content,
+    expected,
+):
+    calls = []
+
+    async def cached_response(source, request, selected_format=None):
+        calls.append(
+            (
+                source.specs,
+                source.channels,
+                source.platforms,
+                selected_format,
+            )
+        )
+        return app_module.Response(
+            content,
+            media_type="application/json" if not selected_format else "text/plain",
+            headers={"Location": f"/r/{'a' * 64}"},
+        )
+
+    monkeypatch.setattr(app_module.ResolveInput, "cached_response", cached_response)
+    response = await client.post(
+        "/ui/resolve",
+        headers=HTMX_HEADERS,
+        data={
+            "specs": "python=3.13\nnumpy",
+            "channels": "conda-forge",
+            "platforms": "linux-64",
+            "format": format_name,
+        },
+    )
+
+    assert response.status_code == 200
+    assert expected in response.text
+    assert "<unsafe>" not in response.text
+    assert "&lt;unsafe&gt;" in response.text
+    assert f'href="/r/{"a" * 64}"' in response.text
+    assert calls == [
+        (
+            ["python=3.13", "numpy"],
+            ["conda-forge"],
+            ["linux-64"],
+            format_name or None,
+        )
+    ]
+    assert response.headers["cache-control"] == "no-store"
+
+
+@pytest.mark.anyio
+async def test_workbench_resolve_renders_safe_error_fragment(
+    client,
+    monkeypatch,
+):
+    async def cached_response(_source, _request, _selected_format=None):
+        return app_module.Response(
+            {"error": "<script>alert(1)</script>"},
+            status_code=400,
+        )
+
+    monkeypatch.setattr(app_module.ResolveInput, "cached_response", cached_response)
+    response = await client.post(
+        "/ui/resolve",
+        headers=HTMX_HEADERS,
+        data={
+            "specs": "python",
+            "channels": "conda-forge",
+            "platforms": "linux-64",
+        },
+    )
+
+    assert response.status_code == 400
+    assert "HTTP 400" in response.text
+    assert "<script>alert(1)</script>" not in response.text
+    assert "&lt;script&gt;alert(1)&lt;/script&gt;" in response.text
+    assert response.headers["cache-control"] == "no-store"
+
+
+@pytest.mark.anyio
+async def test_workbench_resolve_reports_invalid_cached_payload(client, monkeypatch):
+    async def cached_response(_source, _request, _selected_format=None):
+        return app_module.Response(b"not json", media_type="application/json")
+
+    monkeypatch.setattr(app_module.ResolveInput, "cached_response", cached_response)
+    response = await client.post(
+        "/ui/resolve",
+        headers=HTMX_HEADERS,
+        data={
+            "specs": "python",
+            "channels": "conda-forge",
+            "platforms": "linux-64",
+        },
+    )
+
+    assert response.status_code == 500
+    assert "Internal solver output error" in response.text
 
 
 @pytest.mark.anyio

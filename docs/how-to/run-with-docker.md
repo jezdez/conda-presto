@@ -78,6 +78,11 @@ done
 curl --fail --silent --show-error http://127.0.0.1:8000/health
 ```
 
+Current-main server images expose the browser workbench at
+`http://127.0.0.1:8000/`. The 0.7.0 image still serves OpenAPI JSON at that
+path. Both expose the generated schema at
+`http://127.0.0.1:8000/openapi.json`.
+
 Inspect the server logs when startup takes longer than expected:
 
 ```bash

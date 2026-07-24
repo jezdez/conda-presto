@@ -53,6 +53,16 @@ Rate limiting and CORS
 : rate limiting is enabled by default per client IP. CORS is disabled unless
   `CONDA_PRESTO_CORS_ORIGINS` explicitly lists the expected frontend origins.
 
+Browser workbench
+: the first-party workbench renders through Jinja with autoescaping enabled.
+  HTMX, CSS, and templates are packaged with conda-presto. The page loads no
+  remote executable code and applies a content security policy that limits
+  scripts, styles, connections, forms, fonts, and images to the same origin.
+  HTMX evaluation, inserted script processing, and browser history caching are
+  disabled. User input, package metadata, errors, and exporter output remain
+  text. The workbench uses the public operations and cannot call the guarded
+  `/solver/v1` route.
+
 Access logging
 : public access logs contain the request path, method, content type, and
   response status. They omit headers, cookies, query parameters, and bodies.
@@ -133,6 +143,11 @@ not isolate Redis memory or eviction behavior.
 conda-presto does not terminate TLS or authenticate callers. CORS limits which
 browsers can read responses, and rate limiting bounds request volume per
 client address. Neither is an access-control mechanism.
+
+The packaged workbench is same-origin and does not depend on CORS. Configured
+CORS origins continue to govern separate browser applications that call the
+JSON API directly. Its HTML fragment routes require the header sent by HTMX, so
+ordinary cross-origin forms cannot trigger workbench parsing or solving.
 
 A network deployment therefore needs an explicit admission boundary. A reverse
 proxy can supply TLS and authentication, but the application must trust only

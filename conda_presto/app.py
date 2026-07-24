@@ -15,7 +15,7 @@ Endpoints:
 - ``GET /version`` — version info for conda-presto and dependencies
 - ``POST /parse`` — extract specs/channels from a file without solving
 - ``GET /health`` — reports solver readiness
-- ``GET /`` — OpenAPI 3.1 schema
+- ``GET /`` — first-party browser workbench
 - ``GET /openapi.json`` — OpenAPI 3.1 schema (auto-generated)
 
 Output formats:
@@ -82,6 +82,7 @@ from contextlib import AsyncExitStack, asynccontextmanager
 from dataclasses import dataclass, field, replace
 from functools import partial
 from importlib.metadata import version as pkg_version
+from pathlib import Path
 from typing import Annotated, Literal
 from urllib.parse import urlsplit
 
@@ -104,8 +105,15 @@ from litestar.middleware.logging import LoggingMiddlewareConfig
 from litestar.middleware.rate_limit import RateLimitConfig
 from litestar.openapi import OpenAPIConfig, ResponseSpec
 from litestar.openapi.plugins import JsonRenderPlugin
-from litestar.params import FromPath, FromQuery, QueryParameter
-from litestar.response import Response
+from litestar.params import (
+    FromPath,
+    FromQuery,
+    HeaderParameter,
+    QueryParameter,
+    URLEncodedBody,
+)
+from litestar.response import Response, Template
+from litestar.static_files import create_static_files_router
 from litestar.status_codes import (
     HTTP_400_BAD_REQUEST,
     HTTP_404_NOT_FOUND,
@@ -114,6 +122,12 @@ from litestar.status_codes import (
     HTTP_503_SERVICE_UNAVAILABLE,
     HTTP_504_GATEWAY_TIMEOUT,
 )
+from litestar.template.config import TemplateConfig
+
+try:
+    from litestar.plugins.jinja import JinjaTemplateEngine
+except ImportError:  # pragma: no cover - compatibility with Litestar 2.18-2.21
+    from litestar.contrib.jinja import JinjaTemplateEngine
 
 from .cache import ResultCache, SolverResultService
 from .config import (
@@ -183,6 +197,25 @@ RAW_CONTENT_TYPE_EXTENSIONS: dict[str, str] = {
     "application/x-toml": ".toml",
     "text/toml": ".toml",
     "text/plain": ".txt",
+}
+PACKAGE_DIR = Path(__file__).parent
+WORKBENCH_HEADERS = {
+    "Cache-Control": "no-store",
+    "Content-Security-Policy": (
+        "default-src 'none'; "
+        "base-uri 'none'; "
+        "connect-src 'self'; "
+        "font-src 'self'; "
+        "form-action 'self'; "
+        "frame-ancestors 'none'; "
+        "img-src 'self' data:; "
+        "object-src 'none'; "
+        "script-src 'self'; "
+        "style-src 'self'"
+    ),
+    "Referrer-Policy": "no-referrer",
+    "X-Content-Type-Options": "nosniff",
+    "X-Frame-Options": "DENY",
 }
 
 
@@ -281,6 +314,91 @@ class ResolveRequest:
                 supported=["application/json", *sorted(RAW_CONTENT_TYPE_EXTENSIONS)],
             ),
             status_code=HTTP_400_BAD_REQUEST,
+        )
+
+    async def preflight(self, request: Request) -> PreflightResult | Response:
+        """Validate this request without solving or channel access."""
+        specs = list(self.specs or [])
+        channels = list(self.channels or [])
+        if self.file is not None:
+            parsed = await parse_input_for_request(
+                request,
+                self.file,
+                self.filename,
+                self.platforms or [NATIVE_SUBDIR],
+            )
+            if isinstance(parsed, Response):
+                if parsed.status_code != HTTP_400_BAD_REQUEST:
+                    return parsed
+                return PreflightResult.from_values(
+                    specs,
+                    channels,
+                    self.file,
+                    str(parsed.content["error"]),
+                )
+            specs.extend(parsed.specs)
+            if not channels:
+                channels = parsed.channels
+
+        if cap_error := validate_caps(
+            specs,
+            channels,
+            self.platforms or [],
+            validate_channel_allowlist=False,
+        ):
+            return cap_error
+        return PreflightResult.from_values(specs, channels, self.file)
+
+
+@dataclass
+class WorkbenchForm:
+    """URL-encoded fields submitted by the browser workbench."""
+
+    specs: str = ""
+    channels: str = ""
+    platforms: str = ""
+    file: str = ""
+    filename: str = ""
+    format: str = ""
+
+    @property
+    def spec_values(self) -> list[str]:
+        """Return one package spec per non-empty line."""
+        return [value.strip() for value in self.specs.splitlines() if value.strip()]
+
+    @property
+    def channel_values(self) -> list[str]:
+        """Return comma- or line-separated channel values."""
+        return [
+            value.strip()
+            for line in self.channels.splitlines()
+            for value in line.split(",")
+            if value.strip()
+        ]
+
+    @property
+    def platform_values(self) -> list[str]:
+        """Return comma- or line-separated platform values."""
+        return [
+            value.strip()
+            for line in self.platforms.splitlines()
+            for value in line.split(",")
+            if value.strip()
+        ]
+
+    @property
+    def format_name(self) -> str | None:
+        """Return the selected exporter name, if any."""
+        return self.format.strip() or None
+
+    def resolve_request(self) -> ResolveRequest:
+        """Return the browser form as a normal resolve request."""
+        return ResolveRequest(
+            specs=self.spec_values,
+            channels=self.channel_values,
+            platforms=self.platform_values,
+            file=self.file or None,
+            filename=self.filename.strip() or None,
         )
 
 
@@ -386,6 +504,20 @@ class ResolveInput:
             return payload
         body, _ = payload
         return msgspec.json.decode(body, type=list[SolveResult])
+
+    async def cached_response(
+        self,
+        request: Request,
+        format_name: str | None = None,
+    ) -> Response:
+        """Return this solve through the shared HTTP result cache."""
+        return await run_cached_solve(
+            request,
+            self.specs,
+            self.channels,
+            self.platforms,
+            format_name=format_name,
+        )
 
 
 class DiffRequest(
@@ -1121,6 +1253,176 @@ def transcode_rejection(
     )
 
 
+@get("/", include_in_schema=False)
+async def workbench() -> Template:
+    """Serve the first-party conda-presto workbench."""
+    current_version = pkg_version("conda-presto")
+    return Template(
+        template_name="workbench.html",
+        context={
+            "channels": "\n".join(DEFAULT_CHANNELS),
+            "formats": OutputFormat.available(),
+            "platforms": NATIVE_SUBDIR,
+            "version": current_version,
+        },
+        headers=WORKBENCH_HEADERS,
+    )
+
+
+@get(
+    "/openapi.json",
+    media_type="application/vnd.oai.openapi+json",
+    include_in_schema=False,
+)
+async def openapi_json(request: Request) -> dict[str, object]:
+    """Serve the generated OpenAPI document at its stable public path."""
+    return request.app.openapi_schema.to_schema()
+
+
+@post("/ui/preflight", status_code=200, include_in_schema=False)
+async def workbench_preflight(
+    request: Request,
+    data: URLEncodedBody[WorkbenchForm],
+    hx_request: Annotated[
+        Literal["true"],
+        HeaderParameter(name="HX-Request"),
+    ],
+) -> Template:
+    """Render preflight findings for the browser workbench."""
+    started = time.perf_counter()
+    result = await data.resolve_request().preflight(request)
+    duration_ms = round((time.perf_counter() - started) * 1_000)
+    if isinstance(result, Response):
+        return Template(
+            template_name="fragments/error.html",
+            context={
+                "error": result.content,
+                "operation": "Preflight",
+                "status_code": result.status_code,
+            },
+            headers=WORKBENCH_HEADERS,
+            status_code=result.status_code,
+        )
+    return Template(
+        template_name="fragments/preflight.html",
+        context={"duration_ms": duration_ms, "result": result},
+        headers=WORKBENCH_HEADERS,
+    )
+
+
+@post("/ui/resolve", status_code=200, include_in_schema=False)
+async def workbench_resolve(
+    request: Request,
+    data: URLEncodedBody[WorkbenchForm],
+    hx_request: Annotated[
+        Literal["true"],
+        HeaderParameter(name="HX-Request"),
+    ],
+) -> Template:
+    """Render a cached solve or exporter result for the browser workbench."""
+    started = time.perf_counter()
+    source = await ResolveInput.from_request(
+        request,
+        data.resolve_request(),
+        [NATIVE_SUBDIR],
+    )
+    if isinstance(source, Response):
+        return Template(
+            template_name="fragments/error.html",
+            context={
+                "error": source.content,
+                "operation": "Resolve",
+                "status_code": source.status_code,
+            },
+            headers=WORKBENCH_HEADERS,
+            status_code=source.status_code,
+        )
+
+    response = await source.cached_response(request, data.format_name)
+    duration_ms = round((time.perf_counter() - started) * 1_000)
+    if (response.status_code or 200) >= HTTP_400_BAD_REQUEST:
+        return Template(
+            template_name="fragments/error.html",
+            context={
+                "error": response.content,
+                "operation": "Resolve",
+                "status_code": response.status_code,
+            },
+            headers=WORKBENCH_HEADERS,
+            status_code=response.status_code,
+        )
+
+    location = response.headers.get("Location")
+    if location is not None:
+        digest = location.removeprefix("/r/")
+        if (
+            location != f"/r/{digest}"
+            or len(digest) != 64
+            or not all(character in "0123456789abcdef" for character in digest)
+        ):
+            location = None
+    if data.format_name is not None:
+        try:
+            output = (
+                response.content.decode("utf-8")
+                if isinstance(response.content, bytes)
+                else str(response.content)
+            )
+        except UnicodeDecodeError:
+            log.exception("Unable to decode workbench exporter output")
+            return Template(
+                template_name="fragments/error.html",
+                context={
+                    "error": {"error": "Internal exporter output error"},
+                    "operation": "Resolve",
+                    "status_code": HTTP_500_INTERNAL_SERVER_ERROR,
+                },
+                headers=WORKBENCH_HEADERS,
+                status_code=HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+        return Template(
+            template_name="fragments/resolve.html",
+            context={
+                "duration_ms": duration_ms,
+                "format_name": data.format_name,
+                "location": location,
+                "output": output,
+                "results": None,
+                "failed_platforms": None,
+                "total_packages": None,
+            },
+            headers=WORKBENCH_HEADERS,
+        )
+
+    try:
+        results = msgspec.json.decode(response.content, type=list[SolveResult])
+    except (msgspec.DecodeError, msgspec.ValidationError, TypeError):
+        log.exception("Unable to decode workbench solve result")
+        return Template(
+            template_name="fragments/error.html",
+            context={
+                "error": {"error": "Internal solver output error"},
+                "operation": "Resolve",
+                "status_code": HTTP_500_INTERNAL_SERVER_ERROR,
+            },
+            headers=WORKBENCH_HEADERS,
+            status_code=HTTP_500_INTERNAL_SERVER_ERROR,
+        )
+    return Template(
+        template_name="fragments/resolve.html",
+        context={
+            "duration_ms": duration_ms,
+            "failed_platforms": sum(result.error is not None for result in results),
+            "format_name": None,
+            "location": location,
+            "output": None,
+            "results": results,
+            "total_packages": sum(len(result.packages) for result in results),
+        },
+        headers=WORKBENCH_HEADERS,
+    )
+
+
 @get("/resolve")
 async def resolve_get(
     request: Request,
@@ -1276,38 +1578,8 @@ async def preflight_post(
     if isinstance(data, Response):
         return data
 
-    specs = list(data.specs or [])
-    channels = list(data.channels or [])
-    if data.file is not None:
-        parsed = await parse_input_for_request(
-            request,
-            data.file,
-            data.filename,
-            data.platforms or [NATIVE_SUBDIR],
-        )
-        if isinstance(parsed, Response):
-            if parsed.status_code != HTTP_400_BAD_REQUEST:
-                return parsed
-            return Response(
-                PreflightResult.from_values(
-                    specs,
-                    channels,
-                    data.file,
-                    str(parsed.content["error"]),
-                )
-            )
-        specs.extend(parsed.specs)
-        if not channels:
-            channels = parsed.channels
-
-    if cap_error := validate_caps(
-        specs,
-        channels,
-        data.platforms or [],
-        validate_channel_allowlist=False,
-    ):
-        return cap_error
-    return Response(PreflightResult.from_values(specs, channels, data.file))
+    result = await data.preflight(request)
+    return result if isinstance(result, Response) else Response(result)
 
 
 @post(
@@ -2047,6 +2319,19 @@ if RATE_LIMIT:
 
 app = Litestar(
     route_handlers=[
+        workbench,
+        openapi_json,
+        workbench_preflight,
+        workbench_resolve,
+        create_static_files_router(
+            path="/assets",
+            directories=[PACKAGE_DIR / "static"],
+            cache_control=CacheControlHeader(
+                max_age=31_536_000,
+                public=True,
+                immutable=True,
+            ),
+        ),
         resolve_get,
         resolve_post,
         preflight_post,
@@ -2066,7 +2351,7 @@ app = Litestar(
         title="conda-presto",
         version=pkg_version("conda-presto"),
         description="Fast dry-run conda solver HTTP API.",
-        path="/",
+        path="/schema",
         render_plugins=[JsonRenderPlugin()],
     ),
     lifespan=[solver_resources_lifespan, solver_cache_refresher_lifespan],
@@ -2079,4 +2364,8 @@ app = Litestar(
         loggers={"conda_presto": {"level": LOG_LEVEL}},
     ),
     middleware=middleware,
+    template_config=TemplateConfig(
+        directory=PACKAGE_DIR / "templates",
+        engine=JinjaTemplateEngine,
+    ),
 )

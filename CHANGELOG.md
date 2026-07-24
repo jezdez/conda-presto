@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Serve a first-party HTMX workbench at `/` for preparing, resolving, examining, and exporting environments while keeping the OpenAPI document at `/openapi.json`.
+
 ## [0.7.0] - 2026-07-24
 
 ### Added

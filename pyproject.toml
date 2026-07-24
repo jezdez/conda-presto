@@ -119,6 +119,7 @@ sphinx-copybutton = ">=0.5"
 sphinxcontrib-mermaid = ">=1.0"
 
 [tool.pixi.feature.server.dependencies]
+jinja2 = ">=3.1.2"
 litestar = ">=2.18"
 pyjwt = ">=2.0"
 uvicorn = ">=0.34"

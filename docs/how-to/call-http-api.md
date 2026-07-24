@@ -109,8 +109,8 @@ curl --fail --silent --show-error \
 The generated schema does not describe the manually dispatched request bodies
 for `POST /resolve`, `POST /preflight`, or `POST /transcode`. Use
 {doc}`../reference/http-api` for those body contracts.
-The server intentionally provides JSON rather than an interactive browser
-renderer.
+The browser workbench at `/` is a separate first-party client. The schema at
+`/openapi.json` remains JSON for tools and generated clients.
 :::
 
 Use {doc}`inspect-environments` for preflight, repair, diff, and explain tasks.

@@ -38,6 +38,7 @@ conda create --name conda-presto-main \
   'conda>=26.5,<27' \
   'conda-rattler-solver>=0.1.1,<0.2' \
   'conda-lockfiles>=0.2.1' \
+  'jinja2>=3.1.2' \
   'litestar>=2.18' \
   'pyjwt>=2.0' \
   'uvicorn>=0.34' \
@@ -129,12 +130,16 @@ curl -sS http://127.0.0.1:8000/health
 ```
 
 The response is `{"status":"ok"}` when the server can accept solve requests.
-Fetch `http://127.0.0.1:8000/openapi.json` for the generated OpenAPI document.
+Current main serves the browser workbench at `http://127.0.0.1:8000/`. The
+0.7.0 release still serves OpenAPI JSON at that path. Fetch
+`http://127.0.0.1:8000/openapi.json` for the generated document in either
+version.
 
 ## Choose the next guide
 
 - {doc}`tutorials/cli-resolve` builds a multi-platform lockfile from start to finish.
 - {doc}`tutorials/http-api` introduces the HTTP workflow and result permalinks.
+- {doc}`tutorials/workbench` introduces the browser workflow.
 - {doc}`tutorials/review-and-repair` teaches preflight, repair, diff, and explain.
 - {doc}`tutorials/local-service` introduces the broker service and Presto solver.
 - {doc}`how-to/index` contains task-focused CLI, server, Docker, cache, and CI guides.
