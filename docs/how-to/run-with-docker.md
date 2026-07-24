@@ -1,7 +1,7 @@
 # Run conda-presto with Docker
 
 conda-presto provides an HTTP server image and a one-shot CLI image. The
-examples pin the 0.7.0 release.
+examples pin the 0.8.0 release.
 
 ## Choose image versions
 
@@ -9,12 +9,12 @@ Set the image variables once, then use the remaining commands unchanged.
 
 `````{tab-set}
 
-````{tab-item} 0.7.0 release
+````{tab-item} 0.8.0 release
 Select the exact server and CLI release tags:
 
 ```bash
-export CONDA_PRESTO_SERVER_IMAGE=ghcr.io/jezdez/conda-presto:0.7.0
-export CONDA_PRESTO_CLI_IMAGE=ghcr.io/jezdez/conda-presto:0.7.0-cli
+export CONDA_PRESTO_SERVER_IMAGE=ghcr.io/jezdez/conda-presto:0.8.0
+export CONDA_PRESTO_CLI_IMAGE=ghcr.io/jezdez/conda-presto:0.8.0-cli
 ```
 
 The publishing workflow does not overwrite exact release tags. Pin the image
@@ -30,13 +30,13 @@ explicit local names:
 docker build -f docker/Dockerfile \
   --target server \
   --build-arg PIXI_ENV=prod \
-  --build-arg CONDA_PRESTO_VERSION=0.7.1.dev0 \
+  --build-arg CONDA_PRESTO_VERSION=0.8.1.dev0 \
   --tag conda-presto-server:main .
 
 docker build -f docker/Dockerfile \
   --target cli \
   --build-arg PIXI_ENV=cli \
-  --build-arg CONDA_PRESTO_VERSION=0.7.1.dev0 \
+  --build-arg CONDA_PRESTO_VERSION=0.8.1.dev0 \
   --tag conda-presto-cli:main .
 
 export CONDA_PRESTO_SERVER_IMAGE=conda-presto-server:main
@@ -78,9 +78,8 @@ done
 curl --fail --silent --show-error http://127.0.0.1:8000/health
 ```
 
-Current-main server images expose the browser workbench at
-`http://127.0.0.1:8000/`. The 0.7.0 image still serves OpenAPI JSON at that
-path. Both expose the generated schema at
+The 0.8.0 server image and current-main builds expose the browser workbench at
+`http://127.0.0.1:8000/` and the generated OpenAPI document at
 `http://127.0.0.1:8000/openapi.json`.
 
 Inspect the server logs when startup takes longer than expected:

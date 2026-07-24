@@ -47,7 +47,7 @@ docker run --detach \
   --publish 127.0.0.1:8000:8000 \
   --cap-drop ALL \
   --security-opt no-new-privileges \
-  ghcr.io/jezdez/conda-presto:0.7.0
+  ghcr.io/jezdez/conda-presto:0.8.0
 for _ in {1..180}
 do
   if curl --fail --silent http://127.0.0.1:8000/health >/dev/null
@@ -61,7 +61,7 @@ curl --fail --silent --show-error http://127.0.0.1:8000/health
 
 The server image listens on port 8000 inside the container and runs one persistent foreground worker. It does not start conda-broker, expose the internal solver route, or run scheduled solver-cache refresh.
 
-Current main serves the browser workbench at `http://127.0.0.1:8000/`. The 0.7.0 image still serves OpenAPI JSON at that path. Both expose the generated document at `http://127.0.0.1:8000/openapi.json`.
+The 0.8.0 server image serves the browser workbench at `http://127.0.0.1:8000/` and the generated OpenAPI document at `http://127.0.0.1:8000/openapi.json`.
 
 See [Run conda-presto with Docker](https://jezdez.github.io/conda-presto/how-to/run-with-docker/) and the [Docker image reference](https://jezdez.github.io/conda-presto/reference/docker-images/).
 

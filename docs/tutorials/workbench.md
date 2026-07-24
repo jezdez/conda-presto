@@ -4,11 +4,6 @@ This tutorial prepares, resolves, examines, and exports one conda environment
 from the first-party browser interface. The workbench does not create or change
 an environment.
 
-:::{note}
-The workbench is available on current `main`. Use the current-main or source
-checkout installation in {doc}`../quickstart` while it remains unreleased.
-:::
-
 ## Start the server
 
 Start conda-presto in one terminal:

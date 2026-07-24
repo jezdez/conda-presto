@@ -19,13 +19,13 @@ files but does not start an HTTP server.
 
 ## Published tags
 
-For a release such as `v0.7.0`, the publishing workflow produces:
+For a release such as `v0.8.0`, the publishing workflow produces:
 
 | Server tag | CLI tag | Selection |
 |---|---|---|
 | `latest` | `cli` | Mutable flavor alias updated by each release |
-| `0.7.0` | `0.7.0-cli` | Immutable exact release tag |
-| `0.7` | `0.7-cli` | Mutable minor-line alias updated within the release line |
+| `0.8.0` | `0.8.0-cli` | Immutable exact release tag |
+| `0.8` | `0.8-cli` | Mutable minor-line alias updated within the release line |
 | `<short-git-sha>` | `<short-git-sha>-cli` | Immutable tag for the source revision |
 
 Major-zero releases do not publish `0` or `0-cli` because those aliases could
@@ -48,7 +48,7 @@ release image with GitHub CLI after authenticating to GHCR:
 
 ```bash
 gh attestation verify \
-  oci://ghcr.io/jezdez/conda-presto:0.7.0 \
+  oci://ghcr.io/jezdez/conda-presto:0.8.0 \
   --repo jezdez/conda-presto \
   --signer-workflow jezdez/conda-presto/.github/workflows/docker.yml
 ```
@@ -133,12 +133,12 @@ the source build.
 ```bash
 docker build -f docker/Dockerfile --target server \
   --build-arg PIXI_ENV=prod \
-  --build-arg CONDA_PRESTO_VERSION=0.7.0 \
+  --build-arg CONDA_PRESTO_VERSION=0.8.0 \
   -t conda-presto-server .
 
 docker build -f docker/Dockerfile --target cli \
   --build-arg PIXI_ENV=cli \
-  --build-arg CONDA_PRESTO_VERSION=0.7.0 \
+  --build-arg CONDA_PRESTO_VERSION=0.8.0 \
   -t conda-presto-cli .
 ```
 

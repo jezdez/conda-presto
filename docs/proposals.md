@@ -36,7 +36,13 @@ codebase.
 | [Recorded solver requests](https://github.com/jezdez/conda-presto/issues/77) | {bdg-success}`shipped` | Bounded request catalog for scheduled solver-cache refresh |
 | [Scheduled solver-cache refresh](https://github.com/jezdez/conda-presto/issues/78) | {bdg-success}`shipped` | Foreground-aware refresh of missing or stale private final states |
 
-## Future work
+## v0.8 browser workbench
+
+| Change | Status | Summary |
+|---|:---:|---|
+| [Browser workbench](https://github.com/jezdez/conda-presto/pull/89) | {bdg-success}`shipped` | First-party browser workbench for preflight, resolve, package inspection, and exporter output |
+
+## v0.9 trust and admission
 
 Provenance, attestation serving, admission control, and CEP alignment.
 
@@ -63,6 +69,8 @@ graph TD
     WC --> CW["scheduled solver-cache refresh\n(shipped)"]
     PF --> RPR
     E --> RPR
+    PF --> WB["browser workbench\n(shipped)"]
+    P --> WB
     PV --> A["signed provenance"]
     A --> CEP["CEP draft"]
     A --> S["attestation serving"]
@@ -72,7 +80,7 @@ graph TD
     GH --> D
 
     classDef shipped fill:#e6f4ea,stroke:#1e7e34,color:#0b3d1f;
-    class T,P,GH,PF,D,E,RPR,B,FS,WC,CW shipped;
+    class T,P,GH,PF,D,E,RPR,B,FS,WC,CW,WB shipped;
 ```
 
 HTTP lockfile transcoding reconstructs package records from embedded metadata
