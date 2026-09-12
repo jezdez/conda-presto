@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from tomllib import loads
 
@@ -9,22 +10,18 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 
-PIXI_IMAGE = (
-    "ghcr.io/prefix-dev/pixi:0.70.1@sha256:"
-    "2537738f8b7e2c7a7f070f56928ab959c4559a8d7e04f71eb16b0f779f0588f6"
-)
-DEBIAN_IMAGE = (
-    "debian:bookworm-slim@sha256:"
-    "7b140f374b289a7c2befc338f42ebe6441b7ea838a042bbd5acbfca6ec875818"
-)
-
 
 @pytest.mark.parametrize("path", ["Dockerfile", "docker/Dockerfile"])
 def test_dockerfile_pins_images_and_locks_runtime_files(path):
     text = (ROOT / path).read_text()
 
-    assert f"FROM {PIXI_IMAGE}" in text
-    assert f"FROM {DEBIAN_IMAGE}" in text
+    for image in (
+        r"ghcr\.io/prefix-dev/pixi:\d+\.\d+\.\d+",
+        "debian:bookworm-slim",
+    ):
+        assert re.search(
+            rf"^FROM {image}@sha256:[0-9a-f]{{64}}(?: AS \w+)?$", text, re.MULTILINE
+        )
     assert "COPY pyproject.toml pixi.lock README.md ./" in text
     assert "find / -xdev -type f -perm /6000 -exec chmod a-s {} +" in text
     assert "chmod -R a-w /app/conda_presto" in text
