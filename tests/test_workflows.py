@@ -105,7 +105,7 @@ def test_arm64_scan_builds_server_and_cli_images():
             "GHSA-4w2j-m93h-cj5j",
             "SubdirData and passes local SparseRepoData to "
             "rattler.solve_with_sparse_repodata",
-            "2026-08-31",
+            "2026-09-30",
             id="quinn-receive-stream",
         ),
     ],
