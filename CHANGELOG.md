@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Apply Debian's PCRE2 security updates when building container images.
+
 ## [0.8.0] - 2026-07-24
 
 ### Added
