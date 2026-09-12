@@ -18,6 +18,11 @@ FROM debian:bookworm-slim@sha256:abd67ffcfa541b485a3dff59865ab629aa048a6c613e639
 
 ARG PIXI_ENV=prod
 
+# The base image predates the PCRE2 security update.
+RUN apt-get update \
+    && apt-get install --only-upgrade --no-install-recommends -y libpcre2-8-0 \
+    && rm -rf /var/lib/apt/lists/*
+
 RUN groupadd --gid 10001 app \
     && useradd --uid 10001 --gid app --shell /usr/sbin/nologin --no-create-home app
 
