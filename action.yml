@@ -1,14 +1,10 @@
 name: conda-presto
-description: Resolve conda environments locally via the CLI or remotely via the HTTP API
+description: Resolve conda environments through an HTTP service
 branding:
   icon: package
   color: green
 
 inputs:
-  mode:
-    description: "Run mode: 'local' installs conda-presto on the runner, 'remote' calls a hosted endpoint"
-    required: false
-    default: local
   file:
     description: Path to an environment file (environment.yml, pixi.lock, etc.)
     required: false
@@ -29,8 +25,8 @@ inputs:
     description: Path to write the response body to
     required: false
   endpoint:
-    description: "conda-presto base URL (required when mode: remote)"
-    required: false
+    description: "conda-presto base URL"
+    required: true
 
 outputs:
   result:
@@ -43,76 +39,8 @@ outputs:
 runs:
   using: composite
   steps:
-    # Local mode: install Pixi, then run conda-presto from this checkout.
-    - name: Install Pixi
-      if: inputs.mode == 'local'
-      uses: prefix-dev/setup-pixi@a09b6247153796b190642a2b53fac4241043cf6f # v0.10.0
-      with:
-        pixi-version: v0.70.1
-        run-install: false
-
-    - name: Resolve (local)
-      id: local
-      if: inputs.mode == 'local'
-      shell: bash
-      env:
-        INPUT_FILE: ${{ inputs.file }}
-        INPUT_SPECS: ${{ inputs.specs }}
-        INPUT_CHANNELS: ${{ inputs.channels }}
-        INPUT_PLATFORMS: ${{ inputs.platforms }}
-        INPUT_FORMAT: ${{ inputs.format }}
-      run: |
-        set -euo pipefail
-
-        args=()
-
-        if [[ -n "${INPUT_FILE:-}" ]]; then
-          if [[ ! -f "${INPUT_FILE}" ]]; then
-            echo "::error::Input file not found"
-            exit 1
-          fi
-          args+=(-f "${INPUT_FILE}")
-        fi
-
-        if [[ -n "${INPUT_CHANNELS:-}" ]]; then
-          IFS=',' read -ra channels <<< "${INPUT_CHANNELS}"
-          for ch in "${channels[@]}"; do args+=(-c "${ch}"); done
-        fi
-
-        if [[ -n "${INPUT_PLATFORMS:-}" ]]; then
-          IFS=',' read -ra platforms <<< "${INPUT_PLATFORMS}"
-          for pl in "${platforms[@]}"; do args+=(-p "${pl}"); done
-        fi
-
-        if [[ -n "${INPUT_FORMAT:-}" ]]; then
-          args+=(--format "${INPUT_FORMAT}")
-        fi
-
-        if [[ -n "${INPUT_SPECS:-}" ]]; then
-          IFS=',' read -ra specs <<< "${INPUT_SPECS}"
-          args+=("${specs[@]}")
-        fi
-
-        echo "::group::conda-presto solve (local)"
-        [[ -n "${INPUT_FILE:-}" ]] && echo "file: provided" || echo "file: none"
-        [[ -n "${INPUT_SPECS:-}" ]] && echo "specs: provided" || echo "specs: none"
-        [[ -n "${INPUT_CHANNELS:-}" ]] && echo "channels: provided" || echo "channels: none"
-        [[ -n "${INPUT_PLATFORMS:-}" ]] && echo "platforms: provided" || echo "platforms: default"
-        [[ -n "${INPUT_FORMAT:-}" ]] && echo "format: provided" || echo "format: default"
-        echo "::endgroup::"
-
-        tmpout="$(mktemp)"
-        if pixi run --manifest-path "${GITHUB_ACTION_PATH}/pyproject.toml" -e cli conda-presto "${args[@]}" > "${tmpout}" 2>&1; then
-          echo "exit_code=0" >> "$GITHUB_OUTPUT"
-        else
-          echo "exit_code=$?" >> "$GITHUB_OUTPUT"
-        fi
-        echo "tmpout=${tmpout}" >> "$GITHUB_OUTPUT"
-
-    # Remote mode: POST to hosted endpoint.
-    - name: Resolve (remote)
+    - name: Resolve
       id: remote
-      if: inputs.mode == 'remote'
       shell: bash
       env:
         INPUT_FILE: ${{ inputs.file }}
@@ -125,7 +53,7 @@ runs:
         set -euo pipefail
 
         if [[ -z "${INPUT_ENDPOINT:-}" ]]; then
-          echo "::error::Input 'endpoint' is required when mode is 'remote'"
+          echo "::error::Input 'endpoint' is required"
           exit 1
         fi
         loopback_host='^http://(127[.]0[.]0[.]1|localhost)(:[0-9]+)?(/|$)'
@@ -177,7 +105,7 @@ runs:
           url="${url}?format=${encoded_format}"
         fi
 
-        echo "::group::conda-presto request (remote)"
+        echo "::group::conda-presto request"
         echo "endpoint: configured"
         echo "body_fields: $(printf '%s' "${body}" | jq -cr 'keys | join(",")')"
         [[ -n "${INPUT_FORMAT:-}" ]] && echo "format: provided" || echo "format: default"
@@ -207,29 +135,20 @@ runs:
         fi
         echo "tmpout=${tmpout}" >> "$GITHUB_OUTPUT"
 
-    # Shared output handling.
     - name: Process output
       id: output
       if: always()
       shell: bash
       env:
-        INPUT_MODE: ${{ inputs.mode }}
         INPUT_FORMAT: ${{ inputs.format }}
         INPUT_OUTPUT: ${{ inputs.output }}
-        LOCAL_EXIT: ${{ steps.local.outputs.exit_code }}
-        LOCAL_TMP: ${{ steps.local.outputs.tmpout }}
         REMOTE_EXIT: ${{ steps.remote.outputs.exit_code }}
         REMOTE_TMP: ${{ steps.remote.outputs.tmpout }}
       run: |
         set -euo pipefail
 
-        if [[ "${INPUT_MODE}" == "local" ]]; then
-          exit_code="${LOCAL_EXIT:-1}"
-          tmpout="${LOCAL_TMP:-}"
-        else
-          exit_code="${REMOTE_EXIT:-1}"
-          tmpout="${REMOTE_TMP:-}"
-        fi
+        exit_code="${REMOTE_EXIT:-1}"
+        tmpout="${REMOTE_TMP:-}"
 
         if [[ -z "${tmpout}" || ! -f "${tmpout}" ]]; then
           echo "solved=false" >> "$GITHUB_OUTPUT"

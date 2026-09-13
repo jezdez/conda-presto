@@ -6,7 +6,6 @@ on:
       - .github/workflows/docker.yml
       - conda_presto/**
       - Dockerfile
-      - docker/Dockerfile
       - pixi.lock
       - pyproject.toml
       - README.md
@@ -38,10 +37,8 @@ jobs:
       - uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7
         with:
           context: .
-          file: docker/Dockerfile
-          target: server
+          file: Dockerfile
           build-args: |
-            PIXI_ENV=prod
             CONDA_PRESTO_VERSION=${{ env.RELEASE_TAG }}
           load: true
           push: false
@@ -145,154 +142,11 @@ jobs:
         if: always()
         run: docker rm --force conda-presto-smoke || true
 
-  smoke-space:
-    name: Build and run Space image
-    if: github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-
-      - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4
-
-      - uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7
-        with:
-          context: .
-          file: Dockerfile
-          build-args: CONDA_PRESTO_VERSION=0.0.0
-          load: true
-          push: false
-          tags: conda-presto:space-smoke
-          cache-from: type=gha,scope=space-smoke
-          cache-to: type=gha,mode=max,scope=space-smoke
-
-      - name: Record all Space image vulnerabilities
-        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
-        with:
-          scan-type: image
-          image-ref: conda-presto:space-smoke
-          format: sarif
-          output: trivy-space-amd64.sarif
-          exit-code: "0"
-          scanners: vuln
-
-      - name: Upload Space vulnerability report
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: trivy-space-amd64
-          path: trivy-space-amd64.sarif
-          if-no-files-found: error
-
-      - name: Enforce fixed Space image vulnerabilities
-        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
-        with:
-          scan-type: image
-          image-ref: conda-presto:space-smoke
-          format: table
-          exit-code: "1"
-          ignore-unfixed: true
-          scanners: vuln
-          severity: HIGH,CRITICAL
-          trivyignores: .trivyignore.yaml
-
-      - name: Exercise Space image
-        run: |
-          docker run --detach --name conda-presto-space-smoke \
-            --publish 127.0.0.1:7860:7860 conda-presto:space-smoke
-          for _ in {1..180}; do
-            if curl --fail --silent http://127.0.0.1:7860/health >/dev/null; then
-              exit 0
-            fi
-            if ! docker inspect --format '{{.State.Running}}' conda-presto-space-smoke | grep -q true; then
-              exit 1
-            fi
-            sleep 1
-          done
-          exit 1
-
-      - name: Show Space logs
-        if: failure()
-        run: docker logs conda-presto-space-smoke || true
-
-      - name: Stop Space image
-        if: always()
-        run: docker rm --force conda-presto-space-smoke || true
-
-  smoke-cli:
-    name: Build and run CLI image
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-
-      - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4
-
-      - uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7
-        with:
-          context: .
-          file: docker/Dockerfile
-          target: cli
-          build-args: |
-            PIXI_ENV=cli
-            CONDA_PRESTO_VERSION=${{ env.RELEASE_TAG }}
-          load: true
-          push: false
-          tags: conda-presto:cli-smoke
-          cache-from: type=gha,scope=cli-smoke
-          cache-to: type=gha,mode=max,scope=cli-smoke
-
-      - name: Record all CLI image vulnerabilities
-        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
-        with:
-          scan-type: image
-          image-ref: conda-presto:cli-smoke
-          format: sarif
-          output: trivy-cli-amd64.sarif
-          exit-code: "0"
-          scanners: vuln
-
-      - name: Upload CLI vulnerability report
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: trivy-cli-amd64
-          path: trivy-cli-amd64.sarif
-          if-no-files-found: error
-
-      - name: Enforce fixed CLI image vulnerabilities
-        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
-        with:
-          scan-type: image
-          image-ref: conda-presto:cli-smoke
-          format: table
-          exit-code: "1"
-          ignore-unfixed: true
-          scanners: vuln
-          severity: HIGH,CRITICAL
-          trivyignores: .trivyignore.yaml
-
-      - name: Exercise CLI image
-        run: docker run --rm conda-presto:cli-smoke --help >/dev/null
-
   scan-arm64:
-    name: Build and scan arm64 ${{ matrix.flavor }} image
+    name: Build and scan arm64 server image
     runs-on: ubuntu-latest
     permissions:
       contents: read
-    strategy:
-      matrix:
-        include:
-          - flavor: server
-            target: server
-            pixi_env: prod
-          - flavor: cli
-            target: cli
-            pixi_env: cli
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -307,40 +161,38 @@ jobs:
       - uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7
         with:
           context: .
-          file: docker/Dockerfile
-          target: ${{ matrix.target }}
+          file: Dockerfile
           build-args: |
-            PIXI_ENV=${{ matrix.pixi_env }}
             CONDA_PRESTO_VERSION=${{ env.RELEASE_TAG }}
           platforms: linux/arm64
           load: true
           push: false
-          tags: conda-presto:${{ matrix.flavor }}-arm64-scan
-          cache-from: type=gha,scope=${{ matrix.flavor }}-arm64-scan
-          cache-to: type=gha,mode=max,scope=${{ matrix.flavor }}-arm64-scan
+          tags: conda-presto:server-arm64-scan
+          cache-from: type=gha,scope=server-arm64-scan
+          cache-to: type=gha,mode=max,scope=server-arm64-scan
 
-      - name: Record all arm64 ${{ matrix.flavor }} image vulnerabilities
+      - name: Record all arm64 server image vulnerabilities
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           scan-type: image
-          image-ref: conda-presto:${{ matrix.flavor }}-arm64-scan
+          image-ref: conda-presto:server-arm64-scan
           format: sarif
-          output: trivy-${{ matrix.flavor }}-arm64.sarif
+          output: trivy-server-arm64.sarif
           exit-code: "0"
           scanners: vuln
 
-      - name: Upload arm64 ${{ matrix.flavor }} vulnerability report
+      - name: Upload arm64 server vulnerability report
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: trivy-${{ matrix.flavor }}-arm64
-          path: trivy-${{ matrix.flavor }}-arm64.sarif
+          name: trivy-server-arm64
+          path: trivy-server-arm64.sarif
           if-no-files-found: error
 
-      - name: Enforce fixed arm64 ${{ matrix.flavor }} image vulnerabilities
+      - name: Enforce fixed arm64 server image vulnerabilities
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           scan-type: image
-          image-ref: conda-presto:${{ matrix.flavor }}-arm64-scan
+          image-ref: conda-presto:server-arm64-scan
           format: table
           exit-code: "1"
           ignore-unfixed: true
@@ -349,18 +201,11 @@ jobs:
           trivyignores: .trivyignore.yaml
 
   metadata-smoke:
-    name: Verify ${{ matrix.flavor }} image metadata
+    name: Verify server image metadata
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     permissions:
       contents: read
-    strategy:
-      matrix:
-        include:
-          - flavor: server
-            suffix: ""
-          - flavor: cli
-            suffix: -cli
     steps:
       - uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6
         id: meta
@@ -368,57 +213,37 @@ jobs:
           images: ghcr.io/${{ github.repository }}
           flavor: latest=false
           tags: |
-            type=semver,pattern={{version}},value=${{ env.RELEASE_TAG }},suffix=${{ matrix.suffix }}
-            type=semver,pattern={{major}}.{{minor}},value=${{ env.RELEASE_TAG }},suffix=${{ matrix.suffix }}
-            type=semver,pattern={{major}},value=${{ env.RELEASE_TAG }},suffix=${{ matrix.suffix }},enable=${{ !startsWith(env.RELEASE_TAG, 'v0.') && !startsWith(env.RELEASE_TAG, '0.') }}
-            type=raw,value=latest,enable=${{ matrix.flavor == 'server' }}
-            type=raw,value=cli,enable=${{ matrix.flavor == 'cli' }}
+            type=semver,pattern={{version}},value=${{ env.RELEASE_TAG }}
+            type=semver,pattern={{major}}.{{minor}},value=${{ env.RELEASE_TAG }}
+            type=semver,pattern={{major}},value=${{ env.RELEASE_TAG }},enable=${{ !startsWith(env.RELEASE_TAG, 'v0.') && !startsWith(env.RELEASE_TAG, '0.') }}
+            type=raw,value=latest
 
       - name: Verify test tags
         shell: bash
         env:
-          FLAVOR: ${{ matrix.flavor }}
           IMAGE: ghcr.io/${{ github.repository }}
           TAGS: ${{ steps.meta.outputs.tags }}
         run: |
           set -euo pipefail
 
-          if test "$FLAVOR" = server; then
-            expected="$(printf '%s\n' \
-              "$IMAGE:0.0.0" \
-              "$IMAGE:0.0" \
-              "$IMAGE:latest")"
-          else
-            expected="$(printf '%s\n' \
-              "$IMAGE:0.0.0-cli" \
-              "$IMAGE:0.0-cli" \
-              "$IMAGE:cli")"
-          fi
+          expected="$(printf '%s\n' \
+            "$IMAGE:0.0.0" \
+            "$IMAGE:0.0" \
+            "$IMAGE:latest")"
 
           diff -u \
             <(sort <<<"$expected") \
             <(sort <<<"$TAGS")
 
   build-and-push:
-    name: Build and push ${{ matrix.flavor }} image
+    name: Build and push server image
     if: github.event_name != 'pull_request'
-    needs: [smoke-server, smoke-cli, scan-arm64]
+    needs: [smoke-server, scan-arm64]
     runs-on: ubuntu-latest
     environment: ghcr
     permissions:
       contents: read # Check out the release source.
       packages: write # Publish images to GitHub Container Registry.
-    strategy:
-      matrix:
-        include:
-          - flavor: server
-            target: server
-            pixi_env: prod
-            suffix: ""
-          - flavor: cli
-            target: cli
-            pixi_env: cli
-            suffix: -cli
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -438,21 +263,18 @@ jobs:
           images: ghcr.io/${{ github.repository }}
           flavor: latest=false
           tags: |
-            type=semver,pattern={{version}},value=${{ env.RELEASE_TAG }},suffix=${{ matrix.suffix }}
-            type=semver,pattern={{major}}.{{minor}},value=${{ env.RELEASE_TAG }},suffix=${{ matrix.suffix }}
-            type=semver,pattern={{major}},value=${{ env.RELEASE_TAG }},suffix=${{ matrix.suffix }},enable=${{ !startsWith(env.RELEASE_TAG, 'v0.') && !startsWith(env.RELEASE_TAG, '0.') }}
-            type=raw,value=latest,enable=${{ matrix.flavor == 'server' }}
-            type=raw,value=cli,enable=${{ matrix.flavor == 'cli' }}
-            type=sha,prefix=,suffix=${{ matrix.suffix }}
+            type=semver,pattern={{version}},value=${{ env.RELEASE_TAG }}
+            type=semver,pattern={{major}}.{{minor}},value=${{ env.RELEASE_TAG }}
+            type=semver,pattern={{major}},value=${{ env.RELEASE_TAG }},enable=${{ !startsWith(env.RELEASE_TAG, 'v0.') && !startsWith(env.RELEASE_TAG, '0.') }}
+            type=raw,value=latest
+            type=sha,prefix=
 
       - name: Verify image tags
         shell: bash
         env:
-          FLAVOR: ${{ matrix.flavor }}
           IMAGE: ghcr.io/${{ github.repository }}
           RELEASE_TAG: ${{ env.RELEASE_TAG }}
           SOURCE_COMMIT: ${{ github.sha }}
-          SUFFIX: ${{ matrix.suffix }}
           TAGS: ${{ steps.meta.outputs.tags }}
         run: |
           set -euo pipefail
@@ -462,37 +284,25 @@ jobs:
           major="${version%%.*}"
           short_commit="${SOURCE_COMMIT:0:7}"
 
-          grep -Fxq "$IMAGE:$version$SUFFIX" <<<"$TAGS"
-          grep -Fxq "$IMAGE:$minor$SUFFIX" <<<"$TAGS"
+          grep -Fxq "$IMAGE:$version" <<<"$TAGS"
+          grep -Fxq "$IMAGE:$minor" <<<"$TAGS"
 
           if test "$major" = 0; then
-            if grep -Fxq "$IMAGE:$major$SUFFIX" <<<"$TAGS"; then
+            if grep -Fxq "$IMAGE:$major" <<<"$TAGS"; then
               echo "Major-zero alias must not be published" >&2
               exit 1
             fi
           else
-            grep -Fxq "$IMAGE:$major$SUFFIX" <<<"$TAGS"
+            grep -Fxq "$IMAGE:$major" <<<"$TAGS"
           fi
 
-          if test "$FLAVOR" = server; then
-            grep -Fxq "$IMAGE:latest" <<<"$TAGS"
-            if grep -Fxq "$IMAGE:cli" <<<"$TAGS"; then
-              echo "Server metadata contains the CLI alias" >&2
-              exit 1
-            fi
-          else
-            grep -Fxq "$IMAGE:cli" <<<"$TAGS"
-            if grep -Eq "^$IMAGE:(latest|cli-cli)$" <<<"$TAGS"; then
-              echo "CLI metadata contains a reserved server or duplicate CLI alias" >&2
-              exit 1
-            fi
-          fi
+          grep -Fxq "$IMAGE:latest" <<<"$TAGS"
 
-          grep -Eq "^$IMAGE:[0-9a-f]{7}$SUFFIX$" <<<"$TAGS"
+          grep -Eq "^$IMAGE:[0-9a-f]{7}$" <<<"$TAGS"
 
           for immutable_tag in \
-            "$IMAGE:$version$SUFFIX" \
-            "$IMAGE:$short_commit$SUFFIX"; do
+            "$IMAGE:$version" \
+            "$IMAGE:$short_commit"; do
             if output="$(docker buildx imagetools inspect "$immutable_tag" 2>&1)"; then
               echo "Immutable image tag already exists: $immutable_tag" >&2
               exit 1
@@ -508,10 +318,8 @@ jobs:
         id: push
         with:
           context: .
-          file: docker/Dockerfile
-          target: ${{ matrix.target }}
+          file: Dockerfile
           build-args: |
-            PIXI_ENV=${{ matrix.pixi_env }}
             CONDA_PRESTO_VERSION=${{ env.RELEASE_TAG }}
           platforms: linux/amd64,linux/arm64
           push: true
@@ -519,29 +327,28 @@ jobs:
           sbom: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha,scope=${{ matrix.flavor }}
-          cache-to: type=gha,mode=max,scope=${{ matrix.flavor }}
+          cache-from: type=gha,scope=server
+          cache-to: type=gha,mode=max,scope=server
 
       - name: Save image digest
         env:
           DIGEST: ${{ steps.push.outputs.digest }}
-          FLAVOR: ${{ matrix.flavor }}
         run: |
           if [[ ! "$DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]; then
             echo "Build did not return a valid image digest" >&2
             exit 1
           fi
           mkdir image-digest
-          printf '%s\n' "$DIGEST" > "image-digest/$FLAVOR"
+          printf '%s\n' "$DIGEST" > image-digest/server
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: image-${{ matrix.flavor }}-digest
-          path: image-digest/${{ matrix.flavor }}
+          name: image-server-digest
+          path: image-digest/server
           if-no-files-found: error
 
   attest-images:
-    name: Attest ${{ matrix.flavor }} image
+    name: Attest server image
     needs: [build-and-push]
     runs-on: ubuntu-latest
     permissions:
@@ -550,25 +357,16 @@ jobs:
       contents: read
       id-token: write # Sign image provenance with GitHub's OIDC identity.
       packages: write # Attach provenance to the published image.
-    strategy:
-      matrix:
-        include:
-          - flavor: server
-            suffix: ""
-          - flavor: cli
-            suffix: -cli
     steps:
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          name: image-${{ matrix.flavor }}-digest
+          name: image-server-digest
           path: image-digest/
 
       - name: Read image digest
         id: digest
-        env:
-          FLAVOR: ${{ matrix.flavor }}
         run: |
-          digest="$(cat "image-digest/$FLAVOR")"
+          digest="$(cat image-digest/server)"
           if [[ ! "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]; then
             echo "Artifact does not contain a valid image digest" >&2
             exit 1

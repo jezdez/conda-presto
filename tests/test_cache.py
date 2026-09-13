@@ -16,7 +16,6 @@ from litestar.stores.redis import RedisStore
 import conda_presto.cache as cache_module
 from conda_presto.cache import ResolveCacheContext, ResultCache, StoredResult
 from conda_presto.resolve import RepodataSnapshot
-from conda_presto.solver import PrestoSolveRequest, PrestoSolveResponse
 from conda_presto.storage import StoreOperationCoordinator
 
 
@@ -36,321 +35,161 @@ def resolve_cache_state():
 
 
 @pytest.mark.anyio
-async def test_solver_cache_replaces_one_persistent_entry(
-    monkeypatch,
-    presto_solver_request,
-    presto_solver_outcome,
-    fresh_repodata_snapshot,
-    persistent_store,
+@pytest.mark.parametrize("failure", ["error", "timeout", "oversized"])
+async def test_result_cache_omits_permalink_after_persistent_write_failure(
+    monkeypatch, failure
 ):
-    store = persistent_store
-    store_operations = StoreOperationCoordinator(store)
-    cache = ResultCache(max_size=256, store_operations=store_operations)
-    previous = fresh_repodata_snapshot
-    current = RepodataSnapshot(
-        (("https://conda.example/linux-64", "repodata.json", 20, 2),),
-        False,
-    )
-    snapshots = iter([previous, current])
-    monkeypatch.setattr(
-        PrestoSolveRequest,
-        "repodata_snapshot",
-        lambda _: next(snapshots),
-    )
+    release = anyio.Event()
 
-    async with store_operations.lifespan():
-        first, first_status = await cache.publish_solver(
-            presto_solver_request,
-            presto_solver_outcome(
-                PrestoSolveResponse(records=[{"name": "old"}], neutered=[]),
-                previous,
-            ),
-        )
-        second, second_status = await cache.publish_solver(
-            presto_solver_request,
-            presto_solver_outcome(
-                PrestoSolveResponse(records=[{"name": "new"}], neutered=[]),
-                current,
-            ),
-        )
-
-    key = ResultCache.solver_key(presto_solver_request.cache_key())
-    payload = await store.get(key)
-    stored = msgspec.msgpack.decode(payload, type=cache_module.StoredSolverResult)
-    assert first_status == second_status == "published"
-    assert first.metadata_used == previous
-    assert second.metadata_used == current
-    assert list(cache.entries) == [key]
-    assert stored.response.records == [{"name": "new"}]
-    assert stored.metadata_used == current
-
-
-@pytest.mark.anyio
-async def test_solver_cache_keeps_matching_entry_during_publication(
-    monkeypatch,
-    presto_solver_request,
-    presto_solver_outcome,
-    fresh_repodata_snapshot,
-):
-    cache = ResultCache(max_size=256)
-    key = ResultCache.solver_key(presto_solver_request.cache_key())
-    current = cache_module.StoredSolverResult(
-        response=PrestoSolveResponse(records=[{"name": "current"}], neutered=[]),
-        metadata_used=fresh_repodata_snapshot,
-    )
-    cache.remember_memory(key, current)
-    monkeypatch.setattr(
-        PrestoSolveRequest,
-        "repodata_snapshot",
-        lambda _: fresh_repodata_snapshot,
-    )
-
-    stored, status = await cache.publish_solver(
-        presto_solver_request,
-        presto_solver_outcome(
-            PrestoSolveResponse(records=[{"name": "late"}], neutered=[]),
-            fresh_repodata_snapshot,
-        ),
-    )
-
-    assert status == "already-current"
-    assert stored is current
-    assert cache.entries[key].response.records == [{"name": "current"}]
-
-
-@pytest.mark.anyio
-async def test_solver_cache_reports_required_persistence_failure(
-    monkeypatch,
-    presto_solver_request,
-    presto_solver_outcome,
-):
-    class RecoveringStore(MemoryStore):
-        attempts = 0
-
-        async def set(self, key, value, expires_in=None):
-            self.attempts += 1
-            if self.attempts == 1:
-                raise RuntimeError("store unavailable")
-            await super().set(key, value, expires_in)
-
-    repodata = RepodataSnapshot(
-        (("https://conda.example/linux-64", "repodata.json", 10, 1),),
-        False,
-    )
-    current = cache_module.StoredSolverResult(
-        response=PrestoSolveResponse(records=[{"name": "current"}], neutered=[]),
-        metadata_used=repodata,
-    )
-    store = RecoveringStore()
-    store_operations = StoreOperationCoordinator(store)
-    cache = ResultCache(max_size=256, store_operations=store_operations)
-    key = ResultCache.solver_key(presto_solver_request.cache_key())
-    cache.remember_memory(key, current)
-    monkeypatch.setattr(
-        PrestoSolveRequest,
-        "repodata_snapshot",
-        lambda _: repodata,
-    )
-
-    outcome = presto_solver_outcome(
-        PrestoSolveResponse(records=[{"name": "late"}], neutered=[]),
-        repodata,
-    )
-    async with store_operations.lifespan():
-        stored, status = await cache.publish_solver(
-            presto_solver_request,
-            outcome,
-            require_persistent=True,
-        )
-        retained = key in cache.entries
-        recovered = await cache_module.SolverResultService(
-            cache=cache,
-            require_persistent=True,
-        ).inspect(presto_solver_request)
-
-    assert stored is current
-    assert status == "persistent-failed"
-    assert retained
-    assert recovered.cached
-    assert cache.entries[key].response.records == [{"name": "current"}]
-    assert store.attempts == 2
-
-
-@pytest.mark.anyio
-async def test_solver_cache_does_not_retain_credentialed_requests(
-    monkeypatch,
-    make_presto_solver_request,
-    presto_solver_outcome,
-):
-    class RecordingStore(MemoryStore):
-        def __init__(self):
-            super().__init__()
-            self.reads = []
-            self.writes = []
-
-        async def get(self, key):
-            self.reads.append(key)
-            return await super().get(key)
-
-        async def set(self, key, value, expires_in=None):
-            self.writes.append((key, value))
-            await super().set(key, value, expires_in)
-
-    request = make_presto_solver_request(
-        channels=[Channel("https://user:secret@repo.example/channel").dump()]
-    )
-    repodata = RepodataSnapshot((), False)
-    outcome = presto_solver_outcome(
-        PrestoSolveResponse(
-            records=[
-                {
-                    "name": "zlib",
-                    "url": "https://user:secret@repo.example/channel/zlib.conda",
-                }
-            ],
-            neutered=[],
-        ),
-        repodata,
-    )
-    monkeypatch.setattr(
-        PrestoSolveRequest,
-        "cache_key",
-        lambda _: pytest.fail("credentialed request reached cache key generation"),
-    )
-    monkeypatch.setattr(
-        PrestoSolveRequest,
-        "repodata_snapshot",
-        lambda _: pytest.fail("credentialed request reached repodata lookup"),
-    )
-    store = RecordingStore()
-    store_operations = StoreOperationCoordinator(store)
-    cache = ResultCache(max_size=256, store_operations=store_operations)
-
-    async with store_operations.lifespan():
-        assert await cache.get_solver_result(request) is None
-        probe = await cache.inspect_solver_result(request)
-        stored, status = await cache.publish_solver(request, outcome)
-
-    assert request.has_detected_credentials()
-    assert not probe.cached
-    assert probe.current is None
-    assert stored is None
-    assert status == "not-retained"
-    assert cache.entries == {}
-    assert store.reads == []
-    assert store.writes == []
-
-
-@pytest.mark.anyio
-async def test_solver_cache_does_not_retain_credentialed_results(
-    monkeypatch,
-    presto_solver_request,
-    presto_solver_outcome,
-    fresh_repodata_snapshot,
-):
-    store = MemoryStore()
-    store_operations = StoreOperationCoordinator(store)
-    cache = ResultCache(max_size=256, store_operations=store_operations)
-    outcome = presto_solver_outcome(
-        PrestoSolveResponse(
-            records=[
-                {
-                    "name": "zlib",
-                    "url": "https://user:secret@cdn.example.test/zlib.conda",
-                }
-            ],
-            neutered=[],
-        ),
-        fresh_repodata_snapshot,
-    )
-    monkeypatch.setattr(
-        PrestoSolveRequest,
-        "repodata_snapshot",
-        lambda _: fresh_repodata_snapshot,
-    )
-    key = ResultCache.solver_key(presto_solver_request.cache_key())
-
-    async with store_operations.lifespan():
-        stored, status = await cache.publish_solver(presto_solver_request, outcome)
-
-    assert stored is not None
-    assert status == "not-retained"
-    assert cache.entries == {}
-    assert await store.get(key) is None
-
-
-@pytest.mark.anyio
-async def test_solver_cache_deletes_credentialed_persistent_results(
-    monkeypatch,
-    presto_solver_request,
-    fresh_repodata_snapshot,
-):
-    stored = cache_module.StoredSolverResult(
-        response=PrestoSolveResponse(
-            records=[
-                {
-                    "name": "zlib",
-                    "url": "https://cdn.example.test/zlib.conda?signature=secret",
-                }
-            ],
-            neutered=[],
-        ),
-        metadata_used=fresh_repodata_snapshot,
-    )
-    store = MemoryStore()
-    key = ResultCache.solver_key(presto_solver_request.cache_key())
-    await store.set(key, msgspec.msgpack.encode(stored))
-    store_operations = StoreOperationCoordinator(store)
-    cache = ResultCache(max_size=256, store_operations=store_operations)
-    monkeypatch.setattr(
-        PrestoSolveRequest,
-        "repodata_snapshot",
-        lambda _: pytest.fail("credentialed result reached repodata lookup"),
-    )
-
-    async with store_operations.lifespan():
-        result = await cache.get_solver_result(presto_solver_request)
-
-    assert result is None
-    assert await store.get(key) is None
-
-
-@pytest.mark.anyio
-async def test_result_cache_isolates_persistent_read_and_write_errors():
     class FailingStore:
         async def get(self, _key):
             raise RuntimeError("store unavailable")
 
         async def set(self, _key, _value, expires_in=None):
-            raise RuntimeError("store unavailable")
+            if failure == "timeout":
+                await release.wait()
+            else:
+                raise RuntimeError("store unavailable")
 
+    if failure == "oversized":
+        monkeypatch.setattr(cache_module, "RESULT_CACHE_MAX_STORED_BYTES", 1)
+    monkeypatch.setattr(cache_module, "RESULT_CACHE_STORE_TIMEOUT_S", 0.01)
     store_operations = StoreOperationCoordinator(FailingStore())
     cache = ResultCache(max_size=1, store_operations=store_operations)
+    cache.remember_memory("public", StoredResult(b"previous", "text/plain"))
 
     async with store_operations.lifespan():
-        missing = await cache.get_response("missing", location="/r/missing")
-        retention = await cache.store_entry(
-            "public",
-            cache_module.StoredResult(b"body", "text/plain"),
-        )
+        response = await cache.remember("public", b"body", "text/plain")
+        release.set()
+        missing = await cache.get_response("public", location="/r/public")
 
+    assert response.content == b"body"
+    assert "Location" not in response.headers
+    assert response.headers["Cache-Control"] == "no-store"
     assert missing is None
-    assert retention.retained
-    assert retention.persistent_failed
+    assert not cache.entries
+    assert cache.current_bytes == 0
 
 
 @pytest.mark.anyio
-async def test_result_cache_discards_a_wrong_typed_memory_entry():
-    cache = ResultCache(max_size=8)
-    stored = cache_module.StoredSolverResult(
-        response=PrestoSolveResponse(records=[], neutered=[]),
-        metadata_used=RepodataSnapshot((), False),
-    )
-    cache.remember_memory("key", stored)
+@pytest.mark.parametrize("max_size", [0, 1], ids=["store-only", "memory-and-store"])
+async def test_result_cache_publishes_a_permalink_readable_by_another_instance(
+    max_size,
+):
+    store = MemoryStore()
+    first_operations = StoreOperationCoordinator(store)
+    second_operations = StoreOperationCoordinator(store)
+    first = ResultCache(max_size=max_size, store_operations=first_operations)
+    second = ResultCache(max_size=1, store_operations=second_operations)
 
-    assert await cache.get_response("key", location="/r/key") is None
-    assert cache.entries == {}
+    async with first_operations.lifespan(), second_operations.lifespan():
+        response = await first.remember("public", b"body", "text/plain")
+        retrieved = await second.get_response(
+            ResultCache.resolve_key(response.headers["Location"].rsplit("/", 1)[1]),
+            immutable=True,
+        )
+
+    assert response.headers["Location"].startswith("/r/")
+    assert retrieved is not None
+    assert retrieved.content == response.content == b"body"
+    assert retrieved.media_type == response.media_type == "text/plain"
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("same_body", [False, True], ids=["timestamp", "media-type"])
+async def test_changed_output_has_a_new_immutable_location(same_body):
+    cache = ResultCache(max_size=8)
+    first_body = b'{"metadata":{"timestamp":"2026-09-13T00:00:00Z"}}'
+    second_body = (
+        first_body
+        if same_body
+        else b'{"metadata":{"timestamp":"2026-09-13T00:00:01Z"}}'
+    )
+    first = await cache.remember("request", first_body, "application/json")
+    second = await cache.remember(
+        "request", second_body, "text/plain" if same_body else "application/json"
+    )
+
+    assert first.headers["Location"] != second.headers["Location"]
+    for response in (first, second):
+        digest = response.headers["Location"].rsplit("/", 1)[1]
+        retained = await cache.get_response(cache.resolve_key(digest), immutable=True)
+        assert retained.content == response.content
+        assert retained.media_type == response.media_type
+    latest = await cache.get_response("request")
+    assert latest.headers["Location"] == second.headers["Location"]
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("publication_succeeds", [True, False])
+async def test_cached_request_republishes_missing_artifact(
+    monkeypatch, publication_succeeds
+):
+    store_operations = StoreOperationCoordinator(MemoryStore())
+    cache = ResultCache(max_size=8, store_operations=store_operations)
+    async with store_operations.lifespan():
+        first = await cache.remember("request", b"body", "text/plain")
+        digest = first.headers["Location"].rsplit("/", 1)[1]
+        artifact_key = cache.resolve_key(digest)
+        await cache.discard(artifact_key)
+        if not publication_succeeds:
+
+            async def fail_publication(*_args, **_kwargs):
+                return False
+
+            monkeypatch.setattr(store_operations, "set", fail_publication)
+        cached = await cache.get_response("request")
+        artifact = await cache.get_response(artifact_key, immutable=True)
+
+    assert cached.content == b"body"
+    assert ("Location" in cached.headers) is publication_succeeds
+    assert (artifact is not None) is publication_succeeds
+    if publication_succeeds:
+        assert cached.headers["Location"] == first.headers["Location"]
+        assert artifact.content == b"body"
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("source", ["memory", "store"])
+async def test_artifact_lookup_rejects_valid_data_under_the_wrong_digest(source):
+    store = MemoryStore()
+    store_operations = StoreOperationCoordinator(store)
+    cache = ResultCache(max_size=8, store_operations=store_operations)
+    key = cache.resolve_key("a" * 64)
+    stored = StoredResult(b"different artifact", "text/plain")
+    await store.set(key, msgspec.msgpack.encode(stored))
+    if source == "memory":
+        cache.remember_memory(key, stored)
+
+    async with store_operations.lifespan():
+        result = await cache.get_response(key, immutable=True)
+
+    assert result is None
+    assert not cache.entries
     assert cache.current_bytes == 0
+    assert await store.get(key) is None
+
+
+@pytest.mark.anyio
+async def test_result_cache_retains_sbom_package_and_environment_identifiers():
+    cache = ResultCache(max_size=4)
+    body = msgspec.json.encode(
+        {
+            "components": [
+                {
+                    "purl": (
+                        "pkg:conda/zlib@1.3?build=0&channel=conda-forge&subdir=linux-64"
+                    ),
+                    "bom-ref": "conda-environment:environment?platform=linux-64",
+                }
+            ]
+        }
+    )
+    response = await cache.remember("request", body, "application/json")
+
+    digest = response.headers["Location"].rsplit("/", 1)[1]
+    retained = await cache.get_response(cache.resolve_key(digest), immutable=True)
+    assert retained.content == body
 
 
 @pytest.mark.anyio
@@ -375,206 +214,6 @@ async def test_result_cache_persistent_read_has_a_caller_deadline(monkeypatch):
         assert await cache.get_response("key", location="/r/key") is None
         await started.wait()
         release.set()
-
-
-@pytest.mark.anyio
-async def test_solver_cache_advisory_read_keeps_newer_memory_entry(
-    monkeypatch,
-    presto_solver_request,
-):
-    previous = RepodataSnapshot(
-        (("https://conda.example/linux-64", "repodata.json", 10, 1),),
-        False,
-    )
-    current = RepodataSnapshot(
-        (("https://conda.example/linux-64", "repodata.json", 20, 2),),
-        False,
-    )
-    old = cache_module.StoredSolverResult(
-        response=PrestoSolveResponse(records=[{"name": "old"}], neutered=[]),
-        metadata_used=previous,
-    )
-    new = cache_module.StoredSolverResult(
-        response=PrestoSolveResponse(records=[{"name": "new"}], neutered=[]),
-        metadata_used=current,
-    )
-    started = anyio.Event()
-    release = anyio.Event()
-
-    class Store:
-        async def get(self, _key):
-            started.set()
-            await release.wait()
-            return msgspec.msgpack.encode(old)
-
-    store_operations = StoreOperationCoordinator(Store())
-    cache = ResultCache(max_size=256, store_operations=store_operations)
-    key = ResultCache.solver_key(presto_solver_request.cache_key())
-    monkeypatch.setattr(
-        PrestoSolveRequest,
-        "repodata_snapshot",
-        lambda _: current,
-    )
-    states = []
-
-    async def inspect():
-        states.append(await cache.inspect_solver_result(presto_solver_request))
-
-    async with store_operations.lifespan():
-        async with anyio.create_task_group() as tasks:
-            tasks.start_soon(inspect)
-            await started.wait()
-            cache.remember_memory(key, new)
-            release.set()
-
-    assert states[0].cached
-    assert cache.entries[key] is new
-
-
-@pytest.mark.anyio
-async def test_solver_cache_persists_current_entry_not_retained_in_memory(
-    monkeypatch,
-    presto_solver_request,
-):
-    class CountingStore(MemoryStore):
-        writes = 0
-
-        async def set(self, key, value, expires_in=None):
-            self.writes += 1
-            await super().set(key, value, expires_in)
-
-    repodata = RepodataSnapshot(
-        (("https://conda.example/linux-64", "repodata.json", 10, 1),),
-        False,
-    )
-    stored = cache_module.StoredSolverResult(
-        response=PrestoSolveResponse(records=[{"name": "python"}], neutered=[]),
-        metadata_used=repodata,
-    )
-    store = CountingStore()
-    key = ResultCache.solver_key(presto_solver_request.cache_key())
-    await store.set(key, msgspec.msgpack.encode(stored))
-    store.writes = 0
-    store_operations = StoreOperationCoordinator(store)
-    cache = ResultCache(
-        max_size=8,
-        max_bytes=1,
-        store_operations=store_operations,
-    )
-    monkeypatch.setattr(
-        PrestoSolveRequest,
-        "repodata_snapshot",
-        lambda _request: repodata,
-    )
-
-    async with store_operations.lifespan():
-        probe = await cache_module.SolverResultService(
-            cache,
-            require_persistent=True,
-        ).inspect(presto_solver_request)
-
-    assert probe.cached
-    assert not probe.persistence_failed
-    assert store.writes == 1
-    assert cache.entries == {}
-
-
-@pytest.mark.anyio
-async def test_solver_cache_rejects_corrupt_typed_envelope(
-    presto_solver_request,
-):
-    store = MemoryStore()
-    store_operations = StoreOperationCoordinator(store)
-    cache = ResultCache(max_size=256, store_operations=store_operations)
-    key = ResultCache.solver_key(presto_solver_request.cache_key())
-    payload = msgspec.msgpack.encode(
-        {
-            "response": {"records": "not-a-list", "neutered": []},
-            "metadata_used": {"records": [], "stale": False},
-        }
-    )
-    await store.set(key, payload)
-
-    async with store_operations.lifespan():
-        stored = await cache.get_solver_result(presto_solver_request)
-
-    assert stored is None
-    assert await store.get(key) is None
-
-
-@pytest.mark.anyio
-async def test_solver_cache_serializes_persistent_read_and_publication(
-    monkeypatch,
-    presto_solver_request,
-    presto_solver_outcome,
-    fresh_repodata_snapshot,
-):
-    previous = fresh_repodata_snapshot
-    current = RepodataSnapshot(
-        (("https://conda.example/linux-64", "repodata.json", 20, 2),),
-        False,
-    )
-    old = cache_module.StoredSolverResult(
-        response=PrestoSolveResponse(records=[{"name": "old"}], neutered=[]),
-        metadata_used=previous,
-    )
-    started = anyio.Event()
-    release = anyio.Event()
-
-    class Store:
-        value = msgspec.msgpack.encode(old)
-
-        async def get(self, key):
-            started.set()
-            await release.wait()
-            return self.value
-
-        async def set(self, key, value, expires_in=None):
-            self.value = value
-
-        async def delete(self, key):
-            self.value = None
-
-    store = Store()
-    store_operations = StoreOperationCoordinator(store)
-    cache = ResultCache(max_size=256, store_operations=store_operations)
-    monkeypatch.setattr(
-        PrestoSolveRequest,
-        "repodata_snapshot",
-        lambda _: current,
-    )
-    publication = []
-
-    async def read():
-        await cache.get_solver_result(presto_solver_request)
-
-    async def publish():
-        publication.append(
-            await cache.publish_solver(
-                presto_solver_request,
-                presto_solver_outcome(
-                    PrestoSolveResponse(records=[{"name": "new"}], neutered=[]),
-                    current,
-                ),
-            )
-        )
-
-    async with store_operations.lifespan():
-        async with anyio.create_task_group() as tasks:
-            tasks.start_soon(read)
-            await started.wait()
-            tasks.start_soon(publish)
-            await anyio.sleep(0)
-            release.set()
-
-    key = ResultCache.solver_key(presto_solver_request.cache_key())
-    assert publication[0][1] == "published"
-    assert cache.entries[key].response.records == [{"name": "new"}]
-    stored = msgspec.msgpack.decode(
-        store.value,
-        type=cache_module.StoredSolverResult,
-    )
-    assert stored.response.records == [{"name": "new"}]
 
 
 @pytest.mark.parametrize(
@@ -678,7 +317,6 @@ async def test_result_cache_remember_omits_permalink_when_memory_rejects_result(
         "oversized",
         b"x" * 20,
         "text/plain",
-        location="/r/oversized",
     )
 
     assert "Location" not in response.headers
@@ -689,17 +327,11 @@ async def test_result_cache_remember_omits_permalink_when_memory_rejects_result(
 @pytest.mark.anyio
 async def test_result_cache_uses_no_store_until_immutable_permalink_lookup():
     cache = ResultCache(max_size=10)
-    await cache.remember(
-        "key",
-        b"body",
-        "text/plain",
-        location="/r/key",
-    )
+    response = await cache.remember("key", b"body", "text/plain")
 
     mutable = await cache.get_response("key", location="/r/key")
     immutable = await cache.get_response(
-        "key",
-        location="/r/key",
+        ResultCache.resolve_key(response.headers["Location"].rsplit("/", 1)[1]),
         immutable=True,
     )
 
@@ -715,7 +347,6 @@ async def test_result_cache_can_return_a_credentialed_result_without_retaining_i
         "key",
         b"body",
         "text/plain",
-        location="/r/key",
         retain=False,
     )
 
@@ -739,6 +370,26 @@ async def test_result_cache_can_return_a_credentialed_result_without_retaining_i
             "text/plain",
             id="exporter",
         ),
+        pytest.param(
+            b'{"purl":"pkg:conda/zlib@1.3?channel=https%3A%2F%2Fuser%3Asecret%40example.test"}',
+            "application/json",
+            id="purl-credentialed-channel",
+        ),
+        pytest.param(
+            b'{"purl":"pkg:conda/zlib@1.3?channel=https%3A%2F%2Fexample.test%2Ft%2Fsecret"}',
+            "application/json",
+            id="purl-channel-token-path",
+        ),
+        pytest.param(
+            b'{"purl":"pkg:conda/zlib@1.3?token=secret"}',
+            "application/json",
+            id="purl-token-qualifier",
+        ),
+        pytest.param(
+            b'{"password":"secret"}',
+            "application/json",
+            id="json-password",
+        ),
     ],
 )
 async def test_result_cache_does_not_retain_credentialed_output(body, media_type):
@@ -751,7 +402,6 @@ async def test_result_cache_does_not_retain_credentialed_output(body, media_type
             "key",
             body,
             media_type,
-            location="/r/key",
         )
 
     assert response.content == body
@@ -879,22 +529,6 @@ async def test_result_cache_deletes_oversized_persistent_entry(monkeypatch):
         assert await cache.get_response("key", location="/r/key") is None
 
     assert store.value is None
-
-
-@pytest.mark.anyio
-async def test_result_cache_rejects_oversized_persistent_write(monkeypatch):
-    monkeypatch.setattr(cache_module, "RESULT_CACHE_MAX_STORED_BYTES", 1)
-    store_operations = StoreOperationCoordinator(MemoryStore())
-    cache = ResultCache(max_size=10, store_operations=store_operations)
-
-    async with store_operations.lifespan():
-        retention = await cache.store_entry(
-            "key",
-            StoredResult(body=b"large", media_type="application/json"),
-        )
-
-    assert retention.retained
-    assert retention.persistent_failed
 
 
 def test_different_output_formats_produce_different_cache_keys(resolve_cache_state):

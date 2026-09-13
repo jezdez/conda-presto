@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from typing import Any
-
 import pytest
 from conda.models.channel import Channel
 from conda.models.records import PackageRecord
@@ -12,7 +10,6 @@ from litestar.stores.memory import MemoryStore
 from litestar.stores.redis import RedisStore
 
 from conda_presto.resolve import RepodataSnapshot, ResolvedPackage, SolveResult
-from conda_presto.solver import PrestoSolveOutcome, PrestoSolveRequest
 
 
 @pytest.fixture(params=["memory", "file", "redis"])
@@ -127,59 +124,6 @@ def sample_solve_result(sample_resolved_package):
         platform="linux-64",
         packages=[sample_resolved_package],
     )
-
-
-@pytest.fixture()
-def make_presto_solver_request():
-    def create(**changes: Any) -> PrestoSolveRequest:
-        values = {
-            "channels": [Channel("conda-forge").dump()],
-            "subdirs": ["linux-64", "noarch"],
-            "specs_to_add": ["zlib"],
-            "specs_to_remove": [],
-            "installed": [],
-            "history": [],
-            "pinned": [],
-            "virtual": [],
-            "aggressive_updates": [],
-            "always_update": [],
-            "update_modifier": "UPDATE_SPECS",
-            "deps_modifier": "NOT_SET",
-            "ignore_pinned": False,
-            "force_remove": False,
-            "prune": False,
-            "command": "install",
-            "repodata_fn": "repodata.json",
-            "local_repodata_ttl": 300,
-            "offline": False,
-            "channel_priority": "strict",
-            "use_only_tar_bz2": False,
-            "add_pip_as_python_dependency": True,
-            "allow_cycles": True,
-            "repodata_use_shards": True,
-            "use_index_cache": False,
-        }
-        values.update(changes)
-        return PrestoSolveRequest(**values)
-
-    return create
-
-
-@pytest.fixture()
-def presto_solver_request(make_presto_solver_request):
-    return make_presto_solver_request()
-
-
-@pytest.fixture()
-def presto_solver_outcome():
-    def create(response, metadata_before, metadata_used=None):
-        return PrestoSolveOutcome(
-            result=response,
-            metadata_before=metadata_before,
-            metadata_used=metadata_used or metadata_before,
-        )
-
-    return create
 
 
 @pytest.fixture()

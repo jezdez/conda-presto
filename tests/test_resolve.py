@@ -103,165 +103,6 @@ def test_solve_result_msgspec_json_roundtrip(sample_resolved_package):
     }
 
 
-def test_solve_result_diff_classifies_package_changes(make_package_record):
-    before = SolveResult(
-        platform="linux-64",
-        packages=[
-            ResolvedPackage.from_record(make_package_record(name="added")),
-            ResolvedPackage.from_record(
-                make_package_record(name="build", version="1.0", build="0")
-            ),
-            ResolvedPackage.from_record(
-                make_package_record(name="downgrade", version="2.0")
-            ),
-            ResolvedPackage.from_record(make_package_record(name="removed")),
-            ResolvedPackage.from_record(
-                make_package_record(name="upgrade", version="1.0")
-            ),
-        ],
-    )
-    after = SolveResult(
-        platform="linux-64",
-        packages=[
-            ResolvedPackage.from_record(
-                make_package_record(name="build", version="1.0", build="1")
-            ),
-            ResolvedPackage.from_record(
-                make_package_record(name="downgrade", version="1.0")
-            ),
-            ResolvedPackage.from_record(make_package_record(name="new")),
-            ResolvedPackage.from_record(
-                make_package_record(name="upgrade", version="2.0")
-            ),
-        ],
-    )
-
-    diff = before.diff(after)
-
-    assert [package.name for package in diff.added] == ["new"]
-    assert [package.name for package in diff.removed] == ["added", "removed"]
-    assert [(change.name, change.kind) for change in diff.changed] == [
-        ("build", "build-change"),
-        ("downgrade", "downgrade"),
-        ("upgrade", "upgrade"),
-    ]
-    assert diff.unchanged_count == 0
-    changed = msgspec.json.decode(msgspec.json.encode(diff))["changed"][0]["from"]
-    assert changed["platform"] == "linux-64"
-    assert "sha256" not in changed
-    assert "size" not in changed
-
-
-def test_solve_result_diff_keeps_conda_and_pypi_names_distinct(
-    make_package_record,
-):
-    conda_package = ResolvedPackage.from_record(make_package_record(name="demo"))
-    pypi_package = msgspec.structs.replace(conda_package, manager="pypi")
-    before = SolveResult(
-        platform="linux-64",
-        packages=[conda_package, pypi_package],
-    )
-    after = SolveResult(
-        platform="linux-64",
-        packages=[conda_package, pypi_package],
-    )
-
-    diff = before.diff(after)
-
-    assert diff.unchanged_count == 2
-    assert not diff.added
-    assert not diff.removed
-
-
-def test_solve_result_diff_rejects_mismatched_platforms(sample_resolved_package):
-    with pytest.raises(ValueError, match="different platforms"):
-        SolveResult(platform="linux-64", packages=[sample_resolved_package]).diff(
-            SolveResult(platform="osx-arm64", packages=[sample_resolved_package])
-        )
-
-
-def test_resolved_package_uses_version_change_for_invalid_version_order(
-    sample_resolved_package,
-):
-    changed = msgspec.structs.replace(sample_resolved_package, version="1=invalid")
-
-    assert sample_resolved_package.change_kind(changed) == "version-change"
-
-
-def test_solve_result_explain_returns_requested_dependency_chain(make_package_record):
-    result = SolveResult(
-        platform="linux-64",
-        packages=[
-            ResolvedPackage.from_record(
-                make_package_record(name="app", depends=("library >=1",))
-            ),
-            ResolvedPackage.from_record(
-                make_package_record(name="library", depends=())
-            ),
-        ],
-    )
-
-    explanation = result.explain(["app"], "library")
-
-    assert explanation is not None
-    assert explanation.chains == [["app", "library"]]
-    assert explanation.complete
-    assert result.explain(["app"], "app").chains == [["app"]]
-
-
-def test_solve_result_explain_marks_virtual_dependencies_incomplete(
-    make_package_record,
-):
-    result = SolveResult(
-        platform="linux-64",
-        packages=[
-            ResolvedPackage.from_record(
-                make_package_record(
-                    name="app",
-                    depends=("__glibc >=2.17", "library"),
-                )
-            ),
-            ResolvedPackage.from_record(
-                make_package_record(name="library", depends=())
-            ),
-        ],
-    )
-
-    explanation = result.explain(["app"], "library")
-
-    assert explanation is not None
-    assert explanation.chains == [["app", "library"]]
-    assert not explanation.complete
-
-
-def test_solve_result_explain_bounds_invalid_and_cyclic_metadata(
-    make_package_record,
-):
-    result = SolveResult(
-        platform="linux-64",
-        packages=[
-            ResolvedPackage.from_record(
-                make_package_record(
-                    name="app",
-                    depends=("invalid [", "missing", "__glibc >=2.17", "middle"),
-                )
-            ),
-            ResolvedPackage.from_record(
-                make_package_record(name="middle", depends=("app", "target"))
-            ),
-            ResolvedPackage.from_record(make_package_record(name="target", depends=())),
-        ],
-    )
-
-    explanation = result.explain(["app", "invalid ["], "target")
-
-    assert explanation is not None
-    assert explanation.chains == [["app", "middle", "target"]]
-    assert not explanation.complete
-    assert not result.explain(["app"], "target", max_depth=1).complete
-    assert not result.explain(["app"], "target", max_chains=0).complete
-
-
 def test_solve_result_error_serializes(sample_resolved_package):
     result = SolveResult(platform="linux-64", packages=[], error="solver failed")
     decoded = msgspec.json.decode(msgspec.json.encode(result))
@@ -424,6 +265,7 @@ def test_solve_environments(platforms):
     for env, platform in zip(envs, platforms):
         assert isinstance(env, Environment)
         assert env.platform == platform
+        assert [str(spec) for spec in env.requested_packages] == ["zlib"]
         names = [r.name for r in env.explicit_packages]
         assert "zlib" in names
 
@@ -835,38 +677,6 @@ def test_solve_result_from_exception_redacts_parent_log(caplog):
     assert "token" not in caplog.text
     assert "example.internal" not in caplog.text
     assert "auth=secret" not in caplog.text
-
-
-def test_solve_only_captures_selected_error_types(monkeypatch):
-    def fail(*args, **kwargs):
-        raise RuntimeError("transport failed")
-
-    monkeypatch.setattr(resolve_module, "run_solver", fail)
-
-    with pytest.raises(RuntimeError, match="transport failed"):
-        solve(
-            ["conda-forge"],
-            ["zlib"],
-            ["linux-64"],
-            captured_errors=(UnsatisfiableError, PackagesNotFoundError),
-        )
-
-
-def test_solve_captures_selected_solver_error(monkeypatch):
-    def fail(*args, **kwargs):
-        raise PackagesNotFoundError(["missing"])
-
-    monkeypatch.setattr(resolve_module, "run_solver", fail)
-
-    result = solve(
-        ["conda-forge"],
-        ["missing"],
-        ["linux-64"],
-        captured_errors=(UnsatisfiableError, PackagesNotFoundError),
-    )[0]
-
-    assert result.error is not None
-    assert "missing" in result.error
 
 
 @pytest.mark.parametrize(

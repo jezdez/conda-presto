@@ -1,119 +1,67 @@
-# Resolve through the HTTP API
+# Resolve and save an output
 
-This tutorial starts a local server, submits a solve request, follows a cached
-result location, and writes a lockfile from an uploaded environment file.
-
-## Start the server
-
-Install conda-presto with {doc}`../quickstart`. In one terminal, start the
-server:
-
-```bash
-conda presto --serve
-```
-
-In another terminal, set the base URL and wait for readiness:
+Follow {doc}`../quickstart` to install and start the server. This example resolves zlib for Linux, saves a lockfile and retrieves the same bytes from the cache.
 
 ```bash
 export CONDA_PRESTO_URL=http://127.0.0.1:8000
-curl -sS "$CONDA_PRESTO_URL/health"
-```
-
-Continue after the response reports `{"status":"ok"}`.
-
-## Submit a JSON request
-
-Resolve Python and NumPy for Linux:
-
-```bash
-curl -sS "$CONDA_PRESTO_URL/resolve" \
-  --json '{
-    "specs": ["python=3.13", "numpy"],
-    "channels": ["conda-forge"],
-    "platforms": ["linux-64"]
-  }' > result.json
-```
-
-Inspect the platform and package count:
-
-```bash
-jq '.[0] | {platform, package_count: (.packages | length), error}' result.json
-```
-
-The HTTP native JSON shape matches the CLI native JSON shape.
-
-## Inspect result caching
-
-Repeat the request while saving response headers:
-
-```bash
-curl -sS -D headers.txt "$CONDA_PRESTO_URL/resolve" \
-  --json '{
-    "specs": ["python=3.13", "numpy"],
-    "channels": ["conda-forge"],
-    "platforms": ["linux-64"]
-  }' > result.json
-
-rg -i '^(location|cache-control):' headers.txt
-```
-
-When the response can be retained, `Location` contains a relative `/r/<hash>`
-path. Fetch that immutable snapshot while it remains in the configured cache:
-
-```bash
-location=$(awk 'tolower($1) == "location:" {print $2}' headers.txt | tr -d '\r')
-curl -sS "$CONDA_PRESTO_URL$location" | jq '.[0].platform'
-```
-
-A later `POST /resolve` checks current repodata before reusing a result. The
-permalink itself returns the stored snapshot without revalidating repodata.
-
-## Upload an environment file
-
-Create an `environment.yml`:
-
-```yaml
-channels:
-  - conda-forge
-dependencies:
-  - python=3.13
-  - numpy
-```
-
-Upload it and ask the exporter for a `pixi.lock`:
-
-```bash
-curl -sS --data-binary @environment.yml \
-  -H 'Content-Type: application/yaml' \
-  "$CONDA_PRESTO_URL/resolve?platform=linux-64&format=pixi-lock-v6" \
+curl --fail-with-body "$CONDA_PRESTO_URL/health"
+curl --fail-with-body -D headers.txt \
+  "$CONDA_PRESTO_URL/resolve?format=pixi-lock-v6" \
+  --json '{"specs":["zlib"],"platforms":["linux-64"]}' \
   -o pixi.lock
 ```
 
-The media type selects raw file handling. The `filename` query parameter can
-select a more specific parser when the media type is ambiguous.
-
-## Download the generated API document
-
-Download the generated OpenAPI schema:
+When the response has a `Location`, retrieve it while the entry is retained:
 
 ```bash
-curl -sS "$CONDA_PRESTO_URL/openapi.json" > openapi.json
+location=$(awk 'tolower($1) == "location:" {print $2}' headers.txt | tr -d '\r')
+test -n "$location"
+curl --fail-with-body "$CONDA_PRESTO_URL$location" -o saved.lock
+cmp pixi.lock saved.lock
 ```
 
-:::{note}
-The generated schema does not describe the manually dispatched request bodies
-for `POST /resolve`, `POST /preflight`, or `POST /transcode`. Use the
-{doc}`../reference/http-api` page for those body contracts.
-The first-party workbench is available at the server root. It uses packaged
-assets rather than a third-party API renderer.
-:::
+A new solve checks channel freshness. Retrieval returns the saved bytes until eviction. An absent `Location` means the solve succeeded without retaining its output.
 
-## What you learned
+## Generate an SBOM
 
-- JSON and raw file bodies use the same resolve operation.
-- Native HTTP results have the same per-platform shape as native CLI results.
-- Retained results receive a content-addressed location.
-- Exporter output can be written directly to a lockfile.
+Use a server with the optional providers installed, as described in {doc}`../how-to/run-with-docker`. Check `/capabilities` first.
 
-For independent HTTP tasks, see {doc}`../how-to/call-http-api`. Exact endpoint
-schemas and status codes are in {doc}`../reference/http-api`.
+```bash
+curl --fail-with-body "$CONDA_PRESTO_URL/capabilities"
+curl --fail-with-body "$CONDA_PRESTO_URL/sbom" \
+  --json '{"specs":["zlib"],"platforms":["linux-64"]}' -o sboms.json
+jq -j '.sboms[0].content' sboms.json > environment.cdx.json
+```
+
+The document describes selected package records. It does not establish which files a downstream product ships. Multiple requested platforms produce separate documents.
+
+## Sign and verify the saved bytes
+
+On a deployment with signing deliberately enabled and noninteractive credentials configured:
+
+```bash
+key=$(jq -r '.sboms[0].location // empty | split("/")[-1]' sboms.json)
+test -n "$key"
+jq -n --arg key "$key" '{key:$key}' > sign-request.json
+curl --fail-with-body "$CONDA_PRESTO_URL/sign" \
+  --json @sign-request.json -o signed.json
+jq -j '.bundle' signed.json > environment.cdx.sigstore.json
+```
+
+Choose `EXPECTED_SIGNER` and `EXPECTED_ISSUER` from your approved deployment configuration. Do not derive trust from the bundle you are checking.
+
+```bash
+: "${EXPECTED_SIGNER:?Set the approved signer identity}"
+: "${EXPECTED_ISSUER:?Set the approved identity issuer}"
+jq -n --rawfile artifact environment.cdx.json \
+  --rawfile bundle environment.cdx.sigstore.json \
+  --arg name "$(jq -r '.artifact_name' signed.json)" \
+  --arg identity "$EXPECTED_SIGNER" --arg issuer "$EXPECTED_ISSUER" \
+  '{artifact:($artifact|@base64),bundle:$bundle,artifact_name:$name,
+    expected_identity:$identity,expected_issuer:$issuer}' > verify-request.json
+curl --fail-with-body "$CONDA_PRESTO_URL/verify" --json @verify-request.json
+```
+
+Changing even one artifact byte or supplying a different signer pair makes verification fail. The signature authenticates saved output. It does not establish how the original solve was constructed. Archive the exact artifact, bundle and approved trust configuration outside the result cache when you need long-term evidence.
+
+See {doc}`../reference/http-api` for request fields, error handling and the meaning of each verification result.

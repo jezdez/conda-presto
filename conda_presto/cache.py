@@ -1,4 +1,4 @@
-"""Shared HTTP and solver result caching."""
+"""Public HTTP result caching."""
 
 from __future__ import annotations
 
@@ -9,9 +9,7 @@ from collections import OrderedDict
 from dataclasses import asdict, dataclass, field
 from importlib.metadata import version as pkg_version
 from pathlib import Path
-from typing import Literal
 
-import anyio
 import msgspec
 from conda.base.context import context
 from conda.core.index import Index
@@ -29,14 +27,7 @@ from .resolve import (
     configure_platform,
     platform_lock,
 )
-from .solver import (
-    PrestoSolveError,
-    PrestoSolveOutcome,
-    PrestoSolveRequest,
-    PrestoSolveResponse,
-)
 from .storage import StoreOperationCoordinator
-from .worker import PersistentSolveWorker
 
 log = logging.getLogger(__name__)
 
@@ -44,7 +35,7 @@ RESULT_RESPONSE_CACHE_CONTROL = "no-store"
 PERMALINK_CACHE_CONTROL = "public, max-age=86400, immutable"
 CACHE_ENVELOPE_VERSION = 6
 RESULT_CACHE_STORE_PREFIX = "resolve-v1:"
-SOLVER_CACHE_STORE_PREFIX = "solver-v1:"
+REQUEST_CACHE_STORE_PREFIX = "request-v1:"
 RESULT_CACHE_STORE_TIMEOUT_S = 2
 RESULT_CACHE_STORE_MAX_AGE_S = 24 * 60 * 60
 RESULT_CACHE_MAX_STORED_BYTES = 64 * 1024 * 1024
@@ -61,52 +52,13 @@ class StoredResult(msgspec.Struct):
     media_type: str
 
     @property
-    def memory_size(self) -> int:
-        return len(self.body) + len(self.media_type)
-
-
-class StoredSolverResult(msgspec.Struct):
-    """A cached solver response and its repodata cache-file markers."""
-
-    response: PrestoSolveResponse
-    metadata_used: RepodataSnapshot
+    def digest(self) -> str:
+        """Identify the exact output bytes and their media type."""
+        return hashlib.sha256(self.media_type.encode() + b"\0" + self.body).hexdigest()
 
     @property
     def memory_size(self) -> int:
-        return len(msgspec.msgpack.encode(self))
-
-    def matches(self, repodata: RepodataSnapshot) -> bool:
-        """Return whether current repodata markers match this entry."""
-        return not repodata.stale and self.metadata_used.records == repodata.records
-
-
-StoredCacheEntry = StoredResult | StoredSolverResult
-SolverCacheDisposition = Literal[
-    "cache-hit",
-    "published",
-    "already-current",
-    "not-retained",
-    "persistent-failed",
-    "publication-rejected",
-    "solver-error",
-]
-
-
-@dataclass(frozen=True)
-class CacheRetention:
-    """Result of retaining one entry in memory and optional storage."""
-
-    retained: bool
-    persistent_failed: bool = False
-
-
-@dataclass(frozen=True)
-class SolverServiceProbe:
-    """A cache result and the current repodata observed during its lookup."""
-
-    cached: bool
-    current: RepodataSnapshot | None
-    persistence_failed: bool = False
+        return len(self.body) + len(self.media_type)
 
 
 @dataclass(frozen=True)
@@ -160,9 +112,8 @@ class ResolveCacheContext:
 class ResultCache:
     max_size: int
     max_bytes: int = 0
-    entries: OrderedDict[str, StoredCacheEntry] = field(default_factory=OrderedDict)
+    entries: OrderedDict[str, StoredResult] = field(default_factory=OrderedDict)
     current_bytes: int = 0
-    solver_publication_lock: anyio.Lock = field(default_factory=anyio.Lock)
     store_operations: StoreOperationCoordinator | None = None
 
     @staticmethod
@@ -274,13 +225,13 @@ class ResultCache:
 
     @staticmethod
     def resolve_key(key: str) -> str:
-        """Return the private storage key for a public resolve digest."""
+        """Return the storage key for an immutable output digest."""
         return f"{RESULT_CACHE_STORE_PREFIX}{key}"
 
     @staticmethod
-    def solver_key(key: str) -> str:
-        """Return the private storage key for a solver cache entry."""
-        return f"{SOLVER_CACHE_STORE_PREFIX}{key}"
+    def request_key(key: str) -> str:
+        """Return the lookup key for canonical solve inputs."""
+        return f"{REQUEST_CACHE_STORE_PREFIX}{key}"
 
     @staticmethod
     def store_for_config(
@@ -319,7 +270,7 @@ class ResultCache:
             )
         raise ValueError(f"Unsupported result cache backend: {backend}")
 
-    def remember_memory(self, key: str, stored: StoredCacheEntry) -> bool:
+    def remember_memory(self, key: str, stored: StoredResult) -> bool:
         if self.stored_entry_has_credentials(stored) or (
             self.max_bytes > 0 and stored.memory_size > self.max_bytes
         ):
@@ -341,35 +292,30 @@ class ResultCache:
         return key in self.entries
 
     @staticmethod
-    def stored_entry_has_credentials(stored: StoredCacheEntry) -> bool:
+    def stored_entry_has_credentials(stored: StoredResult) -> bool:
         """Return whether a produced result contains detected credentials."""
-        if isinstance(stored, StoredResult):
-            return contains_credentials(stored.body)
-        return contains_credentials(
-            {
-                "records": stored.response.records,
-                "neutered": stored.response.neutered,
-            }
-        )
+        try:
+            value = msgspec.json.decode(stored.body)
+        except msgspec.DecodeError:
+            value = stored.body
+        return contains_credentials(value)
 
-    async def get_stored(
-        self,
-        key: str,
-        entry_type: type[StoredResult] | type[StoredSolverResult],
-    ) -> StoredCacheEntry | None:
-        """Load one typed cache entry from memory or persistent storage."""
+    async def get_stored(self, key: str) -> StoredResult | None:
+        """Load a result from memory or persistent storage."""
         stored = self.entries.get(key)
-        if isinstance(stored, entry_type):
+        if stored is not None:
+            if key.startswith(RESULT_CACHE_STORE_PREFIX) and (
+                key != self.resolve_key(stored.digest)
+            ):
+                log.warning("Ignoring in-memory result with mismatched artifact digest")
+                await self.discard(key)
+                return None
             if self.stored_entry_has_credentials(stored):
                 log.warning("Ignoring in-memory result cache entry with credentials")
                 await self.discard(key)
                 return None
             self.entries.move_to_end(key)
             return stored
-        if stored is not None:
-            self.current_bytes -= stored.memory_size
-            del self.entries[key]
-
         if self.store_operations is None:
             return None
 
@@ -393,9 +339,15 @@ class ResultCache:
             return None
 
         try:
-            stored = msgspec.msgpack.decode(stored_payload, type=entry_type)
+            stored = msgspec.msgpack.decode(stored_payload, type=StoredResult)
         except (msgspec.DecodeError, msgspec.ValidationError):
             log.warning("Ignoring corrupt persistent result cache entry")
+            await self.delete_persistent(key)
+            return None
+        if key.startswith(RESULT_CACHE_STORE_PREFIX) and (
+            key != self.resolve_key(stored.digest)
+        ):
+            log.warning("Ignoring persistent result with mismatched artifact digest")
             await self.delete_persistent(key)
             return None
         if self.stored_entry_has_credentials(stored):
@@ -404,12 +356,9 @@ class ResultCache:
             return None
 
         current = self.entries.get(key)
-        if isinstance(current, entry_type):
+        if current is not None:
             self.entries.move_to_end(key)
             return current
-        if current is not None:
-            self.current_bytes -= current.memory_size
-            del self.entries[key]
         self.remember_memory(key, stored)
         return stored
 
@@ -417,13 +366,20 @@ class ResultCache:
         self,
         key: str,
         *,
-        location: str,
+        location: str | None = None,
         immutable: bool = False,
     ) -> Response | None:
-        stored = await self.get_stored(key, StoredResult)
-        if not isinstance(stored, StoredResult):
+        stored = await self.get_stored(key)
+        if stored is None:
             return None
-        return self.response_for(stored, location, immutable=immutable)
+        digest = stored.digest
+        retained = immutable or await self.store_entry(self.resolve_key(digest), stored)
+        return self.response_for(
+            stored,
+            location if immutable and location is not None else f"/r/{digest}",
+            immutable=immutable,
+            retained=retained,
+        )
 
     async def delete_persistent(self, key: str) -> None:
         """Remove one invalid persistent entry on a best-effort basis."""
@@ -445,100 +401,38 @@ class ResultCache:
             self.current_bytes -= stored.memory_size
         await self.delete_persistent(key)
 
-    async def get_solver_result(
-        self,
-        request: PrestoSolveRequest,
-        *,
-        thread_limiter: anyio.CapacityLimiter | None = None,
-    ) -> StoredSolverResult | None:
-        """Return a solver result only after a post-read freshness check."""
-        if request.has_detected_credentials():
-            return None
-        async with self.solver_publication_lock:
-            stored = await self.get_stored(
-                self.solver_key(request.cache_key()),
-                StoredSolverResult,
-            )
-            if not isinstance(stored, StoredSolverResult):
-                return None
-            try:
-                current = await anyio.to_thread.run_sync(
-                    request.repodata_snapshot,
-                    abandon_on_cancel=False,
-                    limiter=thread_limiter,
-                )
-            except Exception:
-                log.warning("Presto solver cache metadata unavailable during lookup")
-                return None
-            return stored if stored.matches(current) else None
-
-    async def inspect_solver_result(
-        self,
-        request: PrestoSolveRequest,
-        *,
-        thread_limiter: anyio.CapacityLimiter | None = None,
-        require_persistent: bool = False,
-    ) -> SolverServiceProbe:
-        """Inspect one solver cache entry and its current metadata."""
-        if request.has_detected_credentials():
-            return SolverServiceProbe(cached=False, current=None)
-        async with self.solver_publication_lock:
-            key = self.solver_key(request.cache_key())
-            stored = await self.get_stored(key, StoredSolverResult)
-            try:
-                current = await anyio.to_thread.run_sync(
-                    request.repodata_snapshot,
-                    abandon_on_cancel=False,
-                    limiter=thread_limiter,
-                )
-            except Exception:
-                log.warning("Presto solver cache metadata unavailable during lookup")
-                return SolverServiceProbe(cached=False, current=None)
-            if not isinstance(stored, StoredSolverResult) or not stored.matches(
-                current
-            ):
-                return SolverServiceProbe(cached=False, current=current)
-            if require_persistent and self.store_operations is not None:
-                retention = await self.store_entry(key, stored)
-                if retention.persistent_failed:
-                    return SolverServiceProbe(
-                        cached=False,
-                        current=current,
-                        persistence_failed=True,
-                    )
-            return SolverServiceProbe(cached=True, current=current)
-
-    async def store_entry(
-        self,
-        key: str,
-        stored: StoredCacheEntry,
-    ) -> CacheRetention:
-        """Retain one cache entry and report optional storage failure."""
+    async def store_entry(self, key: str, stored: StoredResult) -> bool:
+        """Retain a result only after its configured store accepts it."""
         if self.stored_entry_has_credentials(stored):
             log.warning("Not retaining result cache entry with credentials")
             await self.discard(key)
-            return CacheRetention(False)
-        retained = self.remember_memory(key, stored)
-        if self.store_operations is not None:
-            payload = msgspec.msgpack.encode(stored)
-            if len(payload) > RESULT_CACHE_MAX_STORED_BYTES:
-                log.warning("Persistent result cache entry exceeds the size limit")
-                return CacheRetention(retained, persistent_failed=True)
-            try:
-                completed = await self.store_operations.set(
-                    key,
-                    payload,
-                    timeout_s=RESULT_CACHE_STORE_TIMEOUT_S,
-                    expires_in=RESULT_CACHE_STORE_MAX_AGE_S,
-                )
-                if not completed:
-                    log.warning("Persistent result cache write timed out")
-                    return CacheRetention(retained, persistent_failed=True)
-                retained = True
-            except Exception:
-                log.warning("Persistent result cache write failed")
-                return CacheRetention(retained, persistent_failed=True)
-        return CacheRetention(retained)
+            return False
+        if self.store_operations is None:
+            return self.remember_memory(key, stored)
+
+        # Failed shared-store publications must not become local cache hits
+        # that advertise a result URL unavailable to another replica.
+        if previous := self.entries.pop(key, None):
+            self.current_bytes -= previous.memory_size
+        payload = msgspec.msgpack.encode(stored)
+        if len(payload) > RESULT_CACHE_MAX_STORED_BYTES:
+            log.warning("Persistent result cache entry exceeds the size limit")
+            return False
+        try:
+            completed = await self.store_operations.set(
+                key,
+                payload,
+                timeout_s=RESULT_CACHE_STORE_TIMEOUT_S,
+                expires_in=RESULT_CACHE_STORE_MAX_AGE_S,
+            )
+            if not completed:
+                log.warning("Persistent result cache write timed out")
+                return False
+        except Exception:
+            log.warning("Persistent result cache write failed")
+            return False
+        self.remember_memory(key, stored)
+        return True
 
     async def remember(
         self,
@@ -546,56 +440,15 @@ class ResultCache:
         body: bytes,
         media_type: str,
         *,
-        location: str,
         retain: bool = True,
     ) -> Response:
         stored = StoredResult(body=body, media_type=media_type)
+        digest = stored.digest
         if not retain:
-            return self.response_for(stored, location, retained=False)
-        retention = await self.store_entry(key, stored)
-        if retention.retained:
-            return self.response_for(stored, location)
-        return self.response_for(stored, location, retained=False)
-
-    async def publish_solver(
-        self,
-        request: PrestoSolveRequest,
-        outcome: PrestoSolveOutcome,
-        *,
-        thread_limiter: anyio.CapacityLimiter | None = None,
-        require_persistent: bool = False,
-    ) -> tuple[StoredSolverResult | None, SolverCacheDisposition]:
-        """Store a worker result unless the current entry already matches."""
-        if request.has_detected_credentials():
-            return None, "not-retained"
-        async with self.solver_publication_lock:
-            key = self.solver_key(request.cache_key())
-            existing = await self.get_stored(key, StoredSolverResult)
-            try:
-                current = await anyio.to_thread.run_sync(
-                    request.repodata_snapshot,
-                    abandon_on_cancel=False,
-                    limiter=thread_limiter,
-                )
-            except Exception:
-                log.warning("Presto solver cache metadata unavailable after solve")
-                return None, "publication-rejected"
-            if isinstance(existing, StoredSolverResult) and existing.matches(current):
-                if require_persistent and self.store_operations is not None:
-                    retention = await self.store_entry(key, existing)
-                    if retention.persistent_failed:
-                        return existing, "persistent-failed"
-                return existing, "already-current"
-            if not outcome.is_cacheable_with(current):
-                return None, "publication-rejected"
-            stored = StoredSolverResult(
-                response=outcome.result,
-                metadata_used=outcome.metadata_used,
-            )
-            retention = await self.store_entry(key, stored)
-            if require_persistent and retention.persistent_failed:
-                return stored, "persistent-failed"
-        return stored, "published" if retention.retained else "not-retained"
+            return self.response_for(stored, f"/r/{digest}", retained=False)
+        await self.store_entry(key, stored)
+        retained = await self.store_entry(self.resolve_key(digest), stored)
+        return self.response_for(stored, f"/r/{digest}", retained=retained)
 
     @staticmethod
     def response_for(
@@ -616,79 +469,4 @@ class ResultCache:
             stored.body,
             media_type=stored.media_type,
             headers=headers,
-        )
-
-
-@dataclass(frozen=True)
-class SolverServiceResult:
-    """One typed solver result and how the cache handled it."""
-
-    result: PrestoSolveResponse | PrestoSolveError
-    disposition: SolverCacheDisposition
-
-    @property
-    def should_record_for_warming(self) -> bool:
-        """Return whether this result should be recorded for cache warming."""
-        return self.disposition in {"cache-hit", "published", "already-current"}
-
-
-@dataclass
-class SolverResultService:
-    """Own solver cache lookup, worker execution, and result storage."""
-
-    cache: ResultCache
-    thread_limiter: anyio.CapacityLimiter | None = None
-    require_persistent: bool = False
-
-    async def inspect(self, request: PrestoSolveRequest) -> SolverServiceProbe:
-        """Return one cache inspection for background scheduling decisions."""
-        return await self.cache.inspect_solver_result(
-            request,
-            thread_limiter=self.thread_limiter,
-            require_persistent=self.require_persistent,
-        )
-
-    async def probe(self, request: PrestoSolveRequest) -> SolverServiceResult | None:
-        """Return a cached result if its repodata markers still match."""
-        stored = await self.cache.get_solver_result(
-            request,
-            thread_limiter=self.thread_limiter,
-        )
-        if stored is None:
-            return None
-        return SolverServiceResult(
-            result=stored.response,
-            disposition="cache-hit",
-        )
-
-    async def resolve(
-        self,
-        request: PrestoSolveRequest,
-        worker: PersistentSolveWorker,
-        deadline: float,
-    ) -> SolverServiceResult:
-        """Return a current cache hit or solve and publish one final state."""
-        if cached := await self.probe(request):
-            return cached
-        outcome = await anyio.to_thread.run_sync(
-            worker.solve_final_state,
-            request,
-            deadline,
-            abandon_on_cancel=True,
-            limiter=self.thread_limiter,
-        )
-        if isinstance(outcome.result, PrestoSolveError):
-            return SolverServiceResult(
-                result=outcome.result,
-                disposition="solver-error",
-            )
-        stored, disposition = await self.cache.publish_solver(
-            request,
-            outcome,
-            thread_limiter=self.thread_limiter,
-            require_persistent=self.require_persistent,
-        )
-        return SolverServiceResult(
-            result=stored.response if stored is not None else outcome.result,
-            disposition=disposition,
         )

@@ -7,8 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Add optional SBOM generation through conda-sboms and signing and verification through conda-sigstore.
+- Report installed optional adapters and enabled signing configuration through `/capabilities`.
+
+### Changed
+
+- Preserve requested package roots alongside resolved records for exporter plugins.
+- Focus the supported workflows on HTTP solving, parsing, export, transcoding and retained-result retrieval.
+- Require an explicit HTTP endpoint in the GitHub Action.
+- Build one server image from the root Dockerfile and make its health check follow the configured port.
+
+### Removed
+
+- Remove preflight, diff, explain and repair operations and the browser workbench.
+- Remove the broker service, internal Presto solver, recorded-request catalog and scheduled cache warmer.
+- Remove the Action's local mode and the separate CLI container.
+
 ### Fixed
 
+- Identify retained outputs by their exact bytes and media type, independently of solve cache lookup.
+- Omit result URLs when publication to configured shared storage fails.
+- Allow SBOM package identifiers in credential checks while rejecting credential-bearing URLs.
 - Apply Debian's PCRE2 security updates when building container images.
 
 ## [0.8.0] - 2026-07-24

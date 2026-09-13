@@ -70,4 +70,4 @@ that would require a solve.
 
 Available lockfile exporters are listed in
 {doc}`../reference/output-formats`. For a normal environment-to-lockfile solve,
-use {doc}`resolve-from-cli` or {doc}`call-http-api`.
+use {doc}`resolve-from-cli` or {doc}`/tutorials/http-api`.

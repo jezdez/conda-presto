@@ -9,12 +9,9 @@ import time
 from contextlib import suppress
 from typing import Any
 
-from conda.exceptions import CondaError
-
 from .exceptions import CredentialRedactionFilter, UnknownFormatError
 from .exporter import OutputFormat
 from .resolve import shutdown_process_pool, solve, solve_environments, warmup
-from .solver import PrestoSolveError, PrestoSolveOutcome, PrestoSolveRequest
 
 log = logging.getLogger(__name__)
 
@@ -30,17 +27,11 @@ class PersistentSolveWorker:
         channels: list[str],
         platforms: list[str],
         *,
-        restart_on_failure: bool = True,
         startup_timeout_s: float = PERSISTENT_WORKER_STARTUP_TIMEOUT_S,
-        warmup_on_start: bool = True,
-        log_worker_errors: bool = True,
     ) -> None:
         self.channels = channels
         self.platforms = platforms
-        self.restart_on_failure = restart_on_failure
         self.startup_timeout_s = startup_timeout_s
-        self.warmup_on_start = warmup_on_start
-        self.log_worker_errors = log_worker_errors
         self.connection: Any | None = None
         self.process: Any | None = None
         self.restart_thread: threading.Thread | None = None
@@ -76,8 +67,6 @@ class PersistentSolveWorker:
                         child,
                         self.channels,
                         self.platforms,
-                        self.warmup_on_start,
-                        self.log_worker_errors,
                     ),
                 )
                 process.start()
@@ -139,14 +128,6 @@ class PersistentSolveWorker:
     ) -> list | tuple[str, str]:
         """Return a solve result before the absolute deadline."""
         return self.execute((channels, specs, platforms, format_name), deadline)
-
-    def solve_final_state(
-        self,
-        request: PrestoSolveRequest,
-        deadline: float,
-    ) -> PrestoSolveOutcome:
-        """Run an internal solver request in the persistent worker."""
-        return self.execute(("solver", request), deadline)
 
     def execute(self, request: object, deadline: float) -> object:
         """Exchange one request with the persistent worker process."""
@@ -222,7 +203,6 @@ class PersistentSolveWorker:
             if (
                 stopped
                 and restart
-                and self.restart_on_failure
                 and not self._shutdown_requested.is_set()
                 and (self.restart_thread is None or not self.restart_thread.is_alive())
             ):
@@ -253,19 +233,16 @@ def persistent_solve_worker_entrypoint(
     connection: Any,
     warmup_channels: list[str],
     warmup_platforms: list[str],
-    warmup_on_start: bool = True,
-    log_worker_errors: bool = True,
 ) -> None:
     """Serve solve requests while retaining the normal process pool."""
     CredentialRedactionFilter.install()
-    if warmup_on_start:
-        try:
-            warmup(warmup_channels, warmup_platforms)
-        except Exception:
-            log.exception("Persistent solve worker startup failed")
-            connection.send(("startup-failed", None))
-            connection.close()
-            return
+    try:
+        warmup(warmup_channels, warmup_platforms)
+    except Exception:
+        log.exception("Persistent solve worker startup failed")
+        connection.send(("startup-failed", None))
+        connection.close()
+        return
 
     connection.send(("ready", None))
     try:
@@ -278,23 +255,13 @@ def persistent_solve_worker_entrypoint(
                 break
 
             try:
-                if isinstance(request, tuple) and request[0] == "solver":
-                    try:
-                        result = request[1].solve()
-                    except CondaError as exc:
-                        result = PrestoSolveOutcome(
-                            result=PrestoSolveError.from_exception(exc),
-                            metadata_before=None,
-                            metadata_used=None,
-                        )
+                channels, specs, platforms, format_name = request
+                if format_name is None:
+                    result = solve(channels, specs, platforms)
                 else:
-                    channels, specs, platforms, format_name = request
-                    if format_name is None:
-                        result = solve(channels, specs, platforms)
-                    else:
-                        result = OutputFormat.named(format_name).render(
-                            solve_environments(channels, specs, platforms)
-                        )
+                    result = OutputFormat.named(format_name).render(
+                        solve_environments(channels, specs, platforms)
+                    )
             except UnknownFormatError as exc:
                 connection.send(
                     (
@@ -303,8 +270,7 @@ def persistent_solve_worker_entrypoint(
                     )
                 )
             except Exception:
-                if log_worker_errors:
-                    log.exception("Persistent solve worker failed")
+                log.exception("Persistent solve worker failed")
                 connection.send(("error", None))
             else:
                 connection.send(("ok", result))

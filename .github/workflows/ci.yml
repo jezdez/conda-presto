@@ -48,10 +48,20 @@ jobs:
       - run: pixi run -e test pytest -m "not crossplatform"
         timeout-minutes: 5
 
-  broker:
-    name: Broker lifecycle
+  integration:
+    name: Independent HTTP instances
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 10
+    services:
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -61,23 +71,4 @@ jobs:
           pixi-version: v0.70.1
           environments: test
           cache: true
-      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
-        with:
-          path: ~/.cache/rattler/cache
-          key: repodata-${{ runner.os }}-${{ hashFiles('pixi.lock') }}
-          restore-keys: repodata-${{ runner.os }}-
-      - name: Exercise broker readiness
-        run: >-
-          pixi run -e test conda broker dev test conda-presto.server
-          --scenario health --timeout 180 --json
-      - name: Exercise broker restart policy
-        run: >-
-          pixi run -e test conda broker dev test conda-presto.server
-          --scenario crash --timeout 180 --json
-      - name: Exercise nested worker replacement
-        timeout-minutes: 8
-        env:
-          CONDA_PRESTO_BROKER_LIFECYCLE_TEST: "1"
-        run: >-
-          pixi run -e test pytest --no-cov
-          tests/test_broker.py::test_broker_replaces_service_after_nested_worker_exit
+      - run: pixi run -e test python tests/integration_service.py --redis-url redis://127.0.0.1:6379/0

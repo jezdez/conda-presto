@@ -1,50 +1,14 @@
 # Run conda-presto with Docker
 
-conda-presto provides an HTTP server image and a one-shot CLI image. The
-examples pin the 0.8.0 release.
-
-## Choose image versions
-
-Set the image variables once, then use the remaining commands unchanged.
-
-`````{tab-set}
-
-````{tab-item} 0.8.0 release
-Select the exact server and CLI release tags:
+Build current source with the canonical server recipe:
 
 ```bash
-export CONDA_PRESTO_SERVER_IMAGE=ghcr.io/jezdez/conda-presto:0.8.0
-export CONDA_PRESTO_CLI_IMAGE=ghcr.io/jezdez/conda-presto:0.8.0-cli
+docker build --build-arg CONDA_PRESTO_VERSION=0.9.0.dev0 \
+  --tag conda-presto:dev .
+export CONDA_PRESTO_SERVER_IMAGE=conda-presto:dev
 ```
 
-The publishing workflow does not overwrite exact release tags. Pin the image
-manifest digest when reproducibility must also be independent of registry
-administration.
-````
-
-````{tab-item} Current main
-To test unpublished changes, build both targets from a source checkout with
-explicit local names:
-
-```bash
-docker build -f docker/Dockerfile \
-  --target server \
-  --build-arg PIXI_ENV=prod \
-  --build-arg CONDA_PRESTO_VERSION=0.8.1.dev0 \
-  --tag conda-presto-server:main .
-
-docker build -f docker/Dockerfile \
-  --target cli \
-  --build-arg PIXI_ENV=cli \
-  --build-arg CONDA_PRESTO_VERSION=0.8.1.dev0 \
-  --tag conda-presto-cli:main .
-
-export CONDA_PRESTO_SERVER_IMAGE=conda-presto-server:main
-export CONDA_PRESTO_CLI_IMAGE=conda-presto-cli:main
-```
-````
-
-`````
+For a published deployment, set `CONDA_PRESTO_SERVER_IMAGE` to an exact released tag or manifest digest. See {doc}`../reference/docker-images` for tags and optional provider builds.
 
 ## Run the HTTP server
 
@@ -62,7 +26,7 @@ docker run --detach \
 :::{important}
 The explicit `127.0.0.1` binding keeps the published port local to the Docker
 host. Do not replace it with an all-interface binding unless the deployment has
-an appropriate network and authentication boundary.
+an appropriate network access controls.
 The image already runs as UID 10001. Dropping capabilities and setting
 `no-new-privileges` also constrains inherited container privileges.
 :::
@@ -78,49 +42,13 @@ done
 curl --fail --silent --show-error http://127.0.0.1:8000/health
 ```
 
-The 0.8.0 server image and current-main builds expose the browser workbench at
-`http://127.0.0.1:8000/` and the generated OpenAPI document at
-`http://127.0.0.1:8000/openapi.json`.
+The generated OpenAPI document is available at `http://127.0.0.1:8000/openapi.json`.
 
 Inspect the server logs when startup takes longer than expected:
 
 ```bash
 docker logs --follow conda-presto
 ```
-
-## Run the one-shot CLI
-
-The `cli` image passes its arguments to `conda presto`:
-
-```bash
-docker run --rm \
-  --cap-drop ALL \
-  --security-opt no-new-privileges \
-  "$CONDA_PRESTO_CLI_IMAGE" \
-  --channel conda-forge \
-  --platform linux-64 \
-  python=3.13 numpy
-```
-
-## Read a host file from the CLI image
-
-Mount the current directory before referring to a host file:
-
-```bash
-docker run --rm \
-  --cap-drop ALL \
-  --security-opt no-new-privileges \
-  --mount type=bind,source="$PWD",target=/work,readonly \
-  --workdir /work \
-  "$CONDA_PRESTO_CLI_IMAGE" \
-  --file environment.yml \
-  --platform linux-64 \
-  --format pixi-lock-v6 \
-  > pixi.lock
-```
-
-Shell redirection writes `pixi.lock` on the host. A container cannot see
-`environment.yml` unless the containing directory is mounted.
 
 ## Configure the server
 
@@ -144,9 +72,7 @@ The server preloads the configured channel and platform combinations before
 limits and defaults.
 
 :::{note}
-The built-in health check always calls container port 8000. If
-`CONDA_PRESTO_PORT` changes the application port, replace the container health
-check too.
+The health check follows `CONDA_PRESTO_PORT`. Keep the published container port aligned with that setting.
 :::
 
 ## Keep a file-backed result cache
@@ -192,14 +118,4 @@ Remove the running container without deleting named cache volumes:
 docker rm --force conda-presto
 ```
 
-## Docker boundaries
-
-The server image uses a persistent foreground worker, but it does not start
-conda-broker. It does not expose the internal `/solver/v1` route and cannot be
-used as a `conda --solver=presto` target. Scheduled solver-result refresh also
-runs only in the broker-managed service.
-
-For a local solver backend, use {doc}`run-broker-service` and
-{doc}`use-presto-solver`. For readiness and logs, see
-{doc}`monitor-service`. See {doc}`../reference/docker-images` for image tags,
-platforms, defaults, and health-check settings.
+Use {doc}`monitor-service` for readiness and logs. The one-shot CLI remains available from the Python package as described in {doc}`resolve-from-cli`.
