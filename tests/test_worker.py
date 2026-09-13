@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import subprocess
+import sys
 import threading
 import time
 from types import SimpleNamespace
@@ -775,6 +777,12 @@ def test_persistent_solve_worker_entrypoint_redacts_dependency_logs(
             id="ftp-message",
         ),
         pytest.param(
+            "failed 123+.-HTTP://user:password@example.test/channel",
+            (),
+            "password",
+            id="non-letter-prefix",
+        ),
+        pytest.param(
             {"url": "s3://access:secret@example.test/bucket"},
             (),
             "secret",
@@ -834,6 +842,35 @@ def test_credential_redaction_filter_redacts_exception_traceback():
     assert "[redacted-url]" in record.msg
     assert "secret" not in record.msg
     assert record.exc_info is None
+
+
+@pytest.mark.parametrize("unit", ["a", "a1", "1+"])
+@pytest.mark.parametrize("suffix", ["", ":/ x://host", ":/ x://user:secret@host"])
+def test_credential_helpers_finish_long_failed_scheme_prefixes(unit, suffix):
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            (
+                "import sys\n"
+                "from conda_presto.exceptions import "
+                "contains_credentials, redact_safe_error\n"
+                "suffix = sys.argv[1]\n"
+                "prefix = sys.argv[2] * 128_000\n"
+                "message = prefix + suffix\n"
+                "assert contains_credentials(message) == ('secret' in suffix)\n"
+                "expected = prefix + (':/ [redacted-url]' if suffix else '')\n"
+                "assert redact_safe_error(message) == expected\n"
+            ),
+            suffix,
+            unit,
+        ],
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+
+    assert result.returncode == 0, (result.stdout, result.stderr)
 
 
 def test_persistent_solve_worker_entrypoint_reports_startup_failure(monkeypatch):

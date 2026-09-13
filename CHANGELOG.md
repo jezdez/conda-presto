@@ -27,6 +27,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Scan URL-shaped text in linear time during credential checks and error redaction.
+- Parse HTTP `.txt` uploads as requirements files without trying YAML loaders.
+- Check YAML structure in HTTP TOML uploads before parser autodetection.
 - Identify retained outputs by their exact bytes and media type, independently of solve cache lookup.
 - Omit result URLs when publication to configured shared storage fails.
 - Allow SBOM package identifiers in credential checks while rejecting credential-bearing URLs.

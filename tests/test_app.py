@@ -12,6 +12,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from types import SimpleNamespace
 
 import anyio
+import conda_lockfiles.load_yaml as lockfile_yaml
 import pytest
 import yaml
 from conda.models.environment import Environment
@@ -2383,6 +2384,40 @@ async def test_parse_endpoint(client, test_app):
 
 
 @pytest.mark.anyio
+async def test_parse_endpoint_accepts_requirements_file(client, test_app):
+    test_app.state.solver_limiter = anyio.CapacityLimiter(1)
+
+    response = await client.post(
+        "/parse",
+        json={"file": "# packages\nzlib\n\n*\n*foo\n", "filename": "arbitrary.txt"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["specs"] == ["zlib", "*", "*foo"]
+    assert response.json()["channels"] == []
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("endpoint", ["/parse", "/resolve"])
+async def test_http_rejects_yaml_uploaded_as_text(client, test_app, endpoint):
+    test_app.state.solver_limiter = anyio.CapacityLimiter(1)
+    content = "base: &base\n  package: zlib\ncopy:\n  <<: *base\n"
+    if endpoint == "/parse":
+        response = await client.post(
+            endpoint,
+            json={"file": content, "filename": "environment.txt"},
+        )
+    else:
+        response = await client.post(
+            endpoint,
+            content=content,
+            headers={"Content-Type": "text/plain"},
+        )
+
+    assert response.status_code == 400
+
+
+@pytest.mark.anyio
 async def test_parse_endpoint_rejects_too_many_specs(client, monkeypatch):
     monkeypatch.setattr("conda_presto.app.MAX_SPECS", 2)
     yml = "name: test\nchannels:\n  - conda-forge\ndependencies:\n  - a\n  - b\n  - c\n"
@@ -2540,14 +2575,23 @@ async def test_parse_endpoint_rejects_unsafe_filename_without_echoing_it(
         pytest.param(RuntimeError, "error", id="internal-error"),
     ],
 )
+@pytest.mark.parametrize(
+    ("filename", "content"),
+    [
+        pytest.param("environment.yml", "dependencies:\n  - zlib\n", id="yaml"),
+        pytest.param("pixi.toml", '[dependencies]\nzlib = "*"\n', id="toml"),
+    ],
+)
 def test_input_parse_process_entrypoint_sends_sanitized_result(
     monkeypatch,
     tmp_path,
     outcome,
     status,
+    filename,
+    content,
 ):
-    path = tmp_path / "environment.yml"
-    path.write_text("dependencies:\n  - zlib\n")
+    path = tmp_path / filename
+    path.write_text(content)
     sent = []
     sender = SimpleNamespace(send=sent.append, close=lambda: sent.append("closed"))
 
@@ -2605,6 +2649,20 @@ def test_input_parse_process_entrypoint_sends_sanitized_result(
             id="compact-toml",
         ),
         pytest.param(
+            "arbitrary.toml",
+            'x = """a: &a {package: zlib}\nb: *a\n#"""\n',
+            10,
+            "YAML aliases are not accepted",
+            id="toml-with-yaml-alias",
+        ),
+        pytest.param(
+            "arbitrary.toml",
+            'x = """a: [a, b, c]\n#"""\n',
+            3,
+            "structural complexity limit",
+            id="toml-with-yaml-nodes",
+        ),
+        pytest.param(
             "specs.txt",
             "a\nb\nc\n",
             2,
@@ -2639,6 +2697,48 @@ def test_input_parse_process_rejects_unsafe_complexity(
     status, payload = sent[0]
     assert status == "invalid"
     assert error in payload
+
+
+@pytest.mark.parametrize("filename", ["environment.txt", "arbitrary.TXT"])
+@pytest.mark.parametrize(
+    ("content", "expected_status"),
+    [
+        pytest.param("zlib\n*\n*foo\n", "ok", id="requirements"),
+        pytest.param(
+            "base: &base\n  package: zlib\ncopy:\n  <<: *base\n",
+            "invalid",
+            id="yaml-merge-alias",
+        ),
+    ],
+)
+def test_http_text_parser_does_not_load_yaml(
+    monkeypatch, tmp_path, filename, content, expected_status
+):
+    path = tmp_path / filename
+    path.write_text(content)
+    sent = []
+    yaml_calls = []
+    sender = SimpleNamespace(send=sent.append, close=lambda: None)
+
+    def reject_yaml(source):
+        yaml_calls.append(source)
+        raise AssertionError("Text uploads must not reach a YAML loader")
+
+    monkeypatch.setattr(inputs_module.os, "environ", {})
+    monkeypatch.setattr(lockfile_yaml, "yaml_safe_load", reject_yaml)
+
+    ParsedInputFile._from_path_process(
+        sender,
+        path,
+        None,
+        time.monotonic() + 10,
+    )
+
+    assert yaml_calls == []
+    status, payload = sent[0]
+    assert status == expected_status
+    if status == "ok":
+        assert payload.specs == ["zlib", "*", "*foo"]
 
 
 @pytest.mark.anyio

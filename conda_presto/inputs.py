@@ -48,13 +48,15 @@ class ParsedInputFile:
         path: str | os.PathLike[str],
         target_platforms: list[str] | tuple[str, ...] | None = None,
         *,
+        specifier_name: str | None = None,
         materialize_lockfiles: bool = True,
         transcode_format: str | None = None,
     ) -> ParsedInputFile:
         """Parse an input file through conda's plugin registry.
 
-        ``target_platforms`` is only used for lockfiles. When every target
-        platform is present and ``materialize_lockfiles`` is true,
+        ``specifier_name`` selects one installed parser without content
+        autodetection. ``target_platforms`` is only used for lockfiles. When every
+        target platform is present and ``materialize_lockfiles`` is true,
         ``environments`` contains the corresponding parsed ``Environment``
         objects. When ``transcode_format`` is set, a supporting lockfile adapter
         renders the requested platforms without returning temporary package
@@ -62,7 +64,10 @@ class ParsedInputFile:
         empty.
         """
         path_str = str(path)
-        specifier = context.plugin_manager.detect_environment_specifier(path_str)
+        specifier = context.plugin_manager.get_environment_specifier(
+            source=path_str,
+            name=specifier_name,
+        )
         spec = specifier.environment_spec(path_str)
         if not spec.can_handle():
             raise ValueError(f"No conda environment spec plugin can handle: {path_str}")
@@ -217,25 +222,32 @@ class ParsedInputFile:
         try:
             with open(os.devnull, "w") as output:
                 with redirect_stdout(output), redirect_stderr(output):
-                    if path.suffix.lower() in {".yml", ".yaml", ".json", ".lock"}:
+                    suffix = path.suffix.lower()
+                    if suffix != ".txt":
                         nodes = 0
-                        with path.open(encoding="utf-8") as source:
-                            for event in YAML(typ="safe", pure=True).parse(source):
-                                if time.monotonic() >= deadline:
-                                    raise TimeoutError
-                                if isinstance(event, AliasEvent):
-                                    raise ValueError(
-                                        "YAML aliases are not accepted by the "
-                                        "HTTP parser"
-                                    )
-                                if isinstance(event, NodeEvent):
-                                    nodes += 1
-                                    if nodes > HTTP_INPUT_MAX_NODES:
+                        try:
+                            with path.open(encoding="utf-8") as source:
+                                for event in YAML(typ="safe", pure=True).parse(source):
+                                    if time.monotonic() >= deadline:
+                                        raise TimeoutError
+                                    if isinstance(event, AliasEvent):
                                         raise ValueError(
-                                            "Input file exceeds the structural "
-                                            "complexity limit"
+                                            "YAML aliases are not accepted by the "
+                                            "HTTP parser"
                                         )
-                    elif path.suffix.lower() == ".toml":
+                                    if isinstance(event, NodeEvent):
+                                        nodes += 1
+                                        if nodes > HTTP_INPUT_MAX_NODES:
+                                            raise ValueError(
+                                                "Input file exceeds the structural "
+                                                "complexity limit"
+                                            )
+                        except YAMLError:
+                            # TOML need not be valid YAML, but content detection
+                            # can load a file that is valid in both formats as YAML.
+                            if suffix != ".toml":
+                                raise
+                    if suffix == ".toml":
                         with path.open("rb") as source:
                             pending = [tomllib.load(source)]
                         nodes = 0
@@ -261,7 +273,7 @@ class ParsedInputFile:
                                         "complexity limit"
                                     )
                                 pending.extend(children)
-                    else:
+                    elif suffix == ".txt":
                         items = 0
                         with path.open(encoding="utf-8") as source:
                             for line in source:
@@ -278,6 +290,9 @@ class ParsedInputFile:
                     parsed = ParsedInputFile.from_path(
                         path,
                         target_platforms,
+                        specifier_name=(
+                            "requirements.txt" if suffix == ".txt" else None
+                        ),
                         materialize_lockfiles=False,
                         transcode_format=transcode_format,
                     )

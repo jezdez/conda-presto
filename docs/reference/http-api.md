@@ -39,6 +39,8 @@ Both resolve methods accept repeated `spec`, `channel` and `platform` query para
 
 Raw files can be uploaded with `application/yaml`, `application/toml`, `text/plain`, or their `text/*` and `application/x-*` YAML/TOML equivalents. An installed parser must recognize the file. Use `?filename=pixi.lock` when a parser hint is needed. HTTP inputs reject `@EXPLICIT` files, YAML aliases and structures exceeding 10,000 nodes.
 
+Files named `*.txt`, including the default for `text/plain` uploads, use conda's requirements parser. Put one MatchSpec per line. Blank lines and `#` comments are allowed. Upload YAML with a `.yml` or `.yaml` filename.
+
 ```bash
 curl --fail-with-body --data-binary @environment.yml \
   -H 'Content-Type: application/yaml' \
