@@ -1,106 +1,34 @@
 # Roadmap
 
-Detailed design records live in GitHub issues so discussion and ownership stay
-with the work. This page is the compact release-status index for the current
-codebase.
+conda-presto makes conda operations callable by other systems through a dependable HTTP service. The next release reduces the interfaces and deployment variants maintained by the project.
 
-## Status legend
+## Service scope
 
-- {bdg-success}`shipped` -- implemented in the current codebase
-- {bdg-warning}`in progress` -- actively being worked on
-- {bdg-secondary}`proposed` -- designed but not yet started
+- Resolve specs or environment files for explicit target platforms.
+- Parse inputs through conda's environment-specifier registry and render outputs through its exporter registry.
+- Transcode the currently supported lockfile formats without fetching package archives over HTTP.
+- Retain successful outputs for retrieval while their cache entries remain available.
+- Keep worker isolation, deadlines, recovery, readiness, channel restrictions and bounded storage.
+- Provide one server container, a compact CLI and an Action that calls an explicit HTTP endpoint.
 
-## v0.5 foundations
+Separate diagnostics, the browser workbench, local conda transaction delegation, recorded-request warming, the Action's local mode and the CLI container are removed from the current scope. Upstream doctor or compare enhancements are not prerequisites for the smaller service.
 
-| Issue | Status | Summary |
-|---|:---:|---|
-| [Lockfile transcoder mode](https://github.com/jezdez/conda-presto/issues/11) | {bdg-success}`shipped` | CLI and HTTP lockfile-in / lockfile-out conversion without solving |
-| [GitHub Action for CI workflows](https://github.com/jezdez/conda-presto/issues/17) | {bdg-success}`shipped` | Composite action for local CLI or hosted API solve workflows |
-| [Content-addressed solve cache](https://github.com/jezdez/conda-presto/issues/19) | {bdg-success}`shipped` | HTTP result cache with durable `/r/<hash>` lookup while entries are retained |
+## Optional provider adapters
 
-## v0.6 review tools
+The service can expose existing provider capabilities without implementing their formats or cryptography itself:
 
-| Issue | Status | Summary |
-|---|:---:|---|
-| [Preflight validation](https://github.com/jezdez/conda-presto/issues/16) | {bdg-success}`shipped` | Deterministic local input checks and lint-style findings |
-| [Environment / lockfile diff](https://github.com/jezdez/conda-presto/issues/14) | {bdg-success}`shipped` | Platform-aware comparisons between resolved HTTP inputs |
-| [Explain package inclusion](https://github.com/jezdez/conda-presto/issues/15) | {bdg-success}`shipped` | Bounded dependency-chain explanations for successful single-platform solves |
+- `/sbom` uses conda-sboms to describe resolved conda package records, retaining requested roots and producing a valid document for each selected platform.
+- `/sign` signs exact outputs produced by this deployment through conda-sigstore. The service constructs the limited statement using its configured identity. It does not endorse arbitrary caller-authored claims.
+- `/verify` checks a supplied artifact and bundle against the recipient's expected signer identity and issuer, and reports artifact matching separately from supported statement semantics.
 
-## v0.7 repair and solver service
+Providers are optional. Missing providers or noninteractive signing credentials must produce clear failures. Generic artifact signatures do not claim to capture the complete inputs or original construction of a solve.
 
-| Issue | Status | Summary |
-|---|:---:|---|
-| [Repair suggestions](https://github.com/jezdez/conda-presto/issues/13) | {bdg-success}`shipped` | Tested single-spec relaxations for infeasible solves |
-| [Broker-managed local service](https://github.com/jezdez/conda-presto/issues/39) | {bdg-success}`shipped` | Manual loopback HTTP service with a persistent solver worker |
-| [Internal conda solver backend](https://github.com/jezdez/conda-presto/issues/40) | {bdg-success}`shipped` | Local final-state delegation through the broker service |
-| [Recorded solver requests](https://github.com/jezdez/conda-presto/issues/77) | {bdg-success}`shipped` | Bounded request catalog for scheduled solver-cache refresh |
-| [Scheduled solver-cache refresh](https://github.com/jezdez/conda-presto/issues/78) | {bdg-success}`shipped` | Foreground-aware refresh of missing or stale private final states |
+## Deferred work
 
-## v0.8 browser workbench
+Detailed construction evidence, a solve provenance profile, attestation retrieval, policy evaluation and admission remain deferred. Their accepted requirements are preserved in {doc}`the design records <adr/0003-simplify-the-service>` and issues [20](https://github.com/jezdez/conda-presto/issues/20), [21](https://github.com/jezdez/conda-presto/issues/21), [22](https://github.com/jezdez/conda-presto/issues/22), [23](https://github.com/jezdez/conda-presto/issues/23) and [24](https://github.com/jezdez/conda-presto/issues/24). They are not a committed delivery sequence for this release.
 
-| Change | Status | Summary |
-|---|:---:|---|
-| [Browser workbench](https://github.com/jezdez/conda-presto/pull/89) | {bdg-success}`shipped` | First-party browser workbench for preflight, resolve, package inspection, and exporter output |
+No new package, upstream diagnostic workflow, lockfile format, advisory scanner, MCP integration or release assembly system is part of this reduction. Future additions need a concrete integration problem and an existing provider of the underlying operation where one is available.
 
-## v0.9 trust and admission
+## Completion criteria
 
-Provenance, attestation serving, admission control, and CEP alignment.
-
-| Issue | Status | Summary |
-|---|:---:|---|
-| [Solve provenance field capture](https://github.com/jezdez/conda-presto/issues/20) | {bdg-secondary}`proposed` | Shared request, artifact, solver, and channel snapshot metadata |
-| [Signed solve provenance](https://github.com/jezdez/conda-presto/issues/21) | {bdg-secondary}`proposed` | CEP-27-aligned Sigstore solve attestations |
-| [Serving solve attestations](https://github.com/jezdez/conda-presto/issues/22) | {bdg-secondary}`proposed` | Durable `/r/<hash>/attestation` URL and `Link` header |
-| [Policy and admission engine](https://github.com/jezdez/conda-presto/issues/23) | {bdg-secondary}`proposed` | Policy checks over solved artifacts before installation |
-| [CEP draft: solve attestation predicate](https://github.com/jezdez/conda-presto/issues/24) | {bdg-secondary}`proposed` | Draft CEP text for a solve attestation predicate |
-
-## Dependency graph
-
-```{mermaid}
-graph TD
-    T["transcode\n(shipped)"] --> PF["preflight + lint\n(shipped)"]
-    T --> RPR["repair suggestions\n(shipped)"]
-    T --> D["diff\n(shipped)"]
-    T --> E["explain\n(shipped)"]
-    P["result cache + permalink\n(shipped)"] --> PV["provenance fields"]
-    P --> B["broker-managed local service\n(shipped)"]
-    B --> FS["internal Presto solver backend\n(shipped)"]
-    FS --> WC["recorded solver requests\n(shipped)"]
-    WC --> CW["scheduled solver-cache refresh\n(shipped)"]
-    PF --> RPR
-    E --> RPR
-    PF --> WB["browser workbench\n(shipped)"]
-    P --> WB
-    PV --> A["signed provenance"]
-    A --> CEP["CEP draft"]
-    A --> S["attestation serving"]
-    P --> S
-    S --> AD["policy + admission"]
-    GH["CI action\n(shipped)"] --> PF
-    GH --> D
-
-    classDef shipped fill:#e6f4ea,stroke:#1e7e34,color:#0b3d1f;
-    class T,P,GH,PF,D,E,RPR,B,FS,WC,CW,WB shipped;
-```
-
-HTTP lockfile transcoding reconstructs package records from embedded metadata
-without fetching the referenced archives. Other review paths remain
-metadata-only for uploaded lockfiles. Repair stays separate from explain
-because it may run repeated solver attempts under an explicit budget. The
-internal Presto solver backend
-uses the broker-managed local process and does not define a remote protocol.
-Its final-state entries share the configured cache storage and
-in-memory bounds, but remain separate from public `/resolve` permalinks.
-Successful foreground requests can be recorded as candidates for later cache
-refresh without changing the final-state cache key. When the catalog is full, a
-recorded request enters only after its count, then recency, outranks the
-lowest-ranked candidate.
-
-## Conventions
-
-- Use one issue per planned change.
-- Keep the issue body as the complete design record while work is active.
-- Use this page for shipped status and release grouping.
-- Treat closed issues as historical design and discussion records.
-- No marketing in proposals. Each issue must justify itself in its own problem
-  statement.
+The smaller service must retain native and exporter solves, multiple-platform isolation, no-fetch HTTP conversion, correct result retention and worker recovery. A real Action-to-service example must exercise the integration. Independent instances must demonstrate correct execution and shared-result retrieval before horizontal behavior is claimed. Measurements must distinguish metadata state, process reuse, full-result hits and misses.

@@ -1,14 +1,11 @@
 # Environment variable reference
 
 conda-presto reads these settings when its configuration module is imported.
-The scope column distinguishes direct solves, public HTTP servers, and the
-broker-only solver service.
+The scope column distinguishes direct solves and HTTP servers.
 
 ## Direct solve settings
 
-These settings affect `conda presto` and public HTTP resolve operations. The
-internal `conda --solver=presto` path captures effective state from the calling
-conda process instead.
+These settings affect `conda presto` and HTTP resolve operations.
 
 | Variable | Default | Scope | Purpose |
 |---|---|---|---|
@@ -25,9 +22,6 @@ requested Linux, macOS, or Windows target, including the host's native subdir.
 The resulting effective records can also include other virtual-package plugin
 detections or overrides, such as CUDA or architecture records. The public
 result-cache identity captures those effective records per requested platform.
-The internal Presto solver does not use these four defaults. It serializes and
-restores the calling conda process's effective virtual-package records. Those
-records also participate in private solver cache identity.
 
 ## HTTP server settings
 
@@ -35,38 +29,30 @@ records also participate in private solver cache identity.
 |---|---|---|
 | `CONDA_PRESTO_PLATFORMS` | `linux-64,osx-arm64,osx-64` | Platforms whose configured channels are warmed before readiness. This is not the default platform list for a request. |
 | `CONDA_PRESTO_ALLOWED_CHANNELS` | value of `CONDA_PRESTO_CHANNELS` | Accepted HTTP request channels after exact resolved-URL comparison. `*` permits HTTP and HTTPS channels but not local file URLs. |
-| `CONDA_PRESTO_CONCURRENCY` | `4` | Maximum simultaneous foreground solve requests. Docker and the broker provider set `1`. |
+| `CONDA_PRESTO_CONCURRENCY` | `4` | Maximum simultaneous foreground solve requests. Docker sets `1`. |
 | `CONDA_PRESTO_MAX_BODY_BYTES` | `1048576` | Maximum HTTP request body. Excess returns HTTP 413. |
 | `CONDA_PRESTO_MAX_SPECS` | `200` | Maximum specs in one request. |
 | `CONDA_PRESTO_MAX_CHANNELS` | `8` | Maximum channels in one request. |
 | `CONDA_PRESTO_MAX_PLATFORMS` | `8` | Maximum platforms in one request. |
-| `CONDA_PRESTO_MAX_SOLVER_CHANNELS` | `128` | Maximum channels in the private broker solver protocol. |
-| `CONDA_PRESTO_MAX_SOLVER_STATE_ITEMS` | `10000` | Maximum combined items across requested additions, removals, installed records, history, pins, virtual packages, aggressive updates, and always-update entries in the private broker solver protocol. |
-| `CONDA_PRESTO_MAX_REPAIR_SUGGESTIONS` | `5` | Server ceiling for returned repair suggestions. |
-| `CONDA_PRESTO_MAX_REPAIR_ATTEMPTS` | `20` | Server ceiling for evaluated repair candidates. |
-| `CONDA_PRESTO_MAX_REPAIR_TIME_BUDGET_MS` | `5000` | Server ceiling for repair wall time in milliseconds. |
-| `CONDA_PRESTO_SOLVE_TIMEOUT_S` | `60` | Solver deadline used by HTTP requests, the internal solver client, and scheduled refresh where lower than fixed limits. Non-abandoned cache-state inspection can extend observed request duration. |
+| `CONDA_PRESTO_SOLVE_TIMEOUT_S` | `60` | Solver deadline used by HTTP requests. Non-abandoned cache-state inspection can extend observed request duration. |
 | `CONDA_PRESTO_PARSE_TIMEOUT_S` | `10` | HTTP file-parse timeout. |
-| `CONDA_PRESTO_HOST` | `127.0.0.1` | Default for the `--host` server flag. The Docker command fixes `0.0.0.0`, and the broker provider fixes `127.0.0.1`. |
-| `CONDA_PRESTO_PORT` | `8000` | Default for the `--port` server flag. The broker assigns it. The Docker health check remains fixed to port 8000. |
-| `CONDA_PRESTO_PERSISTENT_WORKER` | `false` | Route HTTP solves through one worker that retains loaded repodata and indexes. Set by Docker and the broker provider. |
-| `CONDA_PRESTO_RATE_LIMIT` | `300` | Requests per minute per client IP. Set to `0` to disable. The broker provider sets `0`. |
+| `CONDA_PRESTO_HOST` | `127.0.0.1` | Default for the `--host` server flag. The Docker command fixes `0.0.0.0`. |
+| `CONDA_PRESTO_PORT` | `8000` | Default for the `--port` server flag. The Docker health check follows this setting. |
+| `CONDA_PRESTO_PERSISTENT_WORKER` | `false` | Route HTTP solves through one worker that retains loaded repodata and indexes. Set by Docker. |
+| `CONDA_PRESTO_RATE_LIMIT` | `300` | Requests per minute per client IP. Set to `0` to disable. |
 | `CONDA_PRESTO_CORS_ORIGINS` | unset | Comma-separated browser origins. CORS middleware is absent when unset. |
 | `CONDA_PRESTO_LOG_LEVEL` | `INFO` | Application logger level: `DEBUG`, `INFO`, `WARNING`, or `ERROR`. |
 
-Request-cap violations return HTTP 400 unless the body limit applies. Repair
-query values below the configured ceilings narrow one request. Values above the
-ceilings are clamped.
+Request-cap violations return HTTP 400 unless the body limit applies.
 
 ## Result cache settings
 
-These settings apply to any HTTP application process, including Docker and the
-broker service. One-shot CLI output does not use the HTTP result cache.
+These settings apply to HTTP applications. One-shot CLI output does not use the HTTP result cache.
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `CONDA_PRESTO_RESULT_CACHE_SIZE` | `256` | Combined in-process entry limit for public resolve responses and private solver final states. |
-| `CONDA_PRESTO_RESULT_CACHE_MAX_MEMORY_MB` | `64` | Combined encoded payload limit in MiB. Set to `0` to remove the byte cap. |
+| `CONDA_PRESTO_RESULT_CACHE_SIZE` | `256` | In-process entry limit for resolve responses. |
+| `CONDA_PRESTO_RESULT_CACHE_MAX_MEMORY_MB` | `64` | Encoded payload limit in MiB. Set to `0` to remove the byte cap. |
 | `CONDA_PRESTO_RESULT_CACHE_BACKEND` | automatic | `memory`, `file`, or `redis`. |
 | `CONDA_PRESTO_RESULT_CACHE_DIR` | unset | Directory required by the file backend. Selecting no backend but setting this value selects file storage. |
 | `CONDA_PRESTO_RESULT_CACHE_REDIS_URL` | unset | Redis URL. Selecting Redis without a URL uses `redis://localhost:6379/0`. Setting this value selects Redis when no backend is explicit. |
@@ -76,34 +62,16 @@ Negative entry or memory limits are rejected. File storage without a directory
 and unknown backend names are also rejected. See {doc}`cache` for key and
 retention behavior.
 
-## Broker-only refresh settings
-
-These settings are loaded by every server process, but scheduled refresh is
-enabled only for the persistent `conda-presto.server` broker child.
+## Optional Sigstore settings
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `CONDA_PRESTO_SOLVER_CACHE_WARM_CANDIDATE_SIZE` | `32` | Maximum recorded requests in the candidate catalog, plus the same observation capacity. Set to `0` to disable recording. |
-| `CONDA_PRESTO_SOLVER_CACHE_WARM_CANDIDATE_PERSIST` | `false` | Best-effort checkpointing of requests without detected credentials. Requires file or Redis storage. |
-| `CONDA_PRESTO_SOLVER_CACHE_WARM_INTERVAL_S` | `300` | Seconds between scheduled cycles. Set to `0` to disable scheduling. |
-| `CONDA_PRESTO_SOLVER_CACHE_WARM_BATCH_SIZE` | `8` | Maximum eligible requests considered per cycle. Must be positive. |
+| `CONDA_PRESTO_SIGSTORE_SIGNING_ENABLED` | `false` | Enable signing service-produced artifacts when a provider and noninteractive credentials are available. |
+| `CONDA_PRESTO_SIGSTORE_ALLOW_PUBLIC_SIGNING` | `false` | Explicitly permit use of the public signing service. |
+| `CONDA_PRESTO_SIGSTORE_TRUST_CONFIG` | unset | Path to an operator-provided Sigstore trust configuration. A path alone does not enable signing. |
+| `CONDA_PRESTO_SIGSTORE_OFFLINE` | `false` | Select offline verification using the configured trust material. |
 
-The first cycle has a fixed 30-second delay. Fixed per-operation and cycle
-budgets are documented in {doc}`cache`.
-
-## Broker-injected variables
-
-conda-broker supplies these values to the service child. They are integration
-state, not normal user configuration.
-
-| Variable | Value | Consumer |
-|---|---|---|
-| `CONDA_BROKER_SERVICE_NAME` | `conda-presto.server` | Enables the guarded private solver route and scheduled refresh. |
-| `CONDA_PRESTO_URL` | Allocated loopback endpoint | Broker health-check command and service consumers. |
-| `CONDA_PRESTO_PORT` | Allocated port | Uvicorn bind configuration. |
-
-The provider also overrides host, concurrency, rate limiting,
-persistent-worker mode, and conda file locking. See {doc}`broker-service`.
+Install optional providers with `conda-presto[sbom]`, `conda-presto[sigstore]` or both. The source workspace's `artifacts` environment includes both providers. Capability discovery reports configuration and provider availability, not a guarantee that signing credentials are currently usable.
 
 ## Pixi activation settings
 
@@ -114,21 +82,16 @@ workloads:
 |---|---|---|
 | `CONDA_SOLVER` | `rattler` | Select rattler in conda context before conda-presto applies its direct-engine requirement. |
 | `CONDA_CHANNEL_PRIORITY` | `strict` | Prefer higher-priority channels. |
-| `CONDA_NO_LOCK` | `true` | Disable conda filesystem locking in the shared Pixi activation. The Docker server and broker child override this to `false`. |
+| `CONDA_NO_LOCK` | `true` | Disable conda filesystem locking in the shared Pixi activation. The Docker server overrides this to `false`. |
 | `CONDA_UNSATISFIABLE_HINTS` | `false` | Disable conda's additional unsatisfiable hint generation. |
 | `CONDA_NUMBER_CHANNEL_NOTICES` | `0` | Suppress channel notices. |
 | `CONDA_AGGRESSIVE_UPDATE_PACKAGES` | empty | Disable forced aggressive updates. |
 | `CONDA_LOCAL_REPODATA_TTL` | `300` | Reuse local repodata under conda's effective cache policy. |
 | `CONDA_JSON` | `true` | Suppress progress-oriented conda output. |
 
-The Docker server applies `CONDA_NO_LOCK=false` after its Pixi shell hook, and
-the broker child injects the same value. Their persistent worker processes
-share conda's package cache. The one-shot CLI image keeps the Pixi activation
-default.
+The Docker server applies `CONDA_NO_LOCK=false` after its Pixi shell hook because persistent workers share conda's package cache.
 
 ## See also
 
 - {doc}`configuration`
 - {doc}`cache`
-- {doc}`broker-service`
-- {doc}`solver-backend`

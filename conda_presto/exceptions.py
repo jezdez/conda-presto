@@ -16,7 +16,7 @@ from __future__ import annotations
 import logging
 import re
 import traceback
-from urllib.parse import unquote, urlparse
+from urllib.parse import parse_qsl, unquote, urlparse
 
 from conda.exceptions import PackagesNotFoundError, UnsatisfiableError
 
@@ -85,6 +85,15 @@ def contains_credentials(value: object) -> bool:
                     parsed = urlparse(candidate)
                 except ValueError:
                     return True
+                if parsed.scheme in {"pkg", "conda-environment"} and not parsed.netloc:
+                    # PURL qualifiers and environment references are identifiers.
+                    # Their values can still contain credentialed download URLs.
+                    for name, qualifier in parse_qsl(parsed.query):
+                        if name.lower() in {"auth", "password", "token"} and qualifier:
+                            return True
+                        pending.append(qualifier)
+                    pending.append(parsed.fragment)
+                    continue
                 path_parts = [part for part in parsed.path.split("/") if part]
                 if (
                     parsed.username

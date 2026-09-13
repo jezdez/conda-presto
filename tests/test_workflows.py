@@ -1,4 +1,4 @@
-"""Tests for release workflow security boundaries."""
+"""Tests for release workflow permissions and publication checks."""
 
 from __future__ import annotations
 
@@ -48,20 +48,18 @@ def test_docker_publish_uses_dispatched_tag():
         "RELEASE_TAG: ${{ github.event_name == 'pull_request' && '0.0.0' || "
         "github.ref_name }}"
     ) in text
-    assert "needs: [smoke-server, smoke-cli, scan-arm64]" in publish_job
+    assert "needs: [smoke-server, scan-arm64]" in publish_job
     assert "provenance: mode=max" in publish_job
     assert "sbom: true" in publish_job
     assert "environment: ghcr" in publish_job
-    assert "type=sha,prefix=,suffix=${{ matrix.suffix }}" in publish_job
+    assert "type=sha,prefix=" in publish_job
     assert "SOURCE_COMMIT: ${{ github.sha }}" in publish_job
 
 
 @pytest.mark.parametrize(
     ("job", "next_job"),
     [
-        pytest.param("smoke-server", "smoke-space", id="server-amd64"),
-        pytest.param("smoke-space", "smoke-cli", id="space-amd64"),
-        pytest.param("smoke-cli", "scan-arm64", id="cli-amd64"),
+        pytest.param("smoke-server", "scan-arm64", id="server-amd64"),
         pytest.param("scan-arm64", "metadata-smoke", id="published-arm64"),
     ],
 )
@@ -80,13 +78,13 @@ def test_docker_builds_record_and_block_vulnerabilities(job, next_job):
     assert scan_job.count("trivyignores: .trivyignore.yaml") == 1
 
 
-def test_arm64_scan_builds_server_and_cli_images():
+def test_arm64_scan_builds_the_server_image():
     text = (WORKFLOWS / "docker.yml").read_text()
     arm_job = text.split("  scan-arm64:\n", 1)[1].split("  metadata-smoke:\n", 1)[0]
 
     assert "platforms: linux/arm64" in arm_job
-    assert "target: server" in arm_job
-    assert "target: cli" in arm_job
+    assert "file: Dockerfile" in arm_job
+    assert "image-ref: conda-presto:server-arm64-scan" in arm_job
     assert (
         "docker/setup-qemu-action@96fe6ef7f33517b61c61be40b68a1882f3264fb8" in arm_job
     )
@@ -115,18 +113,8 @@ def test_trivy_exceptions_are_narrow_and_expire(advisory, statement, expiry):
     exception = ignore.split(f"- id: {advisory}", 1)[1].split("\n  - id:", 1)[0]
 
     assert ".pixi/envs/prod/" in exception
-    assert ".pixi/envs/cli/" in exception
     assert statement in exception
     assert f"expired_at: {expiry}" in exception
-
-
-def test_cli_image_is_scanned_before_publish():
-    text = (WORKFLOWS / "docker.yml").read_text()
-    smoke_job = text.split("  smoke-cli:\n", 1)[1].split("  scan-arm64:\n", 1)[0]
-
-    assert "target: cli" in smoke_job
-    assert "image-ref: conda-presto:cli-smoke" in smoke_job
-    assert "docker run --rm conda-presto:cli-smoke --help" in smoke_job
 
 
 def test_docker_publish_refuses_existing_immutable_tags():
@@ -135,8 +123,8 @@ def test_docker_publish_refuses_existing_immutable_tags():
         "  attest-images:\n", 1
     )[0]
 
-    assert '"$IMAGE:$version$SUFFIX"' in publish_job
-    assert '"$IMAGE:$short_commit$SUFFIX"' in publish_job
+    assert '"$IMAGE:$version"' in publish_job
+    assert '"$IMAGE:$short_commit"' in publish_job
     assert "Immutable image tag already exists" in publish_job
     assert "subject-version:" not in text
 
@@ -171,11 +159,10 @@ def test_codeql_actions_use_commit_shas():
 @pytest.mark.parametrize(
     "path",
     [
-        "action.yml",
+        ".github/workflows/action-smoke.yml",
         ".github/workflows/ci.yml",
         ".github/workflows/docs.yml",
         ".github/workflows/release.yml",
-        ".github/workflows/solver-smoke.yml",
         ".github/workflows/update-lockfile.yml",
     ],
 )

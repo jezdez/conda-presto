@@ -6,11 +6,10 @@ import logging
 import multiprocessing
 import os
 import threading
-from collections import OrderedDict, deque
+from collections import OrderedDict
 from collections.abc import Callable
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import dataclass
-from functools import partial
 from operator import attrgetter
 
 import msgspec
@@ -20,7 +19,6 @@ from conda.models.channel import Channel
 from conda.models.environment import Environment
 from conda.models.match_spec import MatchSpec
 from conda.models.records import PackageRecord
-from conda.models.version import VersionOrder
 from conda_rattler_solver.index import RattlerIndexHelper
 from conda_rattler_solver.state import SolverInputState, SolverOutputState
 
@@ -261,124 +259,6 @@ class ResolvedPackage(msgspec.Struct):
             constrains=tuple(record.constrains) if record.constrains else (),
         )
 
-    @classmethod
-    def from_external(
-        cls,
-        manager: str,
-        value: str,
-        platform: str,
-    ) -> ResolvedPackage:
-        """Convert a parsed lockfile external package into API metadata."""
-        spec = MatchSpec(value)
-        channel = spec.get("channel")
-        return cls(
-            name=spec.name,
-            version=spec.get("version") or "",
-            build=spec.get("build") or "",
-            build_number=0,
-            channel=channel.canonical_name if channel else "",
-            subdir=platform,
-            url=value,
-            sha256="",
-            md5="",
-            size=None,
-            depends=(),
-            constrains=(),
-            manager=manager,
-        )
-
-    @property
-    def identity(self) -> tuple[str, str]:
-        """Return the package identity used by review surfaces."""
-        return self.manager, self.name
-
-    def matches(self, spec: MatchSpec) -> bool:
-        """Return whether a conda match spec selects this package."""
-        return spec.match(
-            PackageRecord(
-                name=self.name,
-                version=self.version,
-                build=self.build,
-                build_number=self.build_number,
-                channel=Channel(self.channel) if self.channel else None,
-                subdir=self.subdir,
-                depends=self.depends,
-            )
-        )
-
-    def change_kind(self, other: ResolvedPackage) -> str:
-        """Classify this package's transition to *other*."""
-        if self.version == other.version:
-            return "build-change"
-        try:
-            if VersionOrder(self.version) < VersionOrder(other.version):
-                return "upgrade"
-            if VersionOrder(self.version) > VersionOrder(other.version):
-                return "downgrade"
-        except Exception:
-            pass
-        return "version-change"
-
-
-class DiffPackage(msgspec.Struct, omit_defaults=True):
-    """Stable resolved-package fields relevant to a review diff."""
-
-    manager: str
-    name: str
-    platform: str
-    version: str
-    build: str
-    channel: str
-    subdir: str
-    url: str
-
-    @classmethod
-    def from_resolved(
-        cls,
-        package: ResolvedPackage,
-        platform: str,
-    ) -> DiffPackage:
-        """Project a solve record without hash or size churn."""
-        return cls(
-            manager=package.manager,
-            name=package.name,
-            platform=platform,
-            version=package.version,
-            build=package.build,
-            channel=package.channel,
-            subdir=package.subdir,
-            url=package.url,
-        )
-
-
-class ChangedPackage(msgspec.Struct, rename={"from_": "from"}):
-    """One resolved package that differs between two environments."""
-
-    name: str
-    manager: str
-    from_: DiffPackage
-    to: DiffPackage
-    kind: str
-
-
-class PlatformDiff(msgspec.Struct):
-    """Resolved package changes for one conda platform."""
-
-    added: list[DiffPackage]
-    removed: list[DiffPackage]
-    changed: list[ChangedPackage]
-    unchanged_count: int
-
-
-class ExplainResult(msgspec.Struct):
-    """Dependency chains explaining one selected package."""
-
-    package: str
-    version: str
-    platform: str
-    chains: list[list[str]]
-    complete: bool
-
 
 class SolveResult(msgspec.Struct):
     """The result of a solve operation for a single platform.
@@ -396,131 +276,14 @@ class SolveResult(msgspec.Struct):
         cls,
         platform: str,
         exc: Exception,
-        *,
-        captured_errors: tuple[type[Exception], ...] = (Exception,),
     ) -> SolveResult:
         """Convert an expected platform failure into a safe result."""
-        if not isinstance(exc, captured_errors):
-            raise exc
         message = safe_error_message(exc)
         log.warning("Solver dispatch error for %s: %s", platform, message)
         return cls(
             platform=platform,
             packages=[],
             error=message,
-        )
-
-    def diff(self, other: SolveResult) -> PlatformDiff:
-        """Return the resolved package difference from this result to *other*."""
-        if self.platform != other.platform:
-            raise ValueError("Cannot diff results for different platforms")
-
-        before = {package.identity: package for package in self.packages}
-        after = {package.identity: package for package in other.packages}
-        added = [
-            DiffPackage.from_resolved(after[key], self.platform)
-            for key in sorted(after.keys() - before.keys())
-        ]
-        removed = [
-            DiffPackage.from_resolved(before[key], self.platform)
-            for key in sorted(before.keys() - after.keys())
-        ]
-        changed = [
-            ChangedPackage(
-                name=after[key].name,
-                manager=after[key].manager,
-                from_=DiffPackage.from_resolved(before[key], self.platform),
-                to=DiffPackage.from_resolved(after[key], self.platform),
-                kind=before[key].change_kind(after[key]),
-            )
-            for key in sorted(before.keys() & after.keys())
-            if (
-                before[key].version,
-                before[key].build,
-                before[key].url,
-            )
-            != (
-                after[key].version,
-                after[key].build,
-                after[key].url,
-            )
-        ]
-        return PlatformDiff(
-            added=added,
-            removed=removed,
-            changed=changed,
-            unchanged_count=len(before.keys() & after.keys()) - len(changed),
-        )
-
-    def explain(
-        self,
-        requested: list[str],
-        package_name: str,
-        max_depth: int = 20,
-        max_chains: int = 20,
-    ) -> ExplainResult | None:
-        """Return bounded requested-package chains for *package_name*."""
-        packages = [package for package in self.packages if package.manager == "conda"]
-        target = next(
-            (package for package in packages if package.name == package_name), None
-        )
-        if target is None:
-            return None
-
-        complete = True
-        edges = {package.name: [] for package in packages}
-        for parent in packages:
-            for dependency in parent.depends:
-                try:
-                    spec = MatchSpec(dependency)
-                except Exception:
-                    complete = False
-                    continue
-                if spec.name is None or spec.name.startswith("__"):
-                    complete = False
-                    continue
-                matches = [
-                    package.name for package in packages if package.matches(spec)
-                ]
-                if not matches:
-                    complete = False
-                edges[parent.name].extend(matches)
-
-        roots: list[str] = []
-        for value in requested:
-            try:
-                spec = MatchSpec(value)
-            except Exception:
-                complete = False
-                continue
-            matches = [package.name for package in packages if package.matches(spec)]
-            if not matches:
-                complete = False
-            roots.extend(matches)
-
-        chains: list[list[str]] = []
-        queue = deque((root, [root]) for root in dict.fromkeys(roots))
-        while queue and len(chains) < max_chains:
-            package_name, chain = queue.popleft()
-            if package_name == target.name:
-                chains.append(chain)
-                continue
-            if len(chain) >= max_depth:
-                complete = False
-                continue
-            for child in edges[package_name]:
-                if child in chain:
-                    complete = False
-                    continue
-                queue.append((child, [*chain, child]))
-        if queue:
-            complete = False
-        return ExplainResult(
-            package=target.name,
-            version=target.version,
-            platform=self.platform,
-            chains=chains,
-            complete=complete,
         )
 
 
@@ -706,25 +469,19 @@ def solve(
     channels: list[str],
     dependencies: list[str],
     platforms: list[str] | None = None,
-    *,
-    captured_errors: tuple[type[Exception], ...] = (Exception,),
 ) -> list[SolveResult]:
     """Solve for one or more platforms, returning ``SolveResult`` objects.
 
     Used by the HTTP API.  Single-platform solves run in-process;
     multi-platform solves are dispatched to a persistent process pool.
-    Errors matching *captured_errors* are captured per-platform. Other
-    failures propagate to the caller.
+    Failures are captured per platform with sanitized error messages.
     """
     return dispatch(
         solve_one_platform,
         tuple(channels),
         dependencies,
         platforms or [NATIVE_SUBDIR],
-        on_error=partial(
-            SolveResult.from_exception,
-            captured_errors=captured_errors,
-        ),
+        on_error=SolveResult.from_exception,
     )
 
 
@@ -743,6 +500,7 @@ def solve_one_environment(
     return Environment(
         platform=platform,
         explicit_packages=records,
+        requested_packages=[MatchSpec(spec) for spec in dependencies],
     )
 
 

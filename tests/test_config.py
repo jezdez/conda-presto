@@ -92,45 +92,6 @@ def test_result_cache_max_memory_mb_converts_to_bytes(monkeypatch, raw, expected
 @pytest.mark.parametrize(
     "name",
     [
-        pytest.param("CONDA_PRESTO_MAX_REPAIR_SUGGESTIONS", id="suggestions"),
-        pytest.param("CONDA_PRESTO_MAX_REPAIR_ATTEMPTS", id="attempts"),
-        pytest.param("CONDA_PRESTO_MAX_REPAIR_TIME_BUDGET_MS", id="time-budget"),
-    ],
-)
-def test_repair_limits_must_be_positive(monkeypatch, name):
-    monkeypatch.setenv(name, "0")
-    with pytest.raises(ValueError, match="Repair limits must be positive"):
-        importlib.reload(config_module)
-    monkeypatch.delenv(name)
-    importlib.reload(config_module)
-
-
-@pytest.mark.parametrize(
-    "name",
-    [
-        pytest.param("CONDA_PRESTO_MAX_SOLVER_CHANNELS", id="channels"),
-        pytest.param("CONDA_PRESTO_MAX_SOLVER_STATE_ITEMS", id="state-items"),
-    ],
-)
-def test_private_solver_limits_must_be_positive(monkeypatch, name):
-    monkeypatch.setenv(name, "0")
-    with pytest.raises(ValueError, match="Private solver request limits"):
-        importlib.reload(config_module)
-    monkeypatch.delenv(name)
-    importlib.reload(config_module)
-
-
-def test_solver_warm_candidate_size_must_not_be_negative(monkeypatch):
-    monkeypatch.setenv("CONDA_PRESTO_SOLVER_CACHE_WARM_CANDIDATE_SIZE", "-1")
-    with pytest.raises(ValueError, match="must not be negative"):
-        importlib.reload(config_module)
-    monkeypatch.delenv("CONDA_PRESTO_SOLVER_CACHE_WARM_CANDIDATE_SIZE")
-    importlib.reload(config_module)
-
-
-@pytest.mark.parametrize(
-    "name",
-    [
         pytest.param("CONDA_PRESTO_RESULT_CACHE_SIZE", id="entries"),
         pytest.param("CONDA_PRESTO_RESULT_CACHE_MAX_MEMORY_MB", id="memory"),
     ],
@@ -140,57 +101,4 @@ def test_result_cache_limits_must_not_be_negative(monkeypatch, name):
     with pytest.raises(ValueError, match="Result cache limits must not be negative"):
         importlib.reload(config_module)
     monkeypatch.delenv(name)
-    importlib.reload(config_module)
-
-
-def test_solver_warm_candidate_persistence_rejects_memory_backend(monkeypatch):
-    monkeypatch.setenv("CONDA_PRESTO_SOLVER_CACHE_WARM_CANDIDATE_PERSIST", "true")
-    monkeypatch.setenv("CONDA_PRESTO_RESULT_CACHE_BACKEND", "memory")
-    with pytest.raises(ValueError, match="requires a file or Redis"):
-        importlib.reload(config_module)
-    monkeypatch.delenv("CONDA_PRESTO_SOLVER_CACHE_WARM_CANDIDATE_PERSIST")
-    monkeypatch.delenv("CONDA_PRESTO_RESULT_CACHE_BACKEND")
-    importlib.reload(config_module)
-
-
-@pytest.mark.parametrize("backend", ["file", "redis"])
-def test_solver_warm_candidate_persistence_accepts_persistent_backend(
-    monkeypatch,
-    backend,
-):
-    monkeypatch.setenv("CONDA_PRESTO_SOLVER_CACHE_WARM_CANDIDATE_PERSIST", "true")
-    monkeypatch.setenv("CONDA_PRESTO_RESULT_CACHE_BACKEND", backend)
-    reloaded = importlib.reload(config_module)
-    try:
-        assert reloaded.SOLVER_CACHE_WARM_CANDIDATE_PERSIST is True
-    finally:
-        monkeypatch.delenv("CONDA_PRESTO_SOLVER_CACHE_WARM_CANDIDATE_PERSIST")
-        monkeypatch.delenv("CONDA_PRESTO_RESULT_CACHE_BACKEND")
-        importlib.reload(config_module)
-
-
-def test_solver_cache_warm_interval_must_not_be_negative(monkeypatch):
-    monkeypatch.setenv("CONDA_PRESTO_SOLVER_CACHE_WARM_INTERVAL_S", "-1")
-    with pytest.raises(ValueError, match="must not be negative"):
-        importlib.reload(config_module)
-    monkeypatch.delenv("CONDA_PRESTO_SOLVER_CACHE_WARM_INTERVAL_S")
-    importlib.reload(config_module)
-
-
-def test_solver_cache_warm_interval_zero_disables_warming(monkeypatch):
-    monkeypatch.setenv("CONDA_PRESTO_SOLVER_CACHE_WARM_INTERVAL_S", "0")
-    reloaded = importlib.reload(config_module)
-    try:
-        assert reloaded.SOLVER_CACHE_WARM_INTERVAL_S == 0
-    finally:
-        monkeypatch.delenv("CONDA_PRESTO_SOLVER_CACHE_WARM_INTERVAL_S")
-        importlib.reload(config_module)
-
-
-@pytest.mark.parametrize("raw", ["0", "-1"])
-def test_solver_cache_warm_batch_size_must_be_positive(monkeypatch, raw):
-    monkeypatch.setenv("CONDA_PRESTO_SOLVER_CACHE_WARM_BATCH_SIZE", raw)
-    with pytest.raises(ValueError, match="must be positive"):
-        importlib.reload(config_module)
-    monkeypatch.delenv("CONDA_PRESTO_SOLVER_CACHE_WARM_BATCH_SIZE")
     importlib.reload(config_module)

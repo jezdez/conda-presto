@@ -1,22 +1,16 @@
 # Configure result caching
 
-conda-presto caches successful public `/resolve` responses and private Presto
-solver final states in one bounded in-process cache. A file or Redis store can
-retain entries across service restarts.
-
-Public resolve entries and private solver entries use separate key namespaces.
-Only public resolve entries have `/r/<hash>` URLs.
+conda-presto caches successful `/resolve` responses in a bounded in-process cache. A file or Redis store can retain entries across service restarts. Retained entries are available through `/r/<hash>`.
 
 Persistent entries expire after 24 hours. Encoded values larger than 64 MiB are
 not stored or loaded. These per-entry controls do not limit aggregate disk or
-Redis usage. The persistent backend is a trusted service boundary, so only the
+Redis usage. The persistent backend is a trusted service resource, so only the
 conda-presto service account should have write access to its directory or Redis
 namespace.
 
 :::{note}
 A permalink returns the stored snapshot without a new repodata freshness check.
-A new `/resolve` request performs the freshness check and can move to another
-address after metadata changes.
+A new `/resolve` request performs the freshness check. Different output bytes or media types receive different addresses.
 :::
 
 ## Choose a backend
@@ -61,17 +55,6 @@ Put this directory on a filesystem or volume with a hard quota sized for the
 deployment. The file backend attempts expiry cleanup at startup and once per
 hour, but expiry cleanup is best effort and is not an aggregate storage bound.
 
-For conda-broker, stop the broker before exporting the variables so its new
-daemon inherits them:
-
-```bash
-conda broker stop
-export CONDA_PRESTO_RESULT_CACHE_BACKEND=file
-export CONDA_PRESTO_RESULT_CACHE_DIR="$HOME/.cache/conda-presto/results"
-conda broker start conda-presto.server
-conda broker wait conda-presto.server --timeout 180
-```
-
 Use {doc}`run-with-docker` for container volume ownership and mounting.
 
 ## Configure Redis
@@ -101,10 +84,10 @@ maxmemory-policy allkeys-lru
 ```
 
 The published server image already contains the Redis client. Choose a unique
-namespace when deployments with different trust boundaries use the same Redis
+namespace when deployments with different access requirements use the same Redis
 instance. A namespace separates keys, but Redis applies `maxmemory` and its
 eviction policy to the whole instance. Use separate instances when deployments
-need independent memory or trust boundaries.
+need independent memory limits or access controls.
 
 ## Verify a public cache entry
 
@@ -158,7 +141,7 @@ these conditions:
   installed distribution version
 - the persistent store timed out or rejected the write
 
-Local `file://` repodata sources are not retained by the private solver cache.
+Local `file://` repodata sources are not retained.
 
 ## Plan for invalidation and eviction
 
@@ -166,10 +149,7 @@ Eviction removes older in-process entries when entry or byte limits are
 exceeded. A file-store quota or Redis `maxmemory` and eviction policy provide
 the aggregate persistent bound. Entry expiry does not replace that bound.
 
-Repodata freshness is separate. `/resolve` keys include repodata cache-file
-markers, so changed metadata produces a different public location. The private
-solver cache checks stored markers under the caller's effective repodata
-policy, including its index-cache setting.
+Repodata freshness is separate. Request lookup keys include local metadata markers. The public result key identifies its exact body and media type, so refreshed metadata alone does not change that key when the output is identical.
 
 Read {doc}`../reference/cache` for cache identity, retention, and invalidation.
 Read {doc}`../explanation/security` before caching results from private

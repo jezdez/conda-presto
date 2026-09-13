@@ -1,50 +1,21 @@
 # Docker image reference
 
-Release images are published to `ghcr.io/jezdez/conda-presto` for
-`linux/amd64` and `linux/arm64`. Both flavors use `debian:bookworm-slim`, run
-from `/app`, and use UID and GID 10001. Build and runtime base images are pinned
-by tag and multi-platform digest.
+One server image is published to `ghcr.io/jezdez/conda-presto` for `linux/amd64` and `linux/arm64`. The root `Dockerfile` is the canonical recipe. The image runs as UID and GID 10001 from `/app` and starts `conda presto --serve --host 0.0.0.0` on port 8000.
 
-## Image flavors
+## Tags and publication
 
-| Flavor | Docker target | Pixi environment | Entrypoint | Default command |
-|---|---|---|---|---|
-| Server | `server` | `prod` | `conda presto` | `--serve --host 0.0.0.0` |
-| CLI | `cli` | `cli` | `conda presto` | None |
+| Tag | Selection |
+|---|---|
+| `latest` | Latest released server image |
+| `<version>` | Immutable exact release |
+| `<major>.<minor>` | Mutable minor-line alias |
+| `<short-git-sha>` | Immutable source revision |
 
-Arguments after the CLI image name are passed directly to `conda presto`. The
-server exposes container port 8000. The server flavor includes the packaged
-browser workbench and serves it at `/`. The CLI flavor contains the package
-files but does not start an HTTP server.
+Major-zero releases do not publish a `0` alias. Publication refuses to overwrite an exact release or source revision tag. The release workflow dispatches the image build from the released tag and uses the protected `ghcr` environment. Pin a manifest digest when reproducibility must be independent of tag policy.
 
-## Published tags
+## Image verification
 
-For a release such as `v0.8.0`, the publishing workflow produces:
-
-| Server tag | CLI tag | Selection |
-|---|---|---|
-| `latest` | `cli` | Mutable flavor alias updated by each release |
-| `0.8.0` | `0.8.0-cli` | Immutable exact release tag |
-| `0.8` | `0.8-cli` | Mutable minor-line alias updated within the release line |
-| `<short-git-sha>` | `<short-git-sha>-cli` | Immutable tag for the source revision |
-
-Major-zero releases do not publish `0` or `0-cli` because those aliases could
-cross incompatible minor lines. Before publishing, the workflow refuses to
-overwrite an existing exact release tag or short source-SHA tag. The `latest`,
-`cli`, minor, and nonzero-major aliases move. A short SHA can theoretically
-collide, in which case publication fails rather than replacing the existing
-tag. The release workflow dispatches image publication from the released
-version tag, and publication waits for approval through the protected `ghcr`
-environment. That environment accepts only `v*` tags. Pin the image manifest
-digest when deployment reproducibility must not depend on tag policy or
-registry administration.
-
-## Provenance and image contents
-
-The release workflow publishes maximum-mode BuildKit provenance and an SPDX
-SBOM for each image manifest. A separate job signs a GitHub artifact
-attestation only after the registry returns the pushed digest. Verify an exact
-release image with GitHub CLI after authenticating to GHCR:
+BuildKit publishes maximum-mode provenance and an SPDX SBOM for each image manifest. A separate job creates a GitHub artifact attestation after the registry returns the pushed digest. For an existing release:
 
 ```bash
 gh attestation verify \
@@ -53,99 +24,23 @@ gh attestation verify \
   --signer-workflow jezdez/conda-presto/.github/workflows/docker.yml
 ```
 
-The production filesystem keeps application source, the entrypoint, and the
-installed Pixi environment outside its package cache owned by root. UID 10001
-can write `/app/.pixi/envs/<environment>/pkgs` and its home directory at
-`/home/app`. The build removes setuid and setgid bits from inherited utilities.
+CI builds and scans the server on amd64 and arm64 before publication. Trivy blocks fixed high and critical findings, subject to narrow expiring exceptions. Full reports are uploaded as `trivy-server-amd64` and `trivy-server-arm64`. Trivy does not provide a complete vulnerability inventory for conda packages.
 
-## Vulnerability scans
+Build and runtime base images are pinned by digest. The recipe applies the Debian PCRE2 security update, removes setuid and setgid permissions, and keeps application source and the environment outside its package cache read-only for the runtime user.
 
-Pull requests build and scan the server and CLI images on `linux/amd64`, then
-build and scan both flavors on `linux/arm64` under QEMU. Release publication
-depends on those jobs. Trivy fails on fixed high or critical findings that it
-recognizes, subject to the narrow, expiring exception in `.trivyignore.yaml`.
+## Worker and health check
 
-Each image job also uploads a nonblocking SARIF report containing all severities,
-including findings without an available fix and findings covered by the blocking
-scan's exception. Download the `trivy-<flavor>-<architecture>` artifact from the
-workflow run to inspect it. Trivy does not treat conda package records as a
-supported package ecosystem. It can recognize operating-system packages and
-language package metadata present inside a Pixi environment, but a passing scan
-is not a complete vulnerability inventory for conda packages.
+The image sets `CONDA_PRESTO_PERSISTENT_WORKER=1` and `CONDA_PRESTO_CONCURRENCY=1`. It applies `CONDA_NO_LOCK=false` after Pixi activation so workers sharing the package cache retain conda filesystem locking. A failed worker is replaced by the server.
 
-## Server defaults
+The built-in health check requests `/health` on `CONDA_PRESTO_PORT`, defaulting to 8000. It runs every 30 seconds with a 5-second timeout, 120-second startup period and three retries. It reports failure while the persistent worker is unavailable. Deployments that require another port, including a Space on port 7860, can set `CONDA_PRESTO_PORT=7860` while using the same recipe.
 
-The server target sets:
-
-| Variable | Value |
-|---|---|
-| `CONDA_NO_LOCK` | `false` |
-| `CONDA_PRESTO_CONCURRENCY` | `1` |
-| `CONDA_PRESTO_PERSISTENT_WORKER` | `1` |
-
-The server entrypoint applies `CONDA_NO_LOCK=false` after the shared Pixi shell
-hook. This keeps conda filesystem locking enabled while the server and its
-persistent worker share the package cache.
-
-The persistent worker loads the configured channel and platform indexes before
-the application reports ready. It retains that state between requests. The
-server process replaces a worker after failure or timeout.
-
-The server image includes the Redis client from the `prod` environment. File
-and Redis result-cache settings use the same environment variables as other
-deployments.
-
-The image contains conda-broker because it is a required package dependency,
-but it does not start the broker. Without the broker service identity, the
-private `/solver/v1` route is unavailable and scheduled solver-cache refresh is
-disabled.
-
-## Health check
-
-The server image defines an HTTP health check against
-`http://127.0.0.1:8000/health` using the production environment's Python
-interpreter.
-
-| Setting | Value |
-|---|---:|
-| Interval | 30 seconds |
-| Timeout | 5 seconds |
-| Start period | 120 seconds |
-| Retries | 3 |
-| Request timeout | 3 seconds |
-
-The endpoint returns HTTP 503 while a persistent worker is unavailable. The
-container health check becomes successful again after the replacement worker
-has loaded its indexes.
-
-The default server command fixes the bind host at `0.0.0.0`, so
-`CONDA_PRESTO_HOST` does not override it. The command leaves the port to the
-application default, but the Docker health check always uses port 8000. If
-`CONDA_PRESTO_PORT` changes the listening port, the built-in health check must
-also be replaced by the deployment.
-
-## Build targets
-
-Both targets use the same multi-stage Dockerfile. `PIXI_ENV` selects the
-runtime environment and `CONDA_PRESTO_VERSION` supplies the package version to
-the source build.
+## Build configuration
 
 ```bash
-docker build -f docker/Dockerfile --target server \
-  --build-arg PIXI_ENV=prod \
-  --build-arg CONDA_PRESTO_VERSION=0.8.0 \
-  -t conda-presto-server .
-
-docker build -f docker/Dockerfile --target cli \
-  --build-arg PIXI_ENV=cli \
-  --build-arg CONDA_PRESTO_VERSION=0.8.0 \
-  -t conda-presto-cli .
+docker build --build-arg CONDA_PRESTO_VERSION=0.9.0.dev0 \
+  --tag conda-presto:dev .
 ```
 
-## See also
+`PIXI_ENVIRONMENT` selects the locked environment, defaulting to `prod`. Optional SBOM and signing providers are absent from the default image. Operators can build the same recipe with `--build-arg PIXI_ENVIRONMENT=artifacts` to include both providers. This does not create another published image flavor.
 
-- {doc}`/how-to/run-with-docker`
-- {doc}`/reference/environment-variables`
-- {doc}`/reference/cache`
-- {doc}`/reference/observability`
-- {doc}`/explanation/security`
+The default image includes the Redis client. Cache settings are described in {doc}`cache`. See {doc}`/how-to/run-with-docker` for operation.

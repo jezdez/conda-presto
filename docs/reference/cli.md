@@ -67,8 +67,7 @@ without installing anything.
 `--solver`
 : Standard conda parser option. Direct `conda presto` resolves always use
   rattler through conda-rattler-solver, so this option does not select a
-  different engine for the subcommand. To delegate a conda transaction to the
-  broker-backed Presto solver, use `conda --solver=presto ...` instead.
+  different engine for the subcommand.
 
 `--use-local`
 : Add conda's local build channel. Equivalent to `-c local`.
@@ -155,17 +154,6 @@ Start the HTTP server on a custom port:
 conda presto --serve --host 0.0.0.0 --port 9000
 ```
 
-Use the broker-backed Presto solver for a conda transaction:
-
-```bash
-conda create --dry-run --solver presto -n demo -c conda-forge numpy
-```
-
-Offline solve using only cached repodata:
-
-```bash
-conda presto --offline -c conda-forge -p linux-64 zlib
-```
 
 ## Exit codes
 
@@ -179,5 +167,4 @@ conda presto --offline -c conda-forge -p linux-64 zlib
 
 - {doc}`http-api`
 - {doc}`output-formats`
-- {doc}`solver-backend`
 - {doc}`environment-variables`

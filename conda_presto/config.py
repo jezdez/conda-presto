@@ -25,7 +25,7 @@ Server tuning:
     ``CONDA_PRESTO_PERSISTENT_WORKER``
         Run HTTP solves through one worker that retains loaded repodata and
         indexes between requests (default: ``false``). Used by the
-        broker-managed local service and Docker server image.
+        Docker server image.
     ``CONDA_PRESTO_RESULT_CACHE_SIZE``
         Max number of solve responses retained by the in-process result
         cache (default: ``256``).
@@ -40,18 +40,6 @@ Server tuning:
         Optional directory for a persistent file-backed result cache.
     ``CONDA_PRESTO_RESULT_CACHE_REDIS_URL``
         Optional Redis URL for a Redis-backed result cache.
-    ``CONDA_PRESTO_SOLVER_CACHE_WARM_CANDIDATE_SIZE``
-        Max successful cacheable foreground ``/solver/v1`` requests retained
-        for cache warming (default: ``32``), plus the same number retained
-        outside the candidate catalog. Set to ``0`` to disable recording.
-    ``CONDA_PRESTO_SOLVER_CACHE_WARM_CANDIDATE_PERSIST``
-        Persist candidates without detected credentials in a configured file
-        or Redis result store (default: ``false``).
-    ``CONDA_PRESTO_SOLVER_CACHE_WARM_INTERVAL_S``
-        Seconds between solver-cache refresh cycles (default: ``300``).
-        Set to ``0`` to disable scheduled refresh.
-    ``CONDA_PRESTO_SOLVER_CACHE_WARM_BATCH_SIZE``
-        Max candidates considered in one refresh cycle (default: ``8``).
 
 Request limits (abuse/DoS protection):
     ``CONDA_PRESTO_SOLVE_TIMEOUT_S``
@@ -66,17 +54,6 @@ Request limits (abuse/DoS protection):
     ``CONDA_PRESTO_MAX_SPECS``
         Max specs per request (default: ``200``).  Returns HTTP 400
         if exceeded.
-    ``CONDA_PRESTO_MAX_SOLVER_CHANNELS``
-        Max channels in one private solver request (default: ``128``).
-    ``CONDA_PRESTO_MAX_SOLVER_STATE_ITEMS``
-        Max combined records and specs in one private solver request
-        (default: ``10000``).
-    ``CONDA_PRESTO_MAX_REPAIR_SUGGESTIONS``
-        Max returned repair suggestions per request (default: ``5``).
-    ``CONDA_PRESTO_MAX_REPAIR_ATTEMPTS``
-        Max repair candidates evaluated per request (default: ``20``).
-    ``CONDA_PRESTO_MAX_REPAIR_TIME_BUDGET_MS``
-        Max repair search wall-clock budget in milliseconds (default: ``5000``).
 
 HTTP middleware:
     ``CONDA_PRESTO_RATE_LIMIT``
@@ -191,34 +168,6 @@ if RESULT_CACHE_BACKEND not in {"memory", "file", "redis"}:
     raise ValueError(
         f"Invalid value for CONDA_PRESTO_RESULT_CACHE_BACKEND: {RESULT_CACHE_BACKEND!r}"
     )
-SOLVER_CACHE_WARM_CANDIDATE_SIZE = env_int(
-    "CONDA_PRESTO_SOLVER_CACHE_WARM_CANDIDATE_SIZE", 32
-)
-if SOLVER_CACHE_WARM_CANDIDATE_SIZE < 0:
-    raise ValueError(
-        "CONDA_PRESTO_SOLVER_CACHE_WARM_CANDIDATE_SIZE must not be negative"
-    )
-SOLVER_CACHE_WARM_CANDIDATE_PERSIST = env_bool(
-    "CONDA_PRESTO_SOLVER_CACHE_WARM_CANDIDATE_PERSIST"
-)
-if SOLVER_CACHE_WARM_CANDIDATE_PERSIST and RESULT_CACHE_BACKEND == "memory":
-    raise ValueError(
-        "CONDA_PRESTO_SOLVER_CACHE_WARM_CANDIDATE_PERSIST requires a file or Redis "
-        "result cache backend"
-    )
-SOLVER_CACHE_WARM_INTERVAL_S = env_int(
-    "CONDA_PRESTO_SOLVER_CACHE_WARM_INTERVAL_S",
-    300,
-)
-if SOLVER_CACHE_WARM_INTERVAL_S < 0:
-    raise ValueError("CONDA_PRESTO_SOLVER_CACHE_WARM_INTERVAL_S must not be negative")
-SOLVER_CACHE_WARM_BATCH_SIZE = env_int(
-    "CONDA_PRESTO_SOLVER_CACHE_WARM_BATCH_SIZE",
-    8,
-)
-if SOLVER_CACHE_WARM_BATCH_SIZE < 1:
-    raise ValueError("CONDA_PRESTO_SOLVER_CACHE_WARM_BATCH_SIZE must be positive")
-
 RATE_LIMIT = env_int("CONDA_PRESTO_RATE_LIMIT", 300)
 CORS_ORIGINS = env_list("CONDA_PRESTO_CORS_ORIGINS", "")
 LOG_LEVEL = os.environ.get("CONDA_PRESTO_LOG_LEVEL", "INFO")
@@ -228,20 +177,11 @@ PARSE_TIMEOUT_S = env_int("CONDA_PRESTO_PARSE_TIMEOUT_S", 10)
 MAX_CHANNELS = env_int("CONDA_PRESTO_MAX_CHANNELS", 8)
 MAX_PLATFORMS = env_int("CONDA_PRESTO_MAX_PLATFORMS", 8)
 MAX_SPECS = env_int("CONDA_PRESTO_MAX_SPECS", 200)
-MAX_SOLVER_CHANNELS = env_int("CONDA_PRESTO_MAX_SOLVER_CHANNELS", 128)
-MAX_SOLVER_STATE_ITEMS = env_int("CONDA_PRESTO_MAX_SOLVER_STATE_ITEMS", 10_000)
-if min(MAX_SOLVER_CHANNELS, MAX_SOLVER_STATE_ITEMS) < 1:
-    raise ValueError("Private solver request limits must be positive")
-MAX_REPAIR_SUGGESTIONS = env_int("CONDA_PRESTO_MAX_REPAIR_SUGGESTIONS", 5)
-MAX_REPAIR_ATTEMPTS = env_int("CONDA_PRESTO_MAX_REPAIR_ATTEMPTS", 20)
-MAX_REPAIR_TIME_BUDGET_MS = env_int("CONDA_PRESTO_MAX_REPAIR_TIME_BUDGET_MS", 5_000)
-if (
-    min(
-        MAX_REPAIR_SUGGESTIONS,
-        MAX_REPAIR_ATTEMPTS,
-        MAX_REPAIR_TIME_BUDGET_MS,
-    )
-    < 1
-):
-    raise ValueError("Repair limits must be positive")
 MAX_INDEX_CACHE_ENTRIES = env_int("CONDA_PRESTO_MAX_INDEX_CACHE_ENTRIES", 128)
+
+SIGSTORE_SIGNING_ENABLED = env_bool("CONDA_PRESTO_SIGSTORE_SIGNING_ENABLED")
+
+# Public signing publishes identity and artifact metadata to Sigstore services.
+SIGSTORE_ALLOW_PUBLIC_SIGNING = env_bool("CONDA_PRESTO_SIGSTORE_ALLOW_PUBLIC_SIGNING")
+SIGSTORE_TRUST_CONFIG = os.environ.get("CONDA_PRESTO_SIGSTORE_TRUST_CONFIG")
+SIGSTORE_OFFLINE = env_bool("CONDA_PRESTO_SIGSTORE_OFFLINE")

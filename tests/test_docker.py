@@ -6,14 +6,11 @@ import re
 from pathlib import Path
 from tomllib import loads
 
-import pytest
-
 ROOT = Path(__file__).resolve().parents[1]
 
 
-@pytest.mark.parametrize("path", ["Dockerfile", "docker/Dockerfile"])
-def test_dockerfile_pins_images_and_locks_runtime_files(path):
-    text = (ROOT / path).read_text()
+def test_dockerfile_pins_images_and_locks_runtime_files():
+    text = (ROOT / "Dockerfile").read_text()
 
     for image in (
         r"ghcr\.io/prefix-dev/pixi:\d+\.\d+\.\d+",
@@ -30,31 +27,21 @@ def test_dockerfile_pins_images_and_locks_runtime_files(path):
 
 
 def test_dockerfile_has_server_healthcheck():
-    text = (ROOT / "docker" / "Dockerfile").read_text()
-    server_stage = text.split("FROM production AS server", 1)[1].split(
-        "FROM production AS cli", 1
-    )[0]
+    text = (ROOT / "Dockerfile").read_text()
 
-    assert "COPY pyproject.toml pixi.lock README.md ./" in text
-    assert "FROM production AS server" in text
-    assert "HEALTHCHECK" in server_stage
-    assert "/health" in server_stage
-    assert "/app/.pixi/envs/prod/bin/python" in server_stage
-    assert "CONDA_NO_LOCK=false" in server_stage
+    assert "HEALTHCHECK" in text
+    assert "/health" in text
+    assert "CMD /app/entrypoint.sh python -c" in text
+    assert "CONDA_NO_LOCK=false" in text
     assert (
         'ENTRYPOINT ["/app/entrypoint.sh", "env", "CONDA_NO_LOCK=false", '
         '"conda", "presto"]'
-    ) in server_stage
-    assert "CONDA_PRESTO_CONCURRENCY=1" in server_stage
-    assert "CONDA_PRESTO_PERSISTENT_WORKER=1" in server_stage
-    assert "--start-period=120s" in server_stage
-
-
-def test_dockerfile_has_cli_target():
-    text = (ROOT / "docker" / "Dockerfile").read_text()
-
-    assert "FROM production AS cli" in text
-    assert "PIXI_ENV" in text
+    ) in text
+    assert "CONDA_PRESTO_CONCURRENCY=1" in text
+    assert "CONDA_PRESTO_PERSISTENT_WORKER=1" in text
+    assert "--start-period=120s" in text
+    assert "os.environ.get('CONDA_PRESTO_PORT', '8000')" in text
+    assert "--only-upgrade --no-install-recommends -y libpcre2-8-0" in text
 
 
 def test_server_environment_has_redis_client():

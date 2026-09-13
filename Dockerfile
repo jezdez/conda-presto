@@ -1,19 +1,22 @@
 FROM ghcr.io/prefix-dev/pixi:0.79.0@sha256:80a5b1e06fa988cc22554e8bf9e6b4bae87597771c568873691335667055c87d AS build
 
+ARG PIXI_ENVIRONMENT=prod
+
 WORKDIR /app
 COPY pyproject.toml pixi.lock README.md ./
 COPY conda_presto/ conda_presto/
-
 ARG CONDA_PRESTO_VERSION=0.0.0
 ENV SETUPTOOLS_SCM_PRETEND_VERSION=${CONDA_PRESTO_VERSION}
 
-RUN pixi install --locked -e prod
-RUN pixi shell-hook -e prod -s bash > /shell-hook
+RUN pixi install --locked -e "${PIXI_ENVIRONMENT}"
+RUN pixi shell-hook -e "${PIXI_ENVIRONMENT}" -s bash > /shell-hook
 RUN echo '#!/bin/bash' > /app/entrypoint.sh \
     && cat /shell-hook >> /app/entrypoint.sh \
     && echo 'exec "$@"' >> /app/entrypoint.sh
 
-FROM debian:bookworm-slim@sha256:88200866dfff7ea7f5cbcb6ec7c8a701889efe6fe859fe64d6990e4b07ea4171
+FROM debian:bookworm-slim@sha256:88200866dfff7ea7f5cbcb6ec7c8a701889efe6fe859fe64d6990e4b07ea4171 AS production
+
+ARG PIXI_ENVIRONMENT=prod
 
 # The base image predates the PCRE2 security update.
 RUN apt-get update \
@@ -24,38 +27,26 @@ RUN groupadd --gid 10001 app \
     && useradd --uid 10001 --gid app --shell /usr/sbin/nologin --no-create-home app
 
 WORKDIR /app
-COPY --from=build /app/.pixi/envs/prod /app/.pixi/envs/prod
+COPY --from=build /app/.pixi/envs/${PIXI_ENVIRONMENT} /app/.pixi/envs/${PIXI_ENVIRONMENT}
 COPY --from=build --chmod=0755 /app/entrypoint.sh /app/entrypoint.sh
 COPY conda_presto/ /app/conda_presto/
 
-RUN mkdir -p /app/.pixi/envs/prod/pkgs/cache /home/app/.conda/pkgs \
-    && chown -R app:app /app/.pixi/envs/prod/pkgs /home/app \
+RUN mkdir -p /app/.pixi/envs/${PIXI_ENVIRONMENT}/pkgs/cache /home/app/.conda/pkgs \
+    && chown -R app:app /app/.pixi/envs/${PIXI_ENVIRONMENT}/pkgs /home/app \
     && find / -xdev -type f -perm /6000 -exec chmod a-s {} + \
     && chmod -R a-w /app/conda_presto \
     && chmod a-w /app/entrypoint.sh
 
 USER app
-
-ENV HOME=/home/app \
-    CONDA_CHANNEL_PRIORITY=strict \
-    CONDA_NO_LOCK=true \
-    CONDA_UNSATISFIABLE_HINTS=false \
-    CONDA_NUMBER_CHANNEL_NOTICES=0 \
-    CONDA_AGGRESSIVE_UPDATE_PACKAGES= \
-    CONDA_LOCAL_REPODATA_TTL=300 \
-    CONDA_JSON=true \
-    CONDA_SOLVER=rattler \
-    CONDA_PRESTO_HOST=0.0.0.0 \
-    CONDA_PRESTO_PORT=7860 \
+ENV CONDA_NO_LOCK=false \
     CONDA_PRESTO_CONCURRENCY=1 \
-    CONDA_PRESTO_WORKERS=1 \
-    CONDA_PRESTO_PLATFORMS=linux-64
+    CONDA_PRESTO_PERSISTENT_WORKER=1
 
-ENTRYPOINT ["/app/entrypoint.sh", "conda", "presto"]
+ENTRYPOINT ["/app/entrypoint.sh", "env", "CONDA_NO_LOCK=false", "conda", "presto"]
 
-EXPOSE 7860
+EXPOSE 8000
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=120s --retries=3 \
-    CMD /app/.pixi/envs/prod/bin/python -c "import http.client, sys; c = http.client.HTTPConnection('127.0.0.1', 7860, timeout=3); c.request('GET', '/health'); sys.exit(c.getresponse().status != 200)"
+    CMD /app/entrypoint.sh python -c "import http.client, os, sys; c = http.client.HTTPConnection('127.0.0.1', int(os.environ.get('CONDA_PRESTO_PORT', '8000')), timeout=3); c.request('GET', '/health'); sys.exit(c.getresponse().status != 200)"
 
-CMD ["--serve"]
+CMD ["--serve", "--host", "0.0.0.0"]

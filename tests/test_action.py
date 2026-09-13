@@ -22,10 +22,12 @@ def test_action_yaml_loads():
     assert "command" not in data["inputs"]
 
 
-def test_action_runs_from_checked_out_action_path():
-    text = action_text()
+def test_action_requires_an_endpoint_without_bootstrapping_a_local_solver():
+    data = yaml.safe_load(action_text())
 
-    assert 'pixi run --manifest-path "${GITHUB_ACTION_PATH}/pyproject.toml"' in text
+    assert data["inputs"]["endpoint"]["required"] is True
+    assert "mode" not in data["inputs"]
+    assert all("uses" not in step for step in data["runs"]["steps"])
 
 
 def test_action_logs_only_request_metadata():

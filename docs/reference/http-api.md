@@ -1,660 +1,137 @@
-# HTTP API reference
+# HTTP API
 
-The conda-presto HTTP API is built on [Litestar](https://litestar.dev/)
-and served by uvicorn. Start it with `conda presto --serve` or
-`uvicorn conda_presto.app:app --no-access-log`. The conda-presto command is the
-preferred entry point because it applies the documented server configuration.
+Start the service with `conda presto --serve`. `/openapi.json` and `/` return the generated OpenAPI document. The manually dispatched bodies of `/resolve` and `/transcode` are described below.
 
-Data endpoints return JSON unless a `format` parameter routes a resolve
-response through a conda exporter plugin. `/` serves the first-party browser
-workbench. `/openapi.json` serves the generated OpenAPI document as JSON. The
-Litestar paths `/schema` and `/schema/openapi.json` serve the same document.
-Clients should use `/openapi.json`. The workbench loads only packaged CSS and
-JavaScript from the same origin.
-
-The generated schema covers route discovery and typed request models. It does
-not describe the manually dispatched request bodies for `POST /resolve`,
-`POST /preflight`, or `POST /transcode`. Their complete body contracts are
-documented on this page.
-
-Retained `/resolve` responses include a content-addressed `Location` header
-such as `/r/<sha256>`. Repeating the same request against unchanged, acceptable
-channel metadata returns the same location while the entry remains available.
-An unretained response is still valid but has no `Location` header.
-
-## Public endpoint summary
-
-| Method | Path | Purpose |
+| Method | Path | Operation |
 |---|---|---|
-| `GET` | `/resolve` | Resolve repeated query-parameter specs |
-| `POST` | `/resolve` | Resolve a JSON request or raw environment file |
-| `POST` | `/preflight` | Report deterministic local input findings |
-| `POST` | `/repair` | Test bounded single-spec relaxations |
-| `POST` | `/diff` | Compare two selected package states |
-| `POST` | `/explain` | Trace dependency chains to one package |
-| `POST` | `/transcode` | Convert one lockfile format to another without solving |
-| `POST` | `/parse` | Extract specs and channels from a file |
-| `GET` | `/r/{hash}` | Fetch one retained resolve response |
-| `GET` | `/formats` | List registered exporter names and aliases |
-| `GET` | `/platforms` | List conda's known platform subdirectories |
-| `GET` | `/version` | Report installed component versions |
-| `GET` | `/health` | Report persistent-worker readiness |
-| `GET` | `/` | Serve the browser workbench |
-| `GET` | `/openapi.json` | Serve the generated OpenAPI 3.1 document |
+| GET, POST | `/resolve` | Solve requirements for selected platforms |
+| POST | `/parse` | Read requirements and channels from an environment file |
+| POST | `/transcode` | Convert supported lockfiles without solving or downloading packages |
+| POST | `/sbom` | Solve requirements and export separate platform SBOMs |
+| POST | `/sign` | Sign a retained output using the service identity |
+| POST | `/verify` | Check supplied bytes, a bundle and an expected signer |
+| GET | `/r/{key}` | Retrieve an exact retained output |
+| GET | `/formats` | Installed exporter names and aliases |
+| GET | `/capabilities` | Availability of optional SBOM and Sigstore adapters |
+| GET | `/platforms` | Known conda platform subdirectories |
+| GET | `/version` | Installed component versions |
+| GET | `/health` | Worker readiness |
 
-The broker-only `/solver/v1` protocol is guarded, omitted from OpenAPI, and not
-a public integration surface. The workbench fragment routes are also omitted
-because they are presentation details rather than API contracts. See
-{doc}`solver-backend`.
+## Resolve
 
-## Endpoints
-
-### `GET /resolve`
-
-Resolve inline specs via query parameters.
-
-Query parameters
-: `spec` (repeatable)
-  : Package match spec, e.g. `python=3.12`.
-
-  `channel` (repeatable)
-  : Channel to search. Falls back to `CONDA_PRESTO_CHANNELS` when omitted.
-
-  `platform` (repeatable)
-  : Target platform subdir. Solves for the host platform when omitted.
-
-  `format`
-  : Output format name. When set, the response is routed through the
-    matching conda exporter plugin instead of returning the default JSON.
-
-```bash
-curl 'http://localhost:8000/resolve?spec=python=3.12&spec=numpy&channel=conda-forge&platform=linux-64'
-```
-
----
-
-### `POST /resolve`
-
-Resolve specs via a JSON body, or upload a raw input file with
-Content-Type dispatch.
-
-#### JSON body
-
-Send a `ResolveRequest` object:
+`POST /resolve` accepts this JSON body:
 
 ```json
-{
-  "specs": ["python=3.12", "numpy"],
-  "channels": ["conda-forge"],
-  "platforms": ["linux-64", "osx-arm64"],
-  "file": null,
-  "filename": null
-}
+{"specs":["python=3.13","numpy"],"channels":["conda-forge"],"platforms":["linux-64"]}
 ```
 
-All fields are optional, but normal requests must provide either
-`specs` or `file`. Query parameters (`spec`, `channel`, `platform`,
-`format`, `filename`) are accepted alongside the body. Body fields take
-precedence when both are present. `format` is a query-only option.
+| Field | Type | Default |
+|---|---|---|
+| `specs` | Array of MatchSpec strings | Empty |
+| `channels` | Array of channel names or URLs | Server defaults |
+| `platforms` | Array of platform names | Server host platform |
+| `file` | Environment file content as a string | Absent |
+| `filename` | Parser hint such as `environment.yml` | Inferred |
+
+Provide specs or file content. File requirements are combined with `specs`. Explicit channels override file channels. Body fields override the equivalent query parameters, including explicit empty arrays.
+
+Both resolve methods accept repeated `spec`, `channel` and `platform` query parameters. `format` selects an installed exporter and is query-only. Without it, the response is a native JSON array with an `error` field per platform. Exporter output requires every platform to succeed. See {doc}`output-formats`.
+
+Raw files can be uploaded with `application/yaml`, `application/toml`, `text/plain`, or their `text/*` and `application/x-*` YAML/TOML equivalents. An installed parser must recognize the file. Use `?filename=pixi.lock` when a parser hint is needed. HTTP inputs reject `@EXPLICIT` files, YAML aliases and structures exceeding 10,000 nodes.
 
 ```bash
-curl -sS http://localhost:8000/resolve \
-  --json '{"specs":["python=3.12","numpy"],"channels":["conda-forge"],"platforms":["linux-64"]}'
-```
-
-Retained responses include:
-
-```text
-Location: /r/3a7f...e91b
-Cache-Control: no-store
-```
-
-Successful responses produced through the mutable resolve cache path use
-`no-store` so an HTTP intermediary cannot bypass the server's repodata
-freshness check. Validation and other error responses do not all carry this
-header. The `Location` points to the separately cacheable immutable resource.
-
-#### Raw file upload
-
-Upload an input file directly by setting an appropriate
-Content-Type header. No JSON wrapping is needed.
-
-Accepted Content-Types:
-
-- `application/yaml`
-- `application/x-yaml`
-- `text/yaml`
-- `text/x-yaml`
-- `application/toml`
-- `application/x-toml`
-- `text/toml`
-- `text/plain`
-
-These media types select raw-body dispatch and a default filename extension.
-An installed conda environment-specifier plugin must still recognize the
-resulting file. The required plugin set handles environment YAML, requirements
-files, conda-lock v1, and rattler-lock v6. TOML formats require an additional
-specifier plugin.
-
-```bash
-curl -sS --data-binary @environment.yml \
+curl --fail-with-body --data-binary @environment.yml \
   -H 'Content-Type: application/yaml' \
-  'http://localhost:8000/resolve?platform=linux-64'
+  'http://localhost:8000/resolve?platform=linux-64&format=pixi-lock-v6' \
+  -o pixi.lock
 ```
 
-Use the `filename` query parameter to pick a specific parser when the
-Content-Type is ambiguous. For example, `?filename=pixi.lock` forces
-the lockfile parser on a generic YAML upload.
+HTTP lockfile parsing reads format and platform metadata. `/resolve` rejects requests that would need it to load package records. Use `/transcode` for supported conversion.
 
-HTTP input deliberately rejects files whose first content line is
-`@EXPLICIT`. Use explicit files as exporter output, not as `/resolve`,
-`/parse`, `/preflight`, or `/transcode` input.
+## Parse
 
-The isolated HTTP parser rejects YAML aliases and inputs with more than 10,000
-structural nodes. This limit is applied before conda constructs environment,
-package, or match-spec objects.
-
-HTTP lockfile parsing normally stops after format and platform metadata.
-`/resolve`, `/diff`, and `/explain` return HTTP 400 when an uploaded lockfile
-would require package records. `/transcode` is the exception. Conda-presto's
-format-specific compatibility path reconstructs and serializes temporary
-records inside the isolated parser process using the URL and metadata already
-present in the lockfile. It does not fetch package archives or return those
-records to the server process.
-
----
-
-### `POST /preflight`
-
-Validate specs or an input file without solving or contacting channels.
-It accepts the same JSON body and raw-file Content-Type dispatch as
-`POST /resolve`, including `spec`, `channel`, `platform`, and `filename`
-query parameters.
-
-The response has deterministic local findings. It reports malformed input,
-invalid MatchSpecs, duplicate specs or channels, fuzzy or missing pins,
-build pins, a non-portable `prefix`, and basic whitespace issues. It does not
-try to determine whether the request is satisfiable.
-
-```bash
-curl -sS http://localhost:8000/preflight \
-  --json '{"specs":["python=3.13","python=3.13"],"channels":["conda-forge"]}'
-```
-
-```json
-{
-  "ok": true,
-  "findings": [
-    {"code":"PIN001","severity":"warning","message":"fuzzy equality may be unintended; use == for an exact pin","spec":"python=3.13"},
-    {"code":"DUP001","severity":"warning","message":"duplicate conda package spec","spec":"python=3.13"}
-  ],
-  "summary": {"errors":0,"warnings":2,"info":0}
-}
-```
-
----
-
-### `POST /repair`
-
-Return single-spec relaxations for an infeasible inline solve. It accepts
-`specs`, `channels`, and `platforms`. It does not parse files or change channels.
-Every returned suggestion solves on every requested platform.
-
-The initial strategies relax an exact `==` pin or drop one side of a simple
-bounded version range. Fuzzy equality such as `python=3.12` is not rewritten.
-Specs containing a package URL or filename are left unchanged. The
-`max_suggestions`, `max_attempts`, and `time_budget_ms` must be positive. A
-value below the corresponding server limit narrows that request. A higher
-value is clamped to the server limit. The time budget includes time spent
-waiting for solver capacity. Repair is available only through HTTP and has no
-matching CLI command.
-
-```bash
-curl -sS 'http://localhost:8000/repair?max_suggestions=3&max_attempts=10' \
-  --json '{"specs":["scipy==1.5"],"channels":["conda-forge"],"platforms":["linux-64"]}'
-```
-
-```json
-{
-  "feasible": false,
-  "diagnosis": {"kind": "solver_conflict", "summary": "..."},
-  "suggestions": [
-    {
-      "changes": [{"from": "scipy==1.5", "to": "scipy", "strategy": "relax_exact_pin"}],
-      "solve_attempts": 1,
-      "platforms": ["linux-64"]
-    }
-  ],
-  "completion_reason": "exhausted"
-}
-```
-
-Candidates are evaluated in input-spec order. For a bounded range, dropping
-the upper bound is tried before dropping the lower bound. `solve_attempts`
-counts candidate solves, excluding the initial solve, through that suggestion.
-`platforms` lists where the suggestion solved.
-
-`completion_reason` is one of `feasible`,
-`exhausted`, `suggestion_limit`, `attempt_limit`, or `time_limit`. If the
-initial diagnostic solve times out, the endpoint returns HTTP 504 without a
-repair result. Once infeasibility is established, a candidate timeout returns
-HTTP 200 with `completion_reason: "time_limit"` and any suggestions that
-already solved.
-
----
-
-### `POST /diff`
-
-Compare two resolve inputs. Both `from` and `to` use the `ResolveRequest`
-shape from `POST /resolve`. An outer `platforms` list applies to both sides.
-HTTP lockfile uploads are rejected when comparison would require their package
-records.
-
-```bash
-curl -sS http://localhost:8000/diff \
-  --json '{"from":{"specs":["python=3.12"]},"to":{"specs":["python=3.13"]},"platforms":["linux-64"]}'
-```
-
-The response is keyed by platform and separates added, removed, and changed
-packages:
-
-```json
-{
-  "platforms": ["linux-64"],
-  "diff": {
-    "linux-64": {
-      "added": [
-        {
-          "manager": "conda",
-          "name": "new-package",
-          "platform": "linux-64",
-          "version": "1.0",
-          "build": "h123_0",
-          "channel": "conda-forge",
-          "subdir": "linux-64",
-          "url": "https://conda.anaconda.org/conda-forge/linux-64/new-package-1.0-h123_0.conda"
-        }
-      ],
-      "removed": [],
-      "changed": [
-        {
-          "name": "python",
-          "manager": "conda",
-          "from": {
-            "manager": "conda",
-            "name": "python",
-            "platform": "linux-64",
-            "version": "3.12.11",
-            "build": "h9e4cc4f_0_cpython",
-            "channel": "conda-forge",
-            "subdir": "linux-64",
-            "url": "https://conda.anaconda.org/conda-forge/linux-64/python-3.12.11-h9e4cc4f_0_cpython.conda"
-          },
-          "to": {
-            "manager": "conda",
-            "name": "python",
-            "platform": "linux-64",
-            "version": "3.13.5",
-            "build": "hec9711d_102_cp313",
-            "channel": "conda-forge",
-            "subdir": "linux-64",
-            "url": "https://conda.anaconda.org/conda-forge/linux-64/python-3.13.5-hec9711d_102_cp313.conda"
-          },
-          "kind": "upgrade"
-        }
-      ],
-      "unchanged_count": 6
-    }
-  }
-}
-```
-
-`platforms` lists the compared platforms in response order. `diff` maps each
-listed platform to its `added`, `removed`, and `changed` package arrays plus
-`unchanged_count`.
-
-Every package in `added` and `removed`, and each `from` and `to` object in
-`changed`, has the `DiffPackage` fields `manager`, `name`, `platform`,
-`version`, `build`, `channel`, `subdir`, and `url`. A `ChangedPackage` has
-`name`, `manager`, `from`, `to`, and `kind`. `kind` is `upgrade`, `downgrade`,
-`version-change`, or `build-change`.
-
-Solver failures return HTTP 422. Inputs that resolve to no common platform
-return HTTP 400.
-
----
-
-### `POST /explain`
-
-Show the dependency chains from requested specs to one selected package. Its
-JSON body has the `ResolveRequest` fields plus a required `package` field and
-must select exactly one platform (the host platform is used when omitted).
-
-```bash
-curl -sS http://localhost:8000/explain \
-  --json '{"package":"libzlib","specs":["python"],"platforms":["linux-64"]}'
-```
-
-```json
-{
-  "package": "libzlib",
-  "version": "1.3.2",
-  "platform": "linux-64",
-  "chains": [["python", "libzlib"]],
-  "complete": true
-}
-```
-
-`complete` is false when the bounded local graph cannot account for every
-edge, such as a virtual package or an unresolvable dependency record. Missing
-packages return HTTP 404, and solver failures return HTTP 422.
-
----
+`POST /parse` accepts `{"file":"...", "filename":"environment.yml"}` and returns `{"specs":[...],"channels":[...]}` without solving. `file` is required. Lockfile metadata parsing does not materialize package records, so it does not derive specs or channels from them.
 
 (http-transcode)=
-### `POST /transcode`
+## Transcode
 
-Convert one lockfile format to another without running the solver. The input
-must already be a lockfile, and `format` must name a lockfile exporter such as
-`conda-lock-v1` or `pixi-lock-v6`. Package records are reconstructed from the
-lockfile metadata without fetching the referenced package archives.
+`POST /transcode?format=conda-lock-v1` accepts raw file uploads as above, or JSON with `file`, `filename` and `platforms`. The default platform is the server host. Query parameters are `format`, repeated `platform`, and `filename`.
 
-The no-fetch path supports conda-lockfiles' `conda-lock-v1` and
-`rattler-lock-v6` exporters and their aliases. Other registered exporters remain
-available to normal solve and CLI export paths but are not assumed to accept
-metadata-only records.
+The supported formats are `conda-lock-v1` and `rattler-lock-v6`, including their registered aliases. Conversion uses metadata already in the file. It neither solves nor downloads package archives. Nonempty `specs` or `channels` are rejected because applying them would require a solve.
 
-Cross-format conda-pypi wheel conversion returns HTTP 400. Rattler lock v6
-omits the mapped conda package name, so conversion to conda-lock v1 would need
-to guess it. Conversion in the other direction would discard the mapped name
-that conda-lock v1 does retain.
+Conversion also rejects data it cannot preserve safely:
 
-The temporary compatibility path also returns HTTP 400 when it cannot carry
-source data through conda's environment model without changing package
-selection or solver constraints. This can apply even when the source and target
-formats match. For conda-lock v1, pip, optional, and non-main packages on a
-requested platform are rejected. For rattler lock v6, multiple environments and
-PyPI package references are rejected. Constraints, features, Python
-site-package paths, duplicate dependency names, and dependency selectors are
-rejected when the target is conda-lock v1. Duplicate package metadata,
-duplicate or dangling references on a requested platform, mismatched URL
-identity, package URLs for the wrong platform, and nonempty Rattler fields that
-the installed compatibility model cannot represent are also rejected.
-Informational metadata that the model does represent but the target lacks may
-be normalized by the exporter.
+- Conda-lock v1 pip, optional or non-main packages on a selected platform.
+- Rattler v6 multiple environments, PyPI references and fields the compatibility model cannot represent.
+- Cross-format conda-pypi wheel mappings, which would lose package identity.
+- Invalid or duplicate records, dangling references, URL/package identity mismatches and wrong-platform URLs.
+- Constraints, features, Python site-package paths, duplicate dependency names and dependency selectors when targeting conda-lock v1.
 
-Successful responses include `Cache-Control: no-store` because the serialized
-lockfile can contain credential-bearing package URLs.
+These restrictions can apply even when source and target formats match. Representable informational metadata may be normalized by the exporter. Rejections return HTTP 400 with a `reasons` array. Successful conversion uses `Cache-Control: no-store`. See the {doc}`conversion example <../how-to/transcode-lockfiles>`.
 
-Query parameters
-: `format`
-  : Required output format name.
+## Retained outputs
 
-  `platform` (repeatable)
-  : Target platform subdir. Defaults to the host platform when omitted.
+Successful eligible solves return a relative `Location: /r/{key}`. The key identifies the saved bytes and media type. It is not the artifact's bare SHA256 digest. `GET /r/{key}` returns that exact output without checking current channel metadata.
 
-  `filename`
-  : Hint for the parser when uploading a raw file body.
+A new `/resolve` request checks freshness before reusing a solve. Missing or evicted outputs return HTTP 404. An absent `Location` means the response was not retained. This can happen with credential-bearing requests or outputs, storage limits, or failed publication to shared storage. The cache is not an archive. See {doc}`cache`.
 
-  `spec` (repeatable)
-  : Accepted only as a rejection input. Any supplied spec requires solving,
-    so the endpoint returns HTTP 400 instead of ignoring it.
+## Optional SBOM generation
 
-  `channel` (repeatable)
-  : Accepted only as a rejection input. Any channel override requires
-    solving, so the endpoint returns HTTP 400 instead of ignoring it.
-
-#### JSON body
-
-Send a `TranscodeRequest` object:
+`POST /sbom` accepts the resolve JSON fields, with at least one explicit platform. It solves new requirements and delegates to conda-sboms' `cyclonedx-json-v1.7` exporter. Supplied resolved lockfiles are rejected. It does not inspect installed files or scan for vulnerabilities.
 
 ```json
-{
-  "file": "...pixi.lock content...",
-  "filename": "pixi.lock",
-  "platforms": ["linux-64"],
-  "specs": [],
-  "channels": []
-}
+{"sboms":[{"platform":"linux-64","content":"...exact CycloneDX JSON text...","sha256":"...","location":"/r/..."}]}
 ```
 
-`specs` and `channels` are optional rejection-only fields. A non-empty value
-returns HTTP 400 because applying it would require a solve.
+Each `content` is a separate complete document. Requested roots and exact selected package records are passed to the provider, whose coverage markers remain intact. `location` is present only if that document was retained. Any failed platform makes the request fail without returning a successful SBOM collection.
 
-#### Raw lockfile upload
+Save the UTF-8 bytes of `content` unchanged. For example, `jq -j '.sboms[0].content' response.json > environment.cdx.json` avoids adding a newline.
 
-Upload a lockfile directly by setting an appropriate Content-Type header. Use
-`filename` when the content type does not identify the lockfile format.
+## Optional signing
 
-```bash
-curl -sS --data-binary @pixi.lock \
-  -H 'Content-Type: application/yaml' \
-  'http://localhost:8000/transcode?filename=pixi.lock&platform=linux-64&format=conda-lock-v1'
-```
-
-The request fails with HTTP 400 and a `reasons` array if the input is not a
-lockfile, the output format is not a lockfile, the requested platforms are
-missing from the input lockfile, or the request includes specs or channel
-overrides that would require solving.
-
----
-
-### `GET /r/{hash}`
-
-Fetch a stored content-addressed resolve result. The body and
-Content-Type are the exact stored response from the original `/resolve`
-request.
-
-```bash
-curl -sS http://localhost:8000/r/3a7f...e91b
-```
-
-```text
-Cache-Control: public, max-age=86400, immutable
-```
-
-Missing entries return HTTP 404:
+`POST /sign` accepts only `{"key":"..."}`, using the key from a retained output's `/r/` location. It does not accept caller-authored artifacts or statements.
 
 ```json
-{"error": "result not in cache; re-POST to recompute"}
+{"artifact_name":"result-...","sha256":"...","bundle":"...Sigstore bundle JSON text..."}
 ```
 
-This retrieval does not repeat the repodata freshness check used by a new
-`/resolve` request. The address identifies the stored response, so an older
-permalink can remain retrievable after current metadata would produce another
-digest. It remains available until eviction or removal from the persistent
-store. See {doc}`cache` for key fields, retention, and invalidation rules.
+The bundle binds the exact saved bytes to an authenticated signer. Its standard [in-toto Link v0.3](https://github.com/in-toto/attestation/blob/main/spec/predicates/link.md) describes an output-signing step named `conda-presto-sign`, with the same digest as material and output. It records a later signing operation, not the original solve or its consumed inputs.
 
----
+Signing is disabled by default. Operators must enable it and choose a trust configuration or deliberately allow public Sigstore. Unavailable credentials cause an error without interactive login. Save the artifact and bundle together. Detailed solve construction evidence remains {doc}`deferred <../proposals>`.
 
-### `GET /formats`
+## Optional verification
 
-Returns the list of registered output format names.
+`POST /verify` accepts:
 
-```bash
-curl http://localhost:8000/formats
-```
+| Field | Value |
+|---|---|
+| `artifact` | Base64 of the exact artifact bytes |
+| `bundle` | Sigstore bundle JSON as a string |
+| `artifact_name` | Expected statement subject name, returned by `/sign` |
+| `expected_identity` | Recipient-approved signer identity |
+| `expected_issuer` | Recipient-approved identity issuer |
 
-```json
-{
-  "formats": [
-    "conda-lock",
-    "conda-lock-v1",
-    "env.yml",
-    "environment-json",
-    "environment-yaml",
-    "explicit",
-    "json",
-    "pixi",
-    "pixi-lock-v6",
-    "rattler-lock-v6",
-    "reqs",
-    "requirements",
-    "txt",
-    "yaml",
-    "yml"
-  ]
-}
-```
+The service uses conda-sigstore to verify the bundle, requires exactly one subject with a SHA256 digest, hashes the supplied bytes and compares both identity and issuer. The recipient must choose that pair independently of the supplied bundle.
 
----
+Success returns `signature_verified`, `artifact_verified` and `signer_verified` as `true`, plus `artifact_name`, `artifact_sha256`, `identity`, `issuer` and `predicate_type`. `claims_checked` is true only for the recognized signing-step shape and matching material/output. Other predicates have `claims_checked: false`. This does not prove the truth of arbitrary construction claims or product compliance.
 
-### `GET /platforms`
+## Availability, limits and errors
 
-Returns the list of known conda platform subdirs.
+`GET /capabilities` returns booleans named `sbom`, `sign` and `verify`. `sign` reports installed support and enabled configuration, not a guarantee that credentials or remote signing services are currently available. Provider versions appear in `/version` when installed.
 
-```bash
-curl http://localhost:8000/platforms
-```
-
-```json
-{
-  "platforms": [
-    "emscripten-wasm32",
-    "freebsd-64",
-    "linux-32",
-    "linux-64",
-    "linux-aarch64",
-    "linux-armv6l",
-    "linux-armv7l",
-    "linux-ppc64",
-    "linux-ppc64le",
-    "linux-riscv64",
-    "linux-s390x",
-    "noarch",
-    "osx-64",
-    "osx-arm64",
-    "wasi-wasm32",
-    "win-32",
-    "win-64",
-    "win-arm64",
-    "zos-z"
-  ]
-}
-```
-
----
-
-### `GET /version`
-
-Returns version info for conda-presto and its key dependencies.
-
-```bash
-curl http://localhost:8000/version
-```
-
-```json
-{
-  "conda-presto": "0.x.y",
-  "conda": "26.x.y",
-  "conda-rattler-solver": "0.1.x",
-  "conda-lockfiles": "0.x.y"
-}
-```
-
----
-
-### `POST /parse`
-
-Parse an input file and extract its specs and channels without
-solving. Useful for validation or for building a UI on top of the
-solver.
-
-For a lockfile, HTTP parsing does not materialize package records. The response
-therefore contains no specs or channels derived from those records.
-
-```bash
-curl -sS http://localhost:8000/parse \
-  --json '{
-    "file": "channels:\n  - conda-forge\ndependencies:\n  - numpy\n",
-    "filename": "environment.yml"
-  }'
-```
-
-```json
-{
-  "specs": ["numpy"],
-  "channels": ["conda-forge"]
-}
-```
-
----
-
-### `GET /health`
-
-Readiness probe. Returns HTTP 200 after the configured persistent solver worker
-has loaded its indexes, or whenever persistent-worker mode is disabled.
-
-```json
-{"status": "ok"}
-```
-
-If the persistent worker stops or becomes unavailable, the endpoint returns HTTP
-503 until the server or conda-broker replaces it:
-
-```json
-{"status": "unavailable"}
-```
-
----
-
-### `GET /`
-
-The first-party HTML workbench. It prepares and resolves environment inputs,
-shows native package tables, and renders registered exporter output. Its form
-submissions use the same parsing, request limits, channel admission, solver,
-and result cache as the public JSON endpoints.
-
-The page and its result fragments use `Cache-Control: no-store`. Versioned CSS
-and HTMX assets are packaged with conda-presto and served from `/assets/`.
-No remote script, stylesheet, font, or API-renderer code is loaded.
-
----
-
-### `GET /openapi.json`
-
-The OpenAPI 3.1 schema generated by Litestar. Manually dispatched bodies for
-`POST /resolve`, `POST /preflight`, and `POST /transcode` are not represented.
-The workbench and its fragment routes are intentionally omitted.
-
-## Resolve response formats
-
-Without `?format=`, both `/resolve` methods return conda-presto's native
-`SolveResult` array. Partial failures are represented per platform. With
-`?format=<name>`, the response is rendered by the selected conda exporter and
-requires every platform solve to succeed. See {doc}`output-formats` for the
-canonical schemas, media types, aliases, and failure behavior.
-
-## Error responses
+`GET /health` returns HTTP 200 with `{"status":"ok"}` when the configured persistent worker is ready. A stopped worker produces HTTP 503 with `{"status":"unavailable"}` while recovery begins. Without persistent-worker mode, the probe reports HTTP 200.
 
 | Status | Meaning |
-|---:|---|
-| 400 | Invalid input, unknown format, unsupported media type, disallowed channel, request-cap violation, or incompatible operation |
-| 404 | Stored result or requested explanation package not found. The guarded private solver route also appears absent outside its broker service. |
-| 413 | Request body too large (exceeds `CONDA_PRESTO_MAX_BODY_BYTES`) |
-| 422 | A solve required by `/diff` or `/explain` failed, or the private solver returned a conda solver error |
-| 429 | Per-client request rate exceeded when rate limiting is enabled |
+|---|---|
+| 400 | Invalid request, disallowed channel, unsupported format or conversion |
+| 404 | Output not retained |
+| 413 | Body exceeds the configured limit |
+| 422 | Supplied attestation, artifact or signer check failed |
+| 429 | Client rate limit exceeded |
 | 500 | Unexpected solve or exporter failure |
-| 503 | Persistent worker unavailable on `/health` or the private solver route |
-| 504 | The solve deadline was reached (`CONDA_PRESTO_SOLVE_TIMEOUT_S`) |
+| 503 | Provider, signing credentials, trust material or worker unavailable |
+| 504 | Parsing, solving or attestation operation timed out |
 
-Errors returned explicitly by conda-presto handlers are JSON objects with an
-`error` field. Framework-level request validation and middleware responses can
-use Litestar's own error shape.
+Handler errors have an `error` field. Attestation errors can also carry a machine-readable `code`. Framework validation and middleware use Litestar's error shape.
 
-Cache-state inspection runs in non-abandoned worker threads because it uses
-conda's process-global platform context. If inspection blocks in dependency,
-filesystem, or operating-system code, observed request duration can exceed the
-configured solve deadline before the handler returns HTTP 504. See
-{doc}`cache` for the complete timeout boundary.
-
-```json
-{"error": "Unknown format 'bogus'. Available: conda-lock-v1, environment-json, ..."}
-```
-
-## See also
-
-- {doc}`cli`
-- {doc}`output-formats`
-- {doc}`cache`
-- {doc}`environment-variables`
+All bodies use the configured request-size limit, including base64 verification input. Attestation operations also cap artifacts at 32 MiB and bundles at 10 MiB. Signing and verification share the request capacity limit and run in terminable processes with the solve timeout. Conda cache-state inspection cannot safely abandon its process-global context, so that work can extend observed solve duration. Settings are listed in {doc}`environment-variables`.

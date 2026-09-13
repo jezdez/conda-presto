@@ -1,119 +1,23 @@
-# Monitor a running service
+# Monitor the service
 
-conda-presto exposes readiness and capability endpoints. A broker-managed
-deployment also exposes process state, events, and logs through conda-broker.
-
-There is currently no Prometheus endpoint or cache administration API.
-
-## Check readiness
-
-Use `/health` for an HTTP server:
+Check readiness before sending solves:
 
 ```bash
-export CONDA_PRESTO_URL=http://127.0.0.1:8000
-curl --fail --silent --show-error "$CONDA_PRESTO_URL/health"
+curl --fail --silent --show-error http://127.0.0.1:8000/health
+curl --fail --silent --show-error http://127.0.0.1:8000/version
 ```
 
-In persistent-worker mode, HTTP 200 means that the worker is ready to solve.
-HTTP 503 means it has stopped or is being replaced. Without persistent-worker
-mode, the endpoint reports ready whenever the application is running.
+A persistent worker that is unavailable produces HTTP 503 while the server replaces it. Readiness does not establish that every channel or the persistent result store is reachable.
 
-## Check Docker health
-
-The server image uses `/health` for its built-in container health check:
+For a container, inspect process health and logs:
 
 ```bash
-docker inspect \
-  --format '{{json .State.Health}}' \
-  conda-presto \
-  | jq
-```
-
-Read application output with:
-
-```bash
+docker inspect --format '{{.State.Health.Status}}' conda-presto
 docker logs --follow conda-presto
 ```
 
-## Check broker state
+For a process deployment, collect stdout and stderr through its supervisor. Keep the default metadata-only access logs and pass `--no-access-log` when invoking uvicorn directly.
 
-Use the human-readable status for interactive diagnosis:
+Use `/formats`, `/platforms` and `/openapi.json` to inspect advertised capabilities. Exercise an actual small resolve and retained-result retrieval when checking a deployed integration. See {doc}`configure-result-cache`.
 
-```bash
-conda broker status conda-presto.server
-```
-
-Use JSON in scripts:
-
-```bash
-conda broker status conda-presto.server --json \
-  | jq '.services[0] | {running, ready, health, restart_count, endpoints}'
-```
-
-Follow broker lifecycle events separately from service output:
-
-```bash
-conda broker events --follow
-```
-
-```bash
-conda broker logs conda-presto.server --follow
-```
-
-Use `--previous` to inspect output retained from the previous service process:
-
-```bash
-conda broker logs conda-presto.server --previous --lines 200
-```
-
-## Check the deployed capabilities
-
-Use the read-only discovery endpoints to identify what the process has loaded:
-
-```bash
-curl --fail --silent --show-error "$CONDA_PRESTO_URL/version" | jq
-curl --fail --silent --show-error "$CONDA_PRESTO_URL/formats" | jq
-curl --fail --silent --show-error "$CONDA_PRESTO_URL/platforms" | jq
-curl --fail --silent --show-error \
-  "$CONDA_PRESTO_URL/openapi.json" \
-  | jq '.paths | keys'
-```
-
-The private `/solver/v1` route is intentionally absent from OpenAPI.
-
-## Interpret solver refresh logs
-
-The broker child logs one summary after every completed refresh cycle. The
-summary includes these cumulative, process-local counters:
-
-| Field | Meaning |
-|---|---|
-| `selected` | Eligible records selected for this cycle |
-| `recorded_requests` | Foreground requests recorded since process start |
-| `cycles` | Cycles started since process start |
-| `already_current` | Selected entries that did not need a new result |
-| `attempts` | Background solves attempted |
-| `successful_refreshes` | Results successfully made current |
-| `foreground_skips` | Work not started or continued because foreground work arrived |
-| `timeouts` | Inspection, worker startup, or solve timeouts |
-| `failures` | Metadata, worker, solve, or cleanup failures |
-| `rejected_publications` | Results not accepted by persistent or freshness checks |
-
-Counters reset when the service process restarts. Logs do not include recorded
-request bodies. The private solver route is excluded from normal request logs.
-
-## Know the current limits
-
-conda-presto does not currently expose:
-
-- Prometheus or OpenMetrics data
-- a per-request solver cache hit header
-- a recorded-request listing endpoint
-- a cache clear or refresh endpoint
-- private solver requests in access logs
-
-Use timing only as a performance measurement, not as proof that a particular
-request hit the final-state cache. See {doc}`../explanation/performance` for
-the costs that remain on a cache hit and {doc}`troubleshoot` for symptom-based
-checks. See {doc}`../reference/observability` for the exact endpoint, log, and
-counter contracts.
+HTTP logs contain path, method, content type and status. They omit query parameters, headers and bodies. `CONDA_PRESTO_LOG_LEVEL` controls application verbosity. Logs cover solve/export failures, worker recovery and persistent-store failures. Readiness does not probe Redis, and the service has no metrics or cache-administration endpoint.
