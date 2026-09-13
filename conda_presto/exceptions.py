@@ -16,6 +16,7 @@ from __future__ import annotations
 import logging
 import re
 import traceback
+from itertools import chain
 from urllib.parse import parse_qsl, unquote, urlparse
 
 from conda.exceptions import PackagesNotFoundError, UnsatisfiableError
@@ -42,9 +43,15 @@ SAFE_ERROR_TYPES: tuple[type[Exception], ...] = (
     PackagesNotFoundError,
 )
 
-URL_RE = re.compile(r"[a-z][a-z0-9+.-]*://\S+", re.IGNORECASE)
+# Start once per scheme-character run. Possessive repeats alone would still
+# retry at every position in a long failed scheme prefix.
+URL_RE = re.compile(
+    r"(?<![A-Za-z0-9+.-])(?P<prefix>[0-9+.-]*+)"
+    r"(?P<url>[A-Za-z][A-Za-z0-9+.-]*+://\S+)"
+)
 CREDENTIAL_URL_RE = re.compile(
-    r"""[a-z][a-z0-9+.-]*://[^\s"'<>\\,{}]+""", re.IGNORECASE
+    r"(?<![A-Za-z0-9+.-])[0-9+.-]*+"
+    r"""(?P<url>[A-Za-z][A-Za-z0-9+.-]*+://[^\s"'<>\\,{}]+)"""
 )
 
 
@@ -76,11 +83,10 @@ def contains_credentials(value: object) -> bool:
                 decoded = next_value
             if "%" in decoded:
                 return True
-            candidates = [decoded]
-            candidates.extend(
-                match.group() for match in CREDENTIAL_URL_RE.finditer(decoded)
-            )
-            for candidate in candidates:
+            for candidate in chain(
+                (decoded,),
+                (match["url"] for match in CREDENTIAL_URL_RE.finditer(decoded)),
+            ):
                 try:
                     parsed = urlparse(candidate)
                 except ValueError:
@@ -168,4 +174,4 @@ def redact_safe_error(message: str) -> str:
         redacted.append(line)
         idx += 1
 
-    return URL_RE.sub("[redacted-url]", "\n".join(redacted))
+    return URL_RE.sub(r"\g<prefix>[redacted-url]", "\n".join(redacted))
