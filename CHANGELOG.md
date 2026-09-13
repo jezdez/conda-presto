@@ -14,6 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Focus the roadmap on HTTP integration and operation across replicas, with restored topic docs distinguishing upstream opportunities and historical proposals.
 - Preserve requested package roots alongside resolved records for exporter plugins.
 - Focus the supported workflows on HTTP solving, parsing, export, transcoding and retained-result retrieval.
 - Require an explicit HTTP endpoint in the GitHub Action.
@@ -21,6 +22,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Removed
 
+- Remove the obsolete design records and references that treated proposals as requirements.
 - Remove preflight, diff, explain and repair operations and the browser workbench.
 - Remove the broker service, internal Presto solver, recorded-request catalog and scheduled cache warmer.
 - Remove the Action's local mode and the separate CLI container.
