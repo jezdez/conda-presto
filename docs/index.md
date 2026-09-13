@@ -15,11 +15,3 @@ explanation/index
 proposals
 changelog
 ```
-
-```{toctree}
-:caption: Design records
-:hidden:
-:glob:
-
-adr/*
-```
