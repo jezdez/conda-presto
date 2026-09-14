@@ -46,7 +46,7 @@ curl --fail-with-body "$CONDA_PRESTO_URL/sbom" \
 jq -j '.sboms[0].content' sboms.json > environment.cdx.json
 ```
 
-The document describes selected package records. It does not establish which files a downstream product ships. Multiple requested platforms produce separate documents. `/sbom` solves the supplied requirements and reuses the registered SBOM exporter. It does not accept uploaded lockfiles.
+The document describes selected package records. It does not establish which files a downstream product ships. Multiple requested platforms produce separate documents. This request solves the supplied requirements and reuses the registered SBOM exporter. To render selected workspace `conda.lock` records without solving, follow the {doc}`saved-lock SBOM workflow <../how-to/extract-workspace-lock>`.
 
 ## Sign and verify the saved bytes
 

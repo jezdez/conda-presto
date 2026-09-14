@@ -2181,6 +2181,9 @@ async def test_openapi_schema(client):
         "WorkspaceLockParseResult",
     }
     assert {"400", "504"} <= parse_operation["responses"].keys()
+    assert {"file", "environments", "platforms", "manifest", "manifest_filename"} <= (
+        data["components"]["schemas"]["SbomRequest"]["properties"].keys()
+    )
 
 
 @pytest.mark.anyio
@@ -3549,6 +3552,7 @@ async def test_capabilities_separates_provider_and_signing_configuration(
         "workspace_solve": True,
         "workspace_lock_parse": True,
         "workspace_lock_export": True,
+        "workspace_lock_sbom": True,
         "export": True,
         "sbom": True,
         "verify": installed,
@@ -3557,7 +3561,7 @@ async def test_capabilities_separates_provider_and_signing_configuration(
 
 
 @pytest.mark.anyio
-async def test_sbom_rejects_lockfile_inspection(client, pixi_lock_v6_text):
+async def test_sbom_rejects_ordinary_lockfile(client, pixi_lock_v6_text):
     response = await client.post(
         "/sbom",
         json={
@@ -3567,7 +3571,7 @@ async def test_sbom_rejects_lockfile_inspection(client, pixi_lock_v6_text):
         },
     )
     assert response.status_code == 400
-    assert "inspection is not supported" in response.json()["error"]
+    assert "require a workspace conda.lock" in response.json()["error"]
 
 
 @pytest.mark.anyio

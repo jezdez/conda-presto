@@ -25,6 +25,7 @@ import msgspec
 from conda.base.constants import KNOWN_SUBDIRS
 from conda.exceptions import CondaError
 from conda.models.channel import Channel
+from conda_workspaces.lockfile import LOCKFILE_NAME
 from litestar import Litestar, Request, get, post
 from litestar.config.compression import CompressionConfig
 from litestar.config.cors import CORSConfig
@@ -275,10 +276,7 @@ class ResolveRequest:
             if parsed_file.is_lockfile and not allow_lockfile:
                 return Response(
                     ErrorResponse(
-                        error=(
-                            "SBOM requests solve requirements. "
-                            "Resolved lockfile inspection is not supported."
-                        )
+                        error=("Locked SBOMs require a workspace conda.lock file.")
                     ),
                     status_code=HTTP_400_BAD_REQUEST,
                 )
@@ -338,6 +336,8 @@ class ExportRequest:
     environments: list[str] | None = None
     specs: list[str] | None = None
     channels: list[str] | None = None
+    manifest: str | None = None
+    manifest_filename: str | None = None
 
     async def read(self, request: Request) -> ExportRequest | Response:
         """Read uploaded content, using this request for query defaults."""
@@ -349,6 +349,8 @@ class ExportRequest:
         environments = self.environments
         body_specs: list[str] = []
         body_channels: list[str] = []
+        manifest = self.manifest
+        manifest_filename = self.manifest_filename
 
         if content_type in ("", "application/json"):
             body = await request.body()
@@ -371,6 +373,8 @@ class ExportRequest:
             )
             body_specs = data.specs or []
             body_channels = data.channels or []
+            manifest = data.manifest
+            manifest_filename = data.manifest_filename
         elif content_type in RAW_CONTENT_TYPE_EXTENSIONS:
             body = await request.body()
             try:
@@ -408,6 +412,8 @@ class ExportRequest:
             environments=environments,
             specs=(self.specs or []) + body_specs,
             channels=(self.channels or []) + body_channels,
+            manifest=manifest,
+            manifest_filename=manifest_filename,
         )
 
     async def response(
@@ -418,6 +424,13 @@ class ExportRequest:
         lockfile_only: bool = False,
     ) -> Response:
         """Export through the bounded parser and retain eligible locked outputs."""
+        if lockfile_only and (
+            self.manifest is not None or self.manifest_filename is not None
+        ):
+            return Response(
+                ErrorResponse(error="Manifest context requires POST /export"),
+                status_code=HTTP_400_BAD_REQUEST,
+            )
         target_platforms = self.platforms or [NATIVE_SUBDIR]
 
         has_extra_specs = bool(self.specs)
@@ -452,6 +465,8 @@ class ExportRequest:
             export_format=export_format,
             lockfile_only=lockfile_only,
             target_environments=self.environments,
+            manifest_content=self.manifest,
+            manifest_filename=self.manifest_filename,
         )
         if isinstance(parsed, Response):
             return parsed
@@ -552,6 +567,80 @@ class ExportRequest:
             },
             status_code=HTTP_400_BAD_REQUEST,
         )
+
+
+@dataclass
+class SbomRequest(ResolveRequest):
+    """Solve requirements or inventory explicitly selected workspace lock entries."""
+
+    manifest: str | None = None
+    manifest_filename: str | None = None
+
+    async def locked_response(self, request: Request, output: OutputFormat) -> Response:
+        """Render every selected SBOM before retaining the complete collection."""
+        if self.file is None:
+            error = "Provide workspace lockfile content"
+        elif not self.environments or not self.platforms:
+            error = (
+                "Select at least one explicit environment and platform for locked SBOMs"
+            )
+        elif self.specs or self.channels:
+            error = "Locked SBOMs do not accept extra specs or channel overrides"
+        else:
+            error = None
+        if error:
+            return Response(
+                ErrorResponse(error=error), status_code=HTTP_400_BAD_REQUEST
+            )
+
+        parsed = await parse_input_for_request(
+            request,
+            self.file,
+            self.filename,
+            self.platforms,
+            export_format=output.exporter.name,
+            target_environments=self.environments,
+            export_each=True,
+            manifest_content=self.manifest,
+            manifest_filename=self.manifest_filename,
+        )
+        if isinstance(parsed, Response):
+            return parsed
+
+        cache: ResultCache = request.app.state.result_cache
+        exporter_identity = output.cache_identity()
+        identity = {
+            "operation": "sbom",
+            "input": parsed.workspace_lock.cache_identity(),
+            "output": output.exporter.name,
+            "exporter": exporter_identity,
+        }
+        documents = []
+        for exported in parsed.exported_documents:
+            body = exported.content.encode("utf-8")
+            identity["target"] = (
+                exported.environment,
+                exported.platform,
+                exported.subdir,
+            )
+            digest = hashlib.sha256(msgspec.json.encode(identity)).hexdigest()
+            response = await cache.remember(
+                cache.request_key(digest),
+                body,
+                output.media_type,
+                retain=exporter_identity is not None,
+            )
+            document = {
+                "environment": exported.environment,
+                "platform": exported.platform,
+                "subdir": exported.subdir,
+                "content": exported.content,
+                "sha256": hashlib.sha256(body).hexdigest(),
+            }
+            if location := response.headers.get("Location"):
+                document["location"] = location
+            documents.append(document)
+        return Response({"sboms": documents}, headers={"Cache-Control": "no-store"})
 
 
 class SignRequest(msgspec.Struct, forbid_unknown_fields=True):
@@ -699,6 +788,9 @@ async def parse_input_for_request(
     export_format: str | None = None,
     lockfile_only: bool = False,
     target_environments: list[str] | None = None,
+    export_each: bool = False,
+    manifest_content: str | None = None,
+    manifest_filename: str | None = None,
 ) -> ParsedInputFile | Response:
     """Parse input off the event loop with a bounded wall-clock time."""
     capacity = request.app.state.solver_limiter
@@ -715,6 +807,9 @@ async def parse_input_for_request(
                     export_format=export_format,
                     lockfile_only=lockfile_only,
                     target_environments=target_environments,
+                    export_each=export_each,
+                    manifest_content=manifest_content,
+                    manifest_filename=manifest_filename,
                 ),
                 limiter=capacity,
                 abandon_on_cancel=False,
@@ -1261,13 +1356,20 @@ async def result_get(request: Request, key: FromPath[str]) -> Response:
 
 
 @post("/sbom", status_code=200)
-async def sbom_post(request: Request, data: ResolveRequest) -> Response:
-    """Solve new requirements and return one CycloneDX document per platform."""
+async def sbom_post(request: Request, data: SbomRequest) -> Response:
+    """Return CycloneDX documents from new solves or selected workspace lock records."""
     format_name = "cyclonedx-json-v1.7"
     if format_name not in OutputFormat.available():
         return Response(
             ErrorResponse(error="SBOM generation requires conda-sboms"),
             status_code=HTTP_503_SERVICE_UNAVAILABLE,
+        )
+    if Path(data.filename or "").name == LOCKFILE_NAME:
+        return await data.locked_response(request, OutputFormat.named(format_name))
+    if data.manifest is not None or data.manifest_filename is not None:
+        return Response(
+            ErrorResponse(error="Manifest context requires workspace lock input"),
+            status_code=HTTP_400_BAD_REQUEST,
         )
     if not data.platforms:
         return Response(
@@ -1416,6 +1518,7 @@ async def capabilities() -> dict[str, bool]:
         "workspace_solve": True,
         "workspace_lock_parse": True,
         "workspace_lock_export": True,
+        "workspace_lock_sbom": "cyclonedx-json-v1.7" in OutputFormat.available(),
         "export": True,
         "sbom": "cyclonedx-json-v1.7" in OutputFormat.available(),
         "verify": available,

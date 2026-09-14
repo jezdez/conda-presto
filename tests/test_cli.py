@@ -166,6 +166,24 @@ def test_parse_workspace_matches_bounded_parser(
             1,
             id="environment-without-workspace",
         ),
+        pytest.param(
+            ["--parse", "-f", "conda.lock", "--manifest", "conda.toml"],
+            "--manifest requires --export",
+            1,
+            id="manifest-with-parse",
+        ),
+        pytest.param(
+            ["-f", "conda.lock", "--manifest", "conda.toml"],
+            "--manifest requires --export",
+            1,
+            id="manifest-with-solve",
+        ),
+        pytest.param(
+            ["--serve", "--manifest", "conda.toml"],
+            "--manifest requires --export",
+            1,
+            id="manifest-with-serve",
+        ),
     ],
 )
 def test_parse_rejects_incompatible_arguments(
@@ -212,22 +230,31 @@ def test_parse_reports_file_errors(
     assert "Traceback" not in error
 
 
+@pytest.mark.parametrize("with_manifest", [False, True])
 def test_export_preserves_rendered_bytes_and_passes_selection(
-    run_cli, tmp_path, monkeypatch
+    run_cli, tmp_path, monkeypatch, with_manifest
 ):
     path = tmp_path / "conda.lock"
     path.write_text("source lockfile")
+    manifest = tmp_path / "conda.toml"
+    manifest.write_text("source manifest")
     rendered = '# exact export\n  package: "\u03bb"  \n\n'
+    format_name = "cyclonedx-json-v1.7" if with_manifest else "conda-workspaces-lock-v1"
 
     def parse(content, filename, platforms, deadline, **kwargs):
         assert content == "source lockfile"
         assert filename == "conda.lock"
         assert platforms == ["gpu"]
         assert deadline > time.monotonic()
-        assert kwargs == {
-            "export_format": "conda-workspaces-lock-v1",
+        expected = {
+            "export_format": format_name,
             "target_environments": ["test"],
         }
+        if with_manifest:
+            expected.update(
+                manifest_content="source manifest", manifest_filename="conda.toml"
+            )
+        assert kwargs == expected
         return ParsedInputFile(
             specs=[],
             channels=[],
@@ -247,7 +274,8 @@ def test_export_preserves_rendered_bytes_and_passes_selection(
             "-p",
             "gpu",
             "--format",
-            "conda-workspaces-lock-v1",
+            format_name,
+            *(["--manifest", str(manifest)] if with_manifest else []),
         )
         == rendered
     )
@@ -359,6 +387,171 @@ def test_export_workspace_lock_uses_explicit_exporter(
         reference["conda"]
         for reference in workspace_lock_data["environments"]["test"]["packages"]["cpu"]
     ]
+
+
+@pytest.fixture
+def workspace_sbom_inputs(tmp_path, workspace_lock_path, workspace_lock_data):
+    workspace_lock_data["packages"][0]["depends"] = ["gpu-probe >=1"]
+    workspace_lock_data["environments"]["test"]["packages"]["cpu"].append(
+        {"conda": workspace_lock_data["packages"][1]["conda"]}
+    )
+    workspace_lock_path.write_text(yaml.safe_dump(workspace_lock_data))
+    manifest = tmp_path / "conda.toml"
+    manifest.write_text(
+        '[workspace]\nchannels = ["conda-forge"]\n'
+        'platforms = [{name = "cpu", platform = "linux-64"}]\n'
+        '[dependencies]\nprobe = ">=1"\ngpu-probe = "*"\n'
+        "[environments]\ntest = []\n"
+    )
+    return workspace_lock_path, manifest
+
+
+@pytest.mark.parametrize("with_manifest", [False, True])
+def test_workspace_sbom_preserves_records_and_distinguishes_declared_roots(
+    run_cli,
+    workspace_sbom_inputs,
+    workspace_lock_data,
+    tmp_path,
+    monkeypatch,
+    with_manifest,
+):
+    lock, manifest = workspace_sbom_inputs
+    package_cache = tmp_path / "package-cache"
+    package_cache.mkdir()
+    monkeypatch.setenv("CONDA_PKGS_DIRS", str(package_cache))
+    monkeypatch.setenv("CONDA_OFFLINE", "true")
+    document = json.loads(
+        run_cli(
+            "--export",
+            "-f",
+            str(lock),
+            "-e",
+            "test",
+            "-p",
+            "cpu",
+            "--format",
+            "cyclonedx-json-v1.7",
+            *(["--manifest", str(manifest)] if with_manifest else []),
+        )
+    )
+    root = document["metadata"]["component"]
+    properties = {item["name"]: item["value"] for item in root["properties"]}
+    assert properties["conda:environment:root-dependency-source"] == (
+        "requested-packages" if with_manifest else "inferred-graph-roots"
+    )
+    components = {item["name"]: item for item in document["components"]}
+    assert set(components) == {"probe", "gpu-probe"}
+    for component in components.values():
+        assert component["version"] == "1.0"
+        assert {item["alg"]: item["content"] for item in component["hashes"]} == {
+            "SHA-256": "a" * 64,
+            "MD5": "b" * 32,
+        }
+        assert {item["name"]: item["value"] for item in component["properties"]}[
+            "conda:package:build-number"
+        ] == "7"
+    assert {
+        reference["url"]
+        for component in components.values()
+        for reference in component["externalReferences"]
+        if reference["type"] == "distribution"
+    } == {
+        reference["conda"]
+        for reference in workspace_lock_data["environments"]["test"]["packages"]["cpu"]
+    }
+    dependencies = {item["ref"]: item["dependsOn"] for item in document["dependencies"]}
+    assert set(dependencies[root["bom-ref"]]) == {
+        components[name]["bom-ref"]
+        for name in (components if with_manifest else ["probe"])
+    }
+    assert dependencies[components["probe"]["bom-ref"]] == [
+        components["gpu-probe"]["bom-ref"]
+    ]
+    assert not any(path.is_file() for path in package_cache.rglob("*"))
+
+
+def test_workspace_sbom_rejects_mismatched_companion_manifest(
+    run_cli, workspace_sbom_inputs, capsys
+):
+    lock, manifest = workspace_sbom_inputs
+    manifest.write_text(manifest.read_text().replace('probe = ">=1"', 'probe = ">=2"'))
+    with pytest.raises(SystemExit, match="1"):
+        run_cli(
+            "--export",
+            "-f",
+            str(lock),
+            "-e",
+            "test",
+            "-p",
+            "cpu",
+            "--format",
+            "cyclonedx-json-v1.7",
+            "--manifest",
+            str(manifest),
+        )
+    assert "manifest" in capsys.readouterr().err.lower()
+
+
+@pytest.mark.parametrize(
+    "selectors,message",
+    [
+        ([], "Select one environment"),
+        (["-e", "test", "-p", "cpu", "-p", "osx-arm64"], "Select one target"),
+    ],
+)
+def test_workspace_sbom_requires_one_environment_and_target(
+    run_cli, workspace_lock_path, capsys, selectors, message
+):
+    with pytest.raises(SystemExit, match="1"):
+        run_cli(
+            "--export",
+            "-f",
+            str(workspace_lock_path),
+            "--format",
+            "cyclonedx-json-v1.7",
+            *selectors,
+        )
+    assert message in capsys.readouterr().err
+
+
+def test_companion_manifest_requires_workspace_lock_input(
+    run_cli, environment_yml_path, workspace_manifest_path, capsys
+):
+    with pytest.raises(SystemExit, match="1"):
+        run_cli(
+            "--export",
+            "-f",
+            str(environment_yml_path),
+            "--format",
+            "environment-yaml",
+            "--manifest",
+            str(workspace_manifest_path),
+        )
+    assert "require conda.lock" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize(
+    "content,message", [(None, "Cannot read input file"), (b"\xff", "not valid UTF-8")]
+)
+def test_export_reports_companion_manifest_file_errors(
+    run_cli, workspace_lock_path, tmp_path, capsys, content, message
+):
+    manifest = tmp_path / "conda.toml"
+    if content is not None:
+        manifest.write_bytes(content)
+    with pytest.raises(SystemExit, match="1"):
+        run_cli(
+            "--export",
+            "-f",
+            str(workspace_lock_path),
+            "--format",
+            "cyclonedx-json-v1.7",
+            "--manifest",
+            str(manifest),
+        )
+    error = capsys.readouterr().err
+    assert message in error
+    assert str(tmp_path) not in error
 
 
 @pytest.mark.parametrize("arguments", [[], ["--format", "conda-workspaces-lock-v1"]])
