@@ -666,7 +666,7 @@ class ParseRequest(msgspec.Struct, forbid_unknown_fields=True):
     platforms: list[str] | None = None
 
 
-class CheckLockRequest(msgspec.Struct, forbid_unknown_fields=True):
+class ValidateRequest(msgspec.Struct, forbid_unknown_fields=True):
     """A complete workspace lock and its manifest for consistency checking."""
 
     file: str
@@ -1356,7 +1356,7 @@ async def result_get(request: Request, key: FromPath[str]) -> Response:
 
 
 @post(
-    "/check-lock",
+    "/validate",
     status_code=200,
     responses={
         200: ResponseSpec(
@@ -1373,17 +1373,17 @@ async def result_get(request: Request, key: FromPath[str]) -> Response:
         ),
     },
 )
-async def check_lock_post(request: Request, data: CheckLockRequest) -> Response:
+async def validate_post(request: Request, data: ValidateRequest) -> Response:
     """Check the whole workspace lock against the supplied manifest."""
     if request.content_type[0] != "application/json":
         return Response(
-            ErrorResponse(error="POST /check-lock requires application/json"),
+            ErrorResponse(error="POST /validate requires application/json"),
             status_code=HTTP_400_BAD_REQUEST,
             headers={"Cache-Control": "no-store"},
         )
     if request.query_params:
         return Response(
-            ErrorResponse(error="POST /check-lock does not accept query parameters"),
+            ErrorResponse(error="POST /validate does not accept query parameters"),
             status_code=HTTP_400_BAD_REQUEST,
             headers={"Cache-Control": "no-store"},
         )
@@ -1796,7 +1796,7 @@ app = Litestar(
         resolve_post,
         transcode_post,
         export_post,
-        check_lock_post,
+        validate_post,
         sbom_post,
         sign_post,
         verify_post,

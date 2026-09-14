@@ -55,7 +55,7 @@ Start with the matching `conda.toml` and workspace `conda.lock` from {doc}`../ho
 ```bash
 jq -n --rawfile file conda.lock --rawfile manifest conda.toml \
   '{file: $file, filename: "conda.lock", manifest: $manifest, manifest_filename: "conda.toml"}' |
-  curl --fail-with-body "$CONDA_PRESTO_URL/check-lock" \
+  curl --fail-with-body "$CONDA_PRESTO_URL/validate" \
     --header 'Content-Type: application/json' --data-binary @- \
     --output consistency.json
 jq '.consistent' consistency.json
@@ -69,7 +69,7 @@ The example manifest requires Python 3.13. Create a changed copy that instead re
 sed 's/3\.13\.\*/3.12.*/' conda.toml > changed-conda.toml
 jq -n --rawfile file conda.lock --rawfile manifest changed-conda.toml \
   '{file: $file, filename: "conda.lock", manifest: $manifest, manifest_filename: "conda.toml"}' |
-  curl --fail-with-body "$CONDA_PRESTO_URL/check-lock" \
+  curl --fail-with-body "$CONDA_PRESTO_URL/validate" \
     --header 'Content-Type: application/json' --data-binary @- \
     --output mismatch.json
 jq '.targets[] | select(.consistent == false)' mismatch.json

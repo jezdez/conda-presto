@@ -9,7 +9,7 @@ Start the service with `conda presto --serve`. `/openapi.json` and `/` return th
 | POST | `/export` | Render declarations or selected locked records without solving |
 | POST | `/transcode` | Convert supported lockfiles through the lock-to-lock compatibility operation |
 | POST | `/sbom` | Export separate SBOMs from solved requirements or selected workspace lock entries |
-| POST | `/check-lock` | Check a complete workspace lock against its manifest without solving |
+| POST | `/validate` | Check a complete workspace lock against its manifest without solving |
 | POST | `/sign` | Sign a retained output using the service identity |
 | POST | `/verify` | Check supplied bytes, a bundle and an expected signer |
 | GET | `/r/{key}` | Retrieve an exact retained output |
@@ -172,7 +172,7 @@ Save the UTF-8 bytes of `content` unchanged. For example, `jq -j '.sboms[0].cont
 
 ## Check workspace lock consistency
 
-`POST /check-lock` accepts a JSON envelope containing both complete uploaded files:
+`POST /validate` accepts a JSON envelope containing both complete uploaded files:
 
 | Field | Type | Meaning |
 |---|---|---|

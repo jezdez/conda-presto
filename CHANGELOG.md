@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- Check every declared workspace environment and target against a saved lock through `POST /check-lock` and CLI `--check-lock`, without solving or downloads.
+- Check every declared workspace environment and target against a saved lock through `POST /validate` and CLI `--validate`, without solving or downloads.
 - Generate separate SBOM documents from selected workspace lock environments and targets, with optional validated manifest context for declared dependency roots.
 - Render declarations or saved exact records through `POST /export` and CLI `--export` without solving or downloads, including named workspace lock extraction.
 - Add workspace discovery and target selection through `POST /parse` and CLI `--parse`, using conda-workspaces without solving.
