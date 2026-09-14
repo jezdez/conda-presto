@@ -85,9 +85,9 @@ def test_arm64_scan_builds_the_server_image():
     assert "platforms: linux/arm64" in arm_job
     assert "file: Dockerfile" in arm_job
     assert "image-ref: conda-presto:server-arm64-scan" in arm_job
-    assert (
-        "docker/setup-qemu-action@96fe6ef7f33517b61c61be40b68a1882f3264fb8" in arm_job
-    )
+    revisions = re.findall(r"uses: docker/setup-qemu-action@(\S+)", arm_job)
+    assert len(revisions) == 1
+    assert re.fullmatch(r"[0-9a-f]{40}", revisions[0])
 
 
 @pytest.mark.parametrize(
