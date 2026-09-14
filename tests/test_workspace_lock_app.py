@@ -7,12 +7,14 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import pytest
 import yaml
+from conda.models.match_spec import MatchSpec
 from httpx import ASGITransport, AsyncClient
-from litestar import Litestar
+from litestar import Litestar, Router
 
 import conda_presto.app as app_module
 from conda_presto.app import (
     capabilities,
+    export_post,
     parse,
     resolve_post,
     result_get,
@@ -23,7 +25,7 @@ from conda_presto.cache import ResultCache
 
 
 @pytest.fixture()
-async def lock_client(monkeypatch):
+async def lock_client(monkeypatch, request):
     def unexpected_work(*args, **kwargs):
         pytest.fail("Lock export must not solve, capture repodata or render in HTTP")
 
@@ -31,20 +33,27 @@ async def lock_client(monkeypatch):
     monkeypatch.setattr(app_module, "solve_environments", unexpected_work)
     monkeypatch.setattr(app_module.RepodataSnapshot, "capture", unexpected_work)
     monkeypatch.setattr(app_module.OutputFormat, "render", unexpected_work)
+    prefix = getattr(request, "param", "/")
     app = Litestar(
         route_handlers=[
-            parse,
-            transcode_post,
-            resolve_post,
-            result_get,
-            sbom_post,
-            capabilities,
+            Router(
+                path=prefix,
+                route_handlers=[
+                    parse,
+                    export_post,
+                    transcode_post,
+                    resolve_post,
+                    result_get,
+                    sbom_post,
+                    capabilities,
+                ],
+            )
         ]
     )
     app.state.solver_limiter = None
     app.state.result_cache = ResultCache(max_size=256)
     async with AsyncClient(
-        transport=ASGITransport(app=app), base_url="http://test"
+        transport=ASGITransport(app=app), base_url=f"http://test{prefix}"
     ) as client:
         yield client
 
@@ -458,3 +467,70 @@ async def test_capabilities_report_named_lock_operations(lock_client):
 
     assert response.json()["workspace_lock_parse"] is True
     assert response.json()["workspace_lock_export"] is True
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("lock_client", ["/", "/api/"], indirect=True)
+@pytest.mark.parametrize("endpoint,status", [("export", 200), ("transcode", 400)])
+async def test_export_format_support_is_independent_of_route_prefix(
+    lock_client, lock_document, endpoint, status
+):
+    response = await lock_client.post(
+        f"{endpoint}?format=environment-yaml",
+        json={
+            "file": yaml.safe_dump(lock_document),
+            "filename": "conda.lock",
+            "environments": ["test"],
+            "platforms": ["linux-64"],
+        },
+    )
+
+    assert response.status_code == status, response.text
+    if endpoint == "export":
+        assert yaml.safe_load(response.text)["dependencies"] == ["probe=1.0=h123_0"]
+    else:
+        assert response.json()["reasons"] == ["output format is not a lockfile"]
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("endpoint,status", [("export", 200), ("transcode", 400)])
+@pytest.mark.parametrize(
+    "filename,content,selectors",
+    [
+        (
+            "environment.yml",
+            "name: declared\nchannels: [conda-forge]\ndependencies: [python>=3.12]\n",
+            {},
+        ),
+        (
+            "requirements.txt",
+            "python>=3.12\n",
+            {},
+        ),
+        (
+            "conda.toml",
+            (
+                '[workspace]\nname = "declared"\nchannels = ["conda-forge"]\n'
+                'platforms = ["linux-64"]\n[dependencies]\npython = ">=3.12"\n'
+            ),
+            {"environments": ["default"], "platforms": ["linux-64"]},
+        ),
+    ],
+    ids=["environment-yaml", "requirements", "workspace"],
+)
+async def test_export_accepts_declarations_without_solving(
+    lock_client, endpoint, status, filename, content, selectors
+):
+    response = await lock_client.post(
+        f"/{endpoint}?format=environment-yaml",
+        json={"file": content, "filename": filename, **selectors},
+    )
+
+    assert response.status_code == status, response.text
+    if endpoint == "export":
+        assert [
+            MatchSpec(spec) for spec in yaml.safe_load(response.text)["dependencies"]
+        ] == [MatchSpec("python>=3.12")]
+        assert response.headers["cache-control"] == "no-store"
+    else:
+        assert "input file is not a lockfile" in response.json()["reasons"]

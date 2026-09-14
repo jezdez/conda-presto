@@ -4,10 +4,10 @@ Start the service with `conda presto --serve`. `/openapi.json` and `/` return th
 
 | Method | Path | Operation |
 |---|---|---|
-| GET, POST | `/resolve` | Solve requirements or selected workspace environments |
 | POST | `/parse` | Read requirements or discover and select workspace environments |
-| POST | `/transcode` | Convert supported lockfiles without solving or downloading packages |
-| POST | `/export` | Export selected locked records through conda's exporter registry |
+| GET, POST | `/resolve` | Solve requirements or selected workspace environments, optionally rendering an exporter format |
+| POST | `/export` | Render declarations or selected locked records without solving |
+| POST | `/transcode` | Convert supported lockfiles through the lock-to-lock compatibility operation |
 | POST | `/sbom` | Solve requirements and export separate platform SBOMs |
 | POST | `/sign` | Sign a retained output using the service identity |
 | POST | `/verify` | Check supplied bytes, a bundle and an expected signer |
@@ -52,7 +52,7 @@ curl --fail-with-body --data-binary @environment.yml \
   -o pixi.lock
 ```
 
-HTTP lockfile parsing reads format and platform metadata. `/resolve` rejects requests that would need it to load package records. Use `/transcode` for supported conversion.
+HTTP lockfile parsing reads embedded metadata without downloading packages. `/resolve` rejects workspace locks, including requests that add specs or channel overrides. Use `/export` to extract or render saved records. Ordinary lockfile requests that need package records are also rejected by `/resolve`.
 
 For workspace manifests, omitted environments select all environments and omitted platforms select each environment's declared targets. Omitting both solves the whole declared selection. This differs from `/parse`, where omitting both selectors performs discovery. An environment without declared platforms requires an explicit platform selection. Empty selectors, unknown names and ambiguous platform selections are rejected.
 
@@ -99,14 +99,33 @@ Omitting both selectors returns discovery with `selected: []`. Supplying either 
 
 Inspection uses embedded metadata only. Malformed selected records, unsupported external references, missing names, inconsistent hashes or package identities and credential-bearing input fail explicitly. Lock requests use the configured target and channel count limits. They do not apply the solve channel allowlist because they never fetch channel data.
 
+## Export
+
+`POST /export?format=FORMAT` renders the supplied file without solving. It accepts raw uploads as above, or JSON with `file`, `filename`, `platforms` and `environments`. Query parameters are `format`, repeated `platform`, repeated `environment`, and `filename`. Both file content and `format` are required. Additional specs and channel overrides are rejected.
+
+| Input | Supported export |
+|---|---|
+| Workspace manifest | Compose selected declarations with conda-workspaces and render a normalized dependency format |
+| Environment YAML or requirements file | Parse declared dependencies through conda and render a normalized dependency format |
+| Workspace `conda.lock` | Extract selected source entries, or render supported formats from exact saved records |
+| Ordinary conda-lock or rattler-lock | Use the existing supported no-download lock-to-lock conversions |
+
+Declarations can produce normalized `conda-toml`, `pixi-toml`, `pyproject-toml`, environment YAML, environment JSON or requirements output. They cannot produce locks, explicit package URLs or SBOMs without resolved package records. Use `/resolve?format=FORMAT` when the output requires a solve. Normalized exports preserve supported dependency declarations rather than the original comments, tasks, feature composition or source metadata.
+
+Workspace selectors use declared targets for manifests and saved targets for locks. Omitted selectors include all environments and targets. Ordinary declaration exports reject platform and environment selectors, leaving the parser's environment unchanged. Ordinary lockfiles use the server host platform unless `platform` is supplied. Empty, unknown and ambiguous workspace selectors fail.
+
+Select one environment for outputs other than a workspace lock. Targets must have distinct known concrete subdirs. Exporters without a multiplatform callback require one target, so the response is one valid document. TOML exports also require the same ordered channels across selected targets. A registered exporter name does not imply that every input or target selection can produce that format.
+
+For workspace `conda.lock`, `format=conda-workspaces-lock-v1` and its aliases preserve selected source entries, including URLs, hashes and metadata. Other supported outputs use conda's exporter registry with exact saved records. Normalized outputs do not preserve every lock field or recover the original manifest. Conversion from workspace locks to `conda-lock-v1` and `rattler-lock-v6` is rejected because the current provider discards some saved metadata.
+
+Export runs inside the bounded parser process. It does not fetch repodata, download archives, install packages or execute tasks. Successful eligible workspace lock exports return a retained location. Declaration exports and ordinary lock conversions use `Cache-Control: no-store`. The workspace lock request identity includes uploaded content, environment and target selections, output format and provider versions. See {doc}`../how-to/extract-workspace-lock` for saved-record examples and {doc}`../how-to/resolve-from-cli` for declaration export.
+
 (http-transcode)=
-## Transcode
+## Transcode compatibility
 
-`POST /transcode?format=FORMAT` accepts raw file uploads as above, or JSON with `file`, `filename`, `platforms` and `environments`. Query parameters are `format`, repeated `platform`, repeated `environment`, and `filename`. Workspace locks default to all saved environments and targets. Ordinary lockfiles default to the server host platform.
+`POST /transcode?format=FORMAT` keeps the lock-to-lock compatibility operation. It accepts the same file envelopes and selectors as `/export`, but requires both input and output to be lock formats. It does not solve or download packages. Workspace source extraction is available on this route too, with the same selection restrictions as `/export`.
 
-Workspace `conda.lock` input supports source-preserving selection with `format=conda-workspaces-lock-v1`, including its aliases. Successful workspace outputs can be retained through `/r/`. Conversions to `conda-lock-v1` and `rattler-lock-v6` are rejected because the current conda-lockfiles exporters drop workspace lock metadata.
-
-Ordinary lock conversion supports `conda-lock-v1` and `rattler-lock-v6`, including their registered aliases. Conversion uses metadata already in the file. It neither solves nor downloads package archives. Nonempty `specs` or `channels` are rejected because applying them would require a solve.
+Ordinary lock conversion through either route supports `conda-lock-v1` and `rattler-lock-v6`, including their registered aliases. Workspace locks default to all saved environments and targets. Ordinary lockfiles default to the server host platform.
 
 Conversion also rejects data it cannot preserve safely:
 
@@ -118,23 +137,17 @@ Conversion also rejects data it cannot preserve safely:
 
 These ordinary-lock restrictions can apply even when source and target formats match. Representable informational metadata may be normalized by the exporter. Rejections return HTTP 400, with a `reasons` array for operation-level rejections. Ordinary lock conversion uses `Cache-Control: no-store`. See the {doc}`conversion example <../how-to/transcode-lockfiles>`.
 
-## Export locked records
-
-`POST /export?format=FORMAT` accepts the same raw and JSON inputs and selectors as `/transcode`. `format` is required. With `filename=conda.lock`, it exposes conda's registered exporters, including normalized `conda-toml`, `pixi-toml`, `pyproject-toml`, environment YAML and explicit package lists. Ordinary locks retain only their existing no-download lock-to-lock conversion support.
-
-Select one environment for outputs other than a workspace lock. Targets must have distinct known concrete subdirs. Exporters without a multiplatform callback require one target, so the response is one valid document. Normalized exports cannot recover original manifest comments, tasks, feature composition or all lock metadata. Use workspace lock extraction to preserve saved source entries.
-
-Export and extraction run inside the bounded parser process. They do not solve, fetch repodata, download archives, install packages or execute tasks. Successful eligible workspace outputs return a retained location. The request identity includes uploaded content, environment and target selections, output format and provider versions. See {doc}`../how-to/extract-workspace-lock` for a runnable workflow and the upstream APIs used.
-
 ## Retained outputs
 
-Successful eligible solves and workspace lock exports return a relative `Location: /r/{key}`. The key identifies the saved bytes and media type. It is not the artifact's bare SHA256 digest. `GET /r/{key}` returns that exact output without checking current channel metadata.
+Successful eligible solves and workspace lock exports return a relative `Location: /r/{key}`. The key identifies the saved bytes and media type. It is not the artifact's bare SHA256 digest. `GET /r/{key}` returns that exact output without checking current channel metadata. Ordinary lock conversions continue to use `Cache-Control: no-store`.
 
 A new `/resolve` request checks freshness before reusing a solve. Missing or evicted outputs return HTTP 404. An absent `Location` means the response was not retained. This can happen with credential-bearing requests or outputs, storage limits, or failed publication to shared storage. The cache is not an archive. See {doc}`cache`.
 
 ## Optional SBOM generation
 
 `POST /sbom` accepts the ordinary resolve JSON fields, with at least one explicit platform. It solves new requirements and delegates to conda-sboms' `cyclonedx-json-v1.7` exporter. Workspace manifests and supplied resolved lockfiles are rejected. It does not inspect installed files or scan for vulnerabilities.
+
+SBOM rendering uses the same exporter registry as other output formats. `/sbom` remains a solve-based wrapper that collects separate platform documents. Named locked-environment SBOM collections are tracked in [#128](https://github.com/jezdez/conda-presto/issues/128).
 
 ```json
 {"sboms":[{"platform":"linux-64","content":"...exact CycloneDX JSON text...","sha256":"...","location":"/r/..."}]}
@@ -174,7 +187,7 @@ Success returns `signature_verified`, `artifact_verified` and `signer_verified` 
 
 ## Availability, limits and errors
 
-`GET /capabilities` returns booleans named `sbom`, `sign`, `verify`, `workspace_parse`, `workspace_solve`, `workspace_lock_parse` and `workspace_lock_export`. The lock capabilities report workspace lock inspection, selection and exact-record export support. `workspace_parse` and `workspace_solve` are true and report workspace discovery, selection and solving support. `sign` reports installed support and enabled configuration, not a guarantee that credentials or remote signing services are currently available. Provider versions, including conda-workspaces, appear in `/version` when installed.
+`GET /capabilities` returns booleans named `export`, `sbom`, `sign`, `verify`, `workspace_parse`, `workspace_solve`, `workspace_lock_parse` and `workspace_lock_export`. `export` reports the no-solve export operation, subject to the input and format restrictions above. The lock capabilities report workspace lock inspection, selection and exact-record export support. `workspace_parse` and `workspace_solve` report workspace discovery, selection and solving support. `sign` reports installed support and enabled configuration, not a guarantee that credentials or remote signing services are currently available. Provider versions, including conda-workspaces, appear in `/version` when installed.
 
 `GET /health` returns HTTP 200 with `{"status":"ok"}` when the configured persistent worker is ready. A stopped worker produces HTTP 503 with `{"status":"unavailable"}` while recovery begins. Without persistent-worker mode, the probe reports HTTP 200.
 

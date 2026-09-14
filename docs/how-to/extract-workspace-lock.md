@@ -49,7 +49,7 @@ export CONDA_PRESTO_URL=http://127.0.0.1:8000
 
 curl --fail-with-body --silent --show-error \
   --data-binary @conda.lock --header 'Content-Type: application/yaml' \
-  "$CONDA_PRESTO_URL/transcode?filename=conda.lock&environment=test&platform=linux-64&format=workspace-lock" \
+  "$CONDA_PRESTO_URL/export?filename=conda.lock&environment=test&platform=linux-64&format=workspace-lock" \
   --output test-linux.lock
 
 curl --fail-with-body --silent --show-error \

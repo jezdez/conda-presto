@@ -10,7 +10,7 @@ conda presto [OPTIONS] [SPECS...]
 ```
 
 Resolve package specs or environment files to fully pinned package lists
-without installing anything. Use `--parse` to inspect declarations or saved workspace locks, and `--export` to export locked records without solving.
+without installing anything. Use `--parse` to inspect declarations or saved workspace locks, and `--export` to render declarations or saved records without solving.
 
 ## Positional arguments
 
@@ -64,18 +64,22 @@ without installing anything. Use `--parse` to inspect declarations or saved work
   ```
 
 `-e`, `--environment`
-: Select a workspace environment for parsing, solving or locked export. Can be repeated.
+: Select a workspace environment for parsing, solving or export. Can be repeated.
   Workspace solves default to all environments. This option is rejected
   for ordinary inputs.
 
 `--export`
-: Export exactly one lockfile through the required `--format` without solving or downloading packages. Workspace `conda.lock` input accepts named environments and logical targets through `-e` and `-p`. Omitted selectors include all saved environments and targets. Empty, unknown and ambiguous selections fail.
+: Export exactly one input file through the required `--format` without solving or downloading packages. Workspace manifests and `conda.lock` files accept named environments and logical targets through `-e` and `-p`. Omitted selectors include all declared or saved environments and targets. Empty, unknown and ambiguous selections fail.
 
-  Use `conda-workspaces-lock-v1` to extract source entries with their package URLs, hashes and metadata. Other formats use conda's exporter registry and require one selected environment. Exporters without a multiplatform callback require one target. Targets sharing a concrete subdir cannot be combined outside workspace lock output.
+  Manifest, environment YAML and requirements inputs produce normalized dependency output through conda's exporter registry. Ordinary environment and requirements export rejects platform and environment selectors and renders the parsed environment unchanged. Unsolved declarations cannot produce locks, explicit package lists or SBOMs. Omit `--export` when the requested output needs a solve.
+
+  For workspace locks, use `conda-workspaces-lock-v1` to extract source entries with their package URLs, hashes and metadata. Other formats require one selected environment. Exporters without a multiplatform callback require one target. Targets sharing a concrete subdir cannot be combined outside workspace lock output. Normalized formats do not preserve all source metadata, comments, tasks or feature composition.
 
   Export mode rejects additional specs, multiple input files and channel overrides. Workspace locks require `--parse` or `--export`, they are not solve inputs. Existing conda-lockfiles lock-to-lock conversion remains available with its supported formats and restrictions. See {doc}`../how-to/extract-workspace-lock`.
 
   ```bash
+  conda presto --export -f environment.yml --format requirements
+  conda presto --export -f conda.toml -e test -p linux-64 --format environment-yaml
   conda presto --parse -f conda.lock
   conda presto --export -f conda.lock -e test -p linux-64 --format workspace-lock
   ```
@@ -204,16 +208,22 @@ Merge inline specs with a file and produce an explicit lockfile:
 conda presto -f environment.yml -p linux-64 --format explicit scipy
 ```
 
-Convert `environment.yml` to `pixi.lock`:
+Solve `environment.yml` and write `pixi.lock`:
 
 ```bash
 conda presto -f environment.yml -p linux-64 --format pixi-lock-v6 > pixi.lock
 ```
 
-Convert one lockfile format to another without solving:
+Render declared requirements without solving:
 
 ```bash
-conda presto -f pixi.lock -p linux-64 --format conda-lock-v1 > conda-lock.yml
+conda presto --export -f environment.yml --format conda-toml > conda.toml
+```
+
+Convert a supported lockfile format without solving or downloading packages:
+
+```bash
+conda presto --export -f pixi.lock -p linux-64 --format conda-lock-v1 > conda-lock.yml
 ```
 
 Start the HTTP server on a custom port:

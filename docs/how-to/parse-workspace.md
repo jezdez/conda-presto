@@ -125,17 +125,29 @@ Select one environment to write its composed requirements as a new manifest:
 
 ```bash
 mkdir -p exported
-conda presto --file conda.toml --environment test \
+conda presto --export --file conda.toml --environment test \
   --platform linux-64 --platform osx-arm64 \
   --format conda-toml > exported/conda.toml
 ```
 
-The exporter separates shared and target-specific dependencies. It does not
+Export mode composes declarations through conda-workspaces without running the solver. The exporter separates shared and target-specific dependencies. It does not
 preserve the original feature organization, comments, tasks or every workspace
 setting. This is a normalized dependency manifest, not a fully pinned lock.
 The `pixi-toml` and `pyproject-toml` formats provide equivalent output in their
 supported syntax. Selected targets must have distinct concrete subdirectories
 and identical ordered channels.
+
+The HTTP operation uses the same selection:
+
+```bash
+curl --fail-with-body --silent --show-error \
+  --header 'Content-Type: application/toml' \
+  --data-binary @conda.toml \
+  'http://127.0.0.1:8000/export?filename=conda.toml&environment=test&platform=linux-64&platform=osx-arm64&format=conda-toml' \
+  --output exported/conda.toml
+```
+
+Unsolved declarations cannot produce lockfiles, explicit package URLs or SBOMs. Use the solve operation above when exact package records are required.
 
 ## Understand the result
 

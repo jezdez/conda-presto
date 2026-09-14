@@ -1,6 +1,6 @@
 # Output formats
 
-Without `--format` or `?format=`, conda-presto writes native JSON. Named formats come from conda's environment-exporter registry. Use `/formats` to see the installed names and aliases.
+Without `--format` or `?format=`, solves return native JSON. Export operations require a named format from conda's environment-exporter registry. Use `/formats` to see installed names and aliases. The source data and selected targets determine which formats can represent an export.
 
 ## Native JSON
 
@@ -56,7 +56,7 @@ The workspace lock and TOML formats come from the required conda-workspaces prov
 - TOML exporters produce normalized requested dependencies, channels and concrete platforms for one selected environment. They do not preserve comments, tasks, feature organization, activation settings, channel priority or system requirements. Select targets with distinct concrete subdirectories and identical ordered channels. These exports are not fully pinned lockfiles.
 - Conda-sboms describes resolved conda records and their dependency relationships, not package payloads or a complete released product. Requested roots are preserved when available.
 
-An exporter without a multiplatform callback is rendered separately for each platform and the texts are joined with a newline. Select one platform when `environment-json` or CycloneDX must be a valid JSON document. Use `/sbom` for separately packaged SBOM documents from a multiple-platform request.
+On ordinary solve paths, an exporter without a multiplatform callback is rendered separately for each platform and the texts are joined with a newline. Select one platform when `environment-json` or CycloneDX must be a valid JSON document. No-solve export requires one target for these exporters. `/sbom` remains a solve-based wrapper for separate platform SBOM documents and rejects uploaded lockfiles.
 
 ## Failures
 
@@ -64,7 +64,17 @@ Named exporter output requires every platform solve to succeed. A solve or rende
 
 Workspace failures identify the affected environment and target. Combined locks require every selected pair to succeed. Unsupported manifest-export selections are rejected before rendering.
 
+No-solve export rejects unsupported inputs, output formats or selections with HTTP 400 or CLI status 1. It does not fall back to a solve.
+
 See {doc}`http-api`, {doc}`cli` and {doc}`../how-to/transcode-lockfiles` for invocation and conversion details.
+
+## Exporting declarations
+
+`POST /export` and CLI `--export` render workspace manifests, environment YAML and requirements files without solving. Conda's specifier registry reads ordinary inputs, which reject platform and environment selectors during export. Conda-workspaces' `WorkspaceContext.envs_from_manifest()` builds selected workspace environments for registered exporters.
+
+Use normalized TOML, environment YAML, environment JSON or requirements output for unsolved declarations. Locks and explicit output require exact package records, and conda-sboms also rejects input without those records. Use `/resolve?format=FORMAT` or a CLI solve for these outputs.
+
+Workspace declaration exports require one selected environment. TOML can represent multiple targets with distinct concrete subdirs and identical ordered channels. Single-target exporters require one target. Normalization does not preserve the original source comments, tasks, feature composition or every workspace setting. See {doc}`../how-to/parse-workspace` for a runnable example.
 
 ## Exporting saved workspace locks
 
