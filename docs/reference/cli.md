@@ -10,7 +10,7 @@ conda presto [OPTIONS] [SPECS...]
 ```
 
 Resolve package specs or environment files to fully pinned package lists
-without installing anything.
+without installing anything. Use `--parse` to inspect declarations without solving.
 
 ## Positional arguments
 
@@ -33,11 +33,36 @@ without installing anything.
 `-p`, `--platform`
 : Target platform subdir (e.g. `linux-64`, `osx-arm64`, `win-64`).
   Can be repeated to solve for multiple platforms in parallel. When
-  omitted, solves for the current host platform only.
+  omitted, solves for the current host platform only. With `--parse`, this
+  selects workspace target names or their unambiguous conda subdirectories.
 
   ```bash
   conda presto -p linux-64 -p osx-arm64 python=3.12
   ```
+
+`--parse`
+: Parse exactly one `--file` and return JSON without solving. Ordinary
+  environment files return `specs` and `channels`. Workspace manifests return
+  their format, environment declarations and selected target requirements,
+  using the same response as {doc}`POST /parse <http-api>`.
+
+  Without environment or platform selectors, workspace parsing returns
+  discovery metadata and an empty `selected` list. With either selector,
+  omitted environments mean all environments and omitted platforms mean each
+  selected environment's declared platforms. An environment without declared
+  platforms requires an explicit `--platform`.
+
+  Parse mode rejects multiple files, positional specs, explicit channels and
+  `--format`. It also rejects empty, unknown or ambiguous selectors.
+
+  ```bash
+  conda presto --parse -f conda.toml
+  conda presto --parse -f conda.toml -e test -p linux-64
+  ```
+
+`-e`, `--environment`
+: Select a workspace environment in `--parse` mode. Can be repeated.
+  This option does not select an environment for solving.
 
 `-f`, `--file`
 : Path to an environment file. Can be repeated. Each file is selected and
@@ -45,7 +70,9 @@ without installing anything.
   installation supports environment YAML and requirements files, while the
   required conda-lockfiles package adds conda-lock and rattler-lock formats.
   The adapter does not accept conda's explicit-file specifier as input. Specs
-  from all files are merged with positional specs.
+  from all files are merged with positional specs. Workspace manifests
+  (`conda.toml`, `pixi.toml` and supported `pyproject.toml` workspace tables)
+  require `--parse`. Normal CLI solves reject these manifests.
 
   ```bash
   conda presto -f environment.yml -f extra-deps.yml -p linux-64
@@ -117,6 +144,15 @@ without installing anything.
   `CONDA_PRESTO_PORT`, or `8000`.
 
 ## Examples
+
+Discover workspace environments and inspect one target's requirements:
+
+```bash
+conda presto --parse -f conda.toml
+conda presto --parse -f conda.toml -e test -p linux-64
+```
+
+See {doc}`../how-to/parse-workspace` for a complete example.
 
 Resolve a single package for one platform:
 

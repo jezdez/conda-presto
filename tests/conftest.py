@@ -171,6 +171,31 @@ def environment_yml_path(tmp_path, environment_yml_bytes):
 
 
 @pytest.fixture()
+def workspace_manifest_text():
+    return """\
+[workspace]
+name = "example"
+channels = ["conda-forge"]
+platforms = ["linux-64", "osx-arm64"]
+[dependencies]
+zlib = "*"
+[target.linux-64.dependencies]
+readline = "*"
+[feature.test.dependencies]
+pytest = "*"
+[environments]
+test = ["test"]
+"""
+
+
+@pytest.fixture()
+def workspace_manifest_path(tmp_path, workspace_manifest_text):
+    path = tmp_path / "conda.toml"
+    path.write_text(workspace_manifest_text, encoding="utf-8")
+    return path
+
+
+@pytest.fixture()
 def pixi_lock_v6_text():
     return """\
 version: 6

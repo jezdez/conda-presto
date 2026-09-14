@@ -6,7 +6,9 @@ import argparse
 import json
 import subprocess
 import sys
+import time
 
+import msgspec
 import pytest
 import yaml
 from conda.base.context import context
@@ -18,6 +20,8 @@ from conda_presto.cli import (
     load_parsed_files,
     main,
 )
+from conda_presto.config import PARSE_TIMEOUT_S
+from conda_presto.inputs import ParsedInputFile
 
 
 @pytest.fixture()
@@ -30,6 +34,157 @@ def run_cli(capsys, monkeypatch):
         return capsys.readouterr().out
 
     return _run
+
+
+def test_parse_simple_file_preserves_response_shape(run_cli, tmp_path):
+    path = tmp_path / "environment.yml"
+    path.write_text("channels:\n  - conda-forge\ndependencies:\n  - zlib\n")
+    result = json.loads(run_cli("--parse", "-f", str(path)))
+    assert result == {"specs": ["zlib"], "channels": ["conda-forge"]}
+
+
+@pytest.mark.parametrize(
+    "selectors,environments,platforms,selected_count",
+    [
+        pytest.param((), None, None, 0, id="discover"),
+        pytest.param(
+            ("-e", "test", "-e", "default", "-p", "osx-arm64", "-p", "linux-64"),
+            ["test", "default"],
+            ["osx-arm64", "linux-64"],
+            4,
+            id="select",
+        ),
+    ],
+)
+def test_parse_workspace_matches_bounded_parser(
+    run_cli, workspace_manifest_path, selectors, environments, platforms, selected_count
+):
+    path = workspace_manifest_path
+    result = json.loads(run_cli("--parse", "-f", str(path), *selectors))
+    parsed = ParsedInputFile.from_content_until(
+        path.read_text(),
+        path.name,
+        platforms,
+        time.monotonic() + PARSE_TIMEOUT_S,
+        target_environments=environments,
+    )
+    assert result == msgspec.json.decode(msgspec.json.encode(parsed.parse_result))
+    assert len(result["selected"]) == selected_count
+    assert str(path.parent) not in json.dumps(result)
+
+
+@pytest.mark.parametrize(
+    "arguments,message,exit_code",
+    [
+        pytest.param(["--parse"], "exactly one --file", 1, id="missing-file"),
+        pytest.param(
+            ["--parse", "-f", "one", "-f", "two"],
+            "exactly one --file",
+            1,
+            id="multiple-files",
+        ),
+        pytest.param(
+            ["--parse", "-f", "one", "zlib"],
+            "inline package specs",
+            1,
+            id="inline-specs",
+        ),
+        pytest.param(
+            ["--parse", "-f", "one", "-c", "defaults"],
+            "channel overrides",
+            1,
+            id="channel",
+        ),
+        pytest.param(
+            ["--parse", "-f", "one", "--override-channels"],
+            "channel overrides",
+            1,
+            id="override-channels",
+        ),
+        pytest.param(
+            ["--parse", "-f", "one", "--use-local"],
+            "channel overrides",
+            1,
+            id="local-channel",
+        ),
+        pytest.param(
+            ["--parse", "-f", "one", "--format", "explicit"],
+            "does not accept --format",
+            1,
+            id="format",
+        ),
+        pytest.param(
+            ["--parse", "--serve"], "not allowed with argument", 2, id="serve"
+        ),
+        pytest.param(
+            ["--environment", "test", "zlib"],
+            "--environment requires --parse",
+            1,
+            id="environment-without-parse",
+        ),
+    ],
+)
+def test_parse_rejects_incompatible_arguments(
+    run_cli, capsys, arguments, message, exit_code
+):
+    with pytest.raises(SystemExit) as exc:
+        run_cli(*arguments)
+    assert exc.value.code == exit_code
+    assert message in capsys.readouterr().err
+
+
+def test_parse_timeout_exits_cleanly(
+    run_cli, workspace_manifest_path, monkeypatch, capsys
+):
+    monkeypatch.setattr("conda_presto.cli.PARSE_TIMEOUT_S", 0)
+    with pytest.raises(SystemExit, match="1"):
+        run_cli("--parse", "-f", str(workspace_manifest_path))
+    assert "Parse exceeded 0s timeout" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize(
+    "filename,content,message",
+    [
+        pytest.param("conda.toml", "[workspace\n", "Input error:", id="invalid-toml"),
+        pytest.param(
+            "environment.yml", b"\xff", "not valid UTF-8", id="invalid-encoding"
+        ),
+        pytest.param("missing.toml", None, "Cannot read input file", id="missing-file"),
+    ],
+)
+def test_parse_reports_file_errors(
+    run_cli, tmp_path, capsys, filename, content, message
+):
+    path = tmp_path / filename
+    if content is not None:
+        path.write_bytes(content if isinstance(content, bytes) else content.encode())
+    with pytest.raises(SystemExit, match="1"):
+        run_cli("--parse", "-f", str(path))
+    error = capsys.readouterr().err
+    assert message in error
+    assert str(tmp_path) not in error
+    assert "Traceback" not in error
+
+
+@pytest.mark.parametrize(
+    "extra_args",
+    [
+        pytest.param([], id="native"),
+        pytest.param(["zlib"], id="extra-specs"),
+        pytest.param(["--format", "environment-yaml"], id="exporter"),
+    ],
+)
+def test_workspace_solve_is_rejected_before_solver(
+    run_cli, workspace_manifest_path, extra_args, monkeypatch, capsys
+):
+    def unexpected_solve(*args, **kwargs):
+        pytest.fail("Workspace input reached the solver")
+
+    monkeypatch.setattr("conda_presto.cli.solve", unexpected_solve)
+    monkeypatch.setattr("conda_presto.cli.solve_environments", unexpected_solve)
+    with pytest.raises(SystemExit, match="1"):
+        run_cli("-f", str(workspace_manifest_path), *extra_args)
+    assert "Workspace solving is not supported yet" in capsys.readouterr().err
 
 
 @pytest.mark.parametrize(
