@@ -5,7 +5,7 @@ Start the service with `conda presto --serve`. `/openapi.json` and `/` return th
 | Method | Path | Operation |
 |---|---|---|
 | GET, POST | `/resolve` | Solve requirements for selected platforms |
-| POST | `/parse` | Read requirements and channels from an environment file |
+| POST | `/parse` | Read requirements or discover and select workspace environments |
 | POST | `/transcode` | Convert supported lockfiles without solving or downloading packages |
 | POST | `/sbom` | Solve requirements and export separate platform SBOMs |
 | POST | `/sign` | Sign a retained output using the service identity |
@@ -50,9 +50,36 @@ curl --fail-with-body --data-binary @environment.yml \
 
 HTTP lockfile parsing reads format and platform metadata. `/resolve` rejects requests that would need it to load package records. Use `/transcode` for supported conversion.
 
+Workspace manifests must use `/parse`. `/resolve` and `/sbom` reject them until workspace solving is supported.
+
 ## Parse
 
-`POST /parse` accepts `{"file":"...", "filename":"environment.yml"}` and returns `{"specs":[...],"channels":[...]}` without solving. `file` is required. Lockfile metadata parsing does not materialize package records, so it does not derive specs or channels from them.
+`POST /parse` accepts a JSON body with the following fields:
+
+| Field | Type | Default |
+|---|---|---|
+| `file` | File content as a string | Required |
+| `filename` | Parser hint such as `environment.yml` or `conda.toml` | `environment.yml` |
+| `environments` | Array of workspace environment names | Absent |
+| `platforms` | Array of workspace platform names or conda subdirectories | Absent |
+
+Ordinary environment files return `{"specs":[...],"channels":[...]}` without solving. Lockfile metadata parsing does not materialize package records, so it does not derive specs or channels from them. Workspace selectors are rejected for ordinary environment and lock files.
+
+Workspace manifests use conda-workspaces, included in standard installations. Supported filenames are `conda.toml`, `pixi.toml` and `pyproject.toml`, subject to the provider's supported workspace syntax. A workspace response has three fields:
+
+| Field | Content |
+|---|---|
+| `format` | Canonical manifest exporter name: `conda-toml`, `pixi-toml` or `pyproject-toml` |
+| `environments` | Environment declarations with `name`, `features`, `no_default_feature` and a `platforms` mapping from logical names to conda subdirectories |
+| `selected` | Composed declarations for each selected environment and platform |
+
+Each `selected` entry contains `environment`, `platform`, `subdir`, `specs`, `channels`, `channel_priority`, `system_requirements` and `pypi_dependencies`. `platform` preserves the logical workspace target name. `subdir` identifies its underlying conda platform. These are declared requirements, not solved package records.
+
+Omit both selectors to discover environments and their declared platforms. Discovery returns `selected: []`. Supplying either selector requests composed declarations. If `environments` is omitted, all environments are selected. If `platforms` is omitted, each selected environment uses its declared platforms. An environment without declared platforms requires an explicit platform selection.
+
+Empty selectors, unknown names and ambiguous platform selections are rejected. Selected local, Git or URL PyPI sources are unsupported. Version requirements that need unavailable optional conda-pypi support produce an error instead of being omitted.
+
+The number of selected environment/platform combinations is limited by `CONDA_PRESTO_MAX_PLATFORMS`. Existing specs and channels limits apply to each target. See {doc}`../how-to/parse-workspace` for discovery and selection examples.
 
 (http-transcode)=
 ## Transcode
@@ -119,7 +146,7 @@ Success returns `signature_verified`, `artifact_verified` and `signer_verified` 
 
 ## Availability, limits and errors
 
-`GET /capabilities` returns booleans named `sbom`, `sign` and `verify`. `sign` reports installed support and enabled configuration, not a guarantee that credentials or remote signing services are currently available. Provider versions appear in `/version` when installed.
+`GET /capabilities` returns booleans named `sbom`, `sign`, `verify`, `workspace_parse` and `workspace_solve`. `workspace_parse` reports workspace discovery and selection support. `workspace_solve` remains false. `sign` reports installed support and enabled configuration, not a guarantee that credentials or remote signing services are currently available. Provider versions, including conda-workspaces, appear in `/version` when installed.
 
 `GET /health` returns HTTP 200 with `{"status":"ok"}` when the configured persistent worker is ready. A stopped worker produces HTTP 503 with `{"status":"unavailable"}` while recovery begins. Without persistent-worker mode, the probe reports HTTP 200.
 

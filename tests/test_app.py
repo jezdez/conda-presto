@@ -2163,9 +2163,13 @@ async def test_openapi_schema(client):
     assert parse_operation["requestBody"]["content"]["application/json"]["schema"][
         "$ref"
     ].endswith("/ParseRequest")
-    assert parse_operation["responses"]["200"]["content"]["application/json"]["schema"][
-        "$ref"
-    ].endswith("/ParseResult")
+    parse_schema = parse_operation["responses"]["200"]["content"]["application/json"][
+        "schema"
+    ]
+    assert {entry["$ref"].rsplit("/", 1)[-1] for entry in parse_schema["oneOf"]} == {
+        "ParseResult",
+        "WorkspaceParseResult",
+    }
     assert {"400", "504"} <= parse_operation["responses"].keys()
 
 
@@ -2381,6 +2385,157 @@ async def test_parse_endpoint(client, test_app):
     assert "python=3.12" in data["specs"]
     assert "numpy" in data["specs"]
     assert "conda-forge" in data["channels"]
+    assert set(data) == {"specs", "channels"}
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    "selectors,expected_pairs",
+    [
+        pytest.param({}, [], id="discovery"),
+        pytest.param(
+            {"environments": ["test"]},
+            [("test", "linux-64"), ("test", "osx-arm64")],
+            id="environment",
+        ),
+        pytest.param(
+            {"platforms": ["osx-arm64"]},
+            [("default", "osx-arm64"), ("test", "osx-arm64")],
+            id="platform",
+        ),
+        pytest.param(
+            {
+                "environments": ["test", "default"],
+                "platforms": ["osx-arm64", "linux-64"],
+            },
+            [
+                ("test", "osx-arm64"),
+                ("test", "linux-64"),
+                ("default", "osx-arm64"),
+                ("default", "linux-64"),
+            ],
+            id="ordered-selection",
+        ),
+    ],
+)
+async def test_parse_workspace_discovery_and_selection(
+    client, workspace_manifest_text, selectors, expected_pairs
+):
+    response = await client.post(
+        "/parse",
+        json={"file": workspace_manifest_text, "filename": "conda.toml", **selectors},
+    )
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["format"] == "conda-toml"
+    assert {env["name"] for env in body["environments"]} == {"default", "test"}
+    assert [
+        (row["environment"], row["platform"]) for row in body["selected"]
+    ] == expected_pairs
+    for row in body["selected"]:
+        assert "zlib" in row["specs"]
+        assert ("pytest" in row["specs"]) == (row["environment"] == "test")
+        assert ("readline" in row["specs"]) == (row["platform"] == "linux-64")
+        assert row["subdir"] == row["platform"]
+    assert "manifest_path" not in response.text
+    assert "[temporary-directory]" not in response.text
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    "selectors",
+    [
+        pytest.param({"environments": []}, id="empty-environments"),
+        pytest.param({"platforms": []}, id="empty-platforms"),
+        pytest.param({"environments": ["missing"]}, id="unknown-environment"),
+        pytest.param({"platforms": ["win-64"]}, id="undeclared-platform"),
+        pytest.param({"environments": "test"}, id="invalid-selector-type"),
+    ],
+)
+async def test_parse_workspace_rejects_invalid_selection(
+    client, workspace_manifest_text, selectors
+):
+    response = await client.post(
+        "/parse",
+        json={"file": workspace_manifest_text, "filename": "conda.toml", **selectors},
+    )
+    assert response.status_code == 400, response.text
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    "content",
+    ["tool = 42", "[tool]\nconda = 42", "[tool]\npixi = 42"],
+    ids=["invalid-tool", "invalid-conda", "invalid-pixi"],
+)
+async def test_parse_workspace_rejects_malformed_pyproject_tables(client, content):
+    response = await client.post(
+        "/parse", json={"file": content, "filename": "pyproject.toml"}
+    )
+    assert response.status_code == 400, response.text
+    assert "must be a table" in response.json()["error"]
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    "selector", [{"environments": ["default"]}, {"platforms": ["linux-64"]}]
+)
+async def test_parse_rejects_workspace_selectors_for_ordinary_files(client, selector):
+    response = await client.post(
+        "/parse",
+        json={
+            "file": "dependencies: [zlib]",
+            "filename": "environment.yml",
+            **selector,
+        },
+    )
+    assert response.status_code == 400
+    assert "selection requires a workspace manifest" in response.text
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    "endpoint", ["/resolve", "/resolve?format=environment-yaml", "/sbom"]
+)
+@pytest.mark.parametrize("extra_specs", [[], ["zlib"]])
+async def test_http_workspace_solve_is_rejected_before_cache(
+    client, workspace_manifest_text, monkeypatch, endpoint, extra_specs
+):
+    async def unexpected_solve(*args, **kwargs):
+        pytest.fail("Workspace input reached solve/cache")
+
+    monkeypatch.setattr(app_module, "run_cached_solve", unexpected_solve)
+    response = await client.post(
+        endpoint,
+        json={
+            "file": workspace_manifest_text,
+            "filename": "conda.toml",
+            "platforms": ["linux-64"],
+            "specs": extra_specs,
+        },
+    )
+    assert response.status_code == 400
+    assert "Workspace solving is not supported yet" in response.text
+
+
+def test_spawned_workspace_parse_retains_full_config(workspace_manifest_text):
+    parsed = ParsedInputFile.from_content_until(
+        workspace_manifest_text,
+        "conda.toml",
+        ["linux-64"],
+        time.monotonic() + 10,
+        target_environments=["test"],
+    )
+    assert parsed.workspace.config._manifest_text == workspace_manifest_text
+    assert set(parsed.workspace.config.environments) == {"default", "test"}
+    assert (
+        "readline"
+        in parsed.workspace.config.features["default"].target_conda_dependencies[
+            "linux-64"
+        ]
+    )
+    assert parsed.specs == []
+    assert parsed.channels == []
 
 
 @pytest.mark.anyio
@@ -3145,6 +3300,8 @@ async def test_capabilities_separates_provider_and_signing_configuration(
     monkeypatch.setattr(app_module, "SIGSTORE_OFFLINE", offline)
     response = await client.get("/capabilities")
     assert response.json() == {
+        "workspace_parse": True,
+        "workspace_solve": False,
         "sbom": True,
         "verify": installed,
         "sign": installed and enabled and not offline,

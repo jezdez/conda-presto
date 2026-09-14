@@ -11,8 +11,8 @@ Pass ``--format <name>`` to route through conda's exporter plugins
 (``explicit``, ``environment-yaml``, ``conda-lock-v1``,
 ``rattler-lock-v6``/``pixi-lock-v6``, …) instead.
 
-Resolve is the default action.  Use ``--serve`` to start the HTTP API
-server instead.  The ``--host`` and ``--port`` defaults can be set via
+Resolve is the default action. Use ``--parse`` to inspect an input file
+or ``--serve`` to start the HTTP API. The ``--host`` and ``--port`` defaults use
 ``CONDA_PRESTO_HOST`` and ``CONDA_PRESTO_PORT`` environment variables
 (see :mod:`conda_presto.config`).
 
@@ -24,6 +24,8 @@ from __future__ import annotations
 
 import argparse
 import sys
+import time
+from pathlib import Path
 
 import msgspec
 from conda.base.context import context
@@ -32,16 +34,22 @@ from conda.cli.helpers import (
     add_parser_networking,
     add_parser_solver,
 )
+from conda.exceptions import CondaError
 
-from .config import DEFAULT_CHANNELS, DEFAULT_HOST, DEFAULT_PORT
-from .exceptions import SAFE_ERROR_TYPES, UnknownFormatError, safe_error_message
+from .config import DEFAULT_CHANNELS, DEFAULT_HOST, DEFAULT_PORT, PARSE_TIMEOUT_S
+from .exceptions import (
+    SAFE_ERROR_TYPES,
+    UnknownFormatError,
+    redact_safe_error,
+    safe_error_message,
+)
 from .exporter import OutputFormat
 from .inputs import ParsedInputFile
-from .resolve import NATIVE_SUBDIR, solve, solve_environments
+from .resolve import solve, solve_environments
 
 
 def configure_parser(parser: argparse.ArgumentParser):
-    """Add resolve arguments and the ``--serve`` flag to *parser*.
+    """Add solve, parse, and server arguments to *parser*.
 
     Used by both the conda plugin hook and the standalone ``main()``.
     """
@@ -55,9 +63,20 @@ def configure_parser(parser: argparse.ArgumentParser):
         action="append",
         default=[],
         dest="platforms",
-        metavar="SUBDIR",
-        help="Target platform (e.g. linux-64, osx-arm64). "
-        "May be specified multiple times for parallel solves.",
+        metavar="PLATFORM",
+        help="Target platform (e.g. linux-64, osx-arm64), or a declared "
+        "workspace target with --parse. May be specified multiple times.",
+    )
+
+    parser.add_argument(
+        "-e",
+        "--environment",
+        action="append",
+        default=[],
+        dest="environments",
+        metavar="NAME",
+        help="Select a workspace environment with --parse. "
+        "May be specified multiple times.",
     )
 
     parser.add_argument(
@@ -82,13 +101,20 @@ def configure_parser(parser: argparse.ArgumentParser):
         "rattler-lock-v6).  Omit for the default pretty-printed JSON "
         "output, which matches the HTTP API's response shape.",
     )
-    server_group = parser.add_argument_group("HTTP Server")
-    server_group.add_argument(
+    mode_group = parser.add_mutually_exclusive_group()
+    mode_group.add_argument(
+        "--parse",
+        action="store_true",
+        default=False,
+        help="Inspect one input file without solving and write JSON.",
+    )
+    mode_group.add_argument(
         "--serve",
         action="store_true",
         default=False,
         help="Start the HTTP API server instead of resolving.",
     )
+    server_group = parser.add_argument_group("HTTP Server")
     server_group.add_argument(
         "--host", default=DEFAULT_HOST, help="Server bind address."
     )
@@ -100,11 +126,65 @@ def configure_parser(parser: argparse.ArgumentParser):
 
 
 def execute(args: argparse.Namespace):
-    """Dispatch based on ``--serve`` flag (conda plugin action)."""
-    if args.serve:
+    """Dispatch the requested CLI operation."""
+    if getattr(args, "environments", None) and not getattr(args, "parse", False):
+        print("--environment requires --parse.", file=sys.stderr)
+        raise SystemExit(1)
+    if getattr(args, "parse", False):
+        cmd_parse(args)
+    elif args.serve:
         cmd_serve(args)
     else:
         cmd_solve(args)
+
+
+def cmd_parse(args: argparse.Namespace):
+    """Inspect one input file through the bounded content parser."""
+    error = None
+    if len(args.files) != 1:
+        error = "--parse requires exactly one --file."
+    elif args.specs:
+        error = "--parse does not accept inline package specs."
+    elif (
+        getattr(args, "channel", None)
+        or getattr(args, "override_channels", False)
+        or getattr(args, "use_local", False) is True
+    ):
+        error = "--parse does not accept channel overrides."
+    elif args.output_format is not None:
+        error = "--parse does not accept --format."
+    if error:
+        print(error, file=sys.stderr)
+        raise SystemExit(1)
+
+    path = Path(args.files[0])
+    try:
+        content = path.read_text(encoding="utf-8")
+        parsed = ParsedInputFile.from_content_until(
+            content,
+            path.name,
+            args.platforms or None,
+            time.monotonic() + PARSE_TIMEOUT_S,
+            target_environments=getattr(args, "environments", None) or None,
+        )
+        if parsed.workspace is None and args.platforms:
+            raise ValueError("Platform selection requires a workspace manifest")
+    except TimeoutError:
+        error = f"Parse exceeded {PARSE_TIMEOUT_S}s timeout"
+    except UnicodeError:
+        error = "Input file is not valid UTF-8"
+    except OSError:
+        error = "Cannot read input file"
+    except (CondaError, ValueError) as exc:
+        error = redact_safe_error(str(exc))
+    except RuntimeError:
+        error = "Input parser failed"
+    else:
+        body = msgspec.json.format(msgspec.json.encode(parsed.parse_result), indent=2)
+        sys.stdout.buffer.write(body + b"\n")
+        return
+    print(f"Input error: {error}", file=sys.stderr)
+    raise SystemExit(1)
 
 
 def load_parsed_files(
@@ -122,7 +202,6 @@ def load_parsed_files(
     deps: list[str] = []
     channels: list[str] = []
     parsed_files: list[ParsedInputFile] = []
-    target_platforms = target_platforms or [NATIVE_SUBDIR]
     for fpath in files:
         try:
             parsed = ParsedInputFile.from_path(fpath, target_platforms)
@@ -158,9 +237,14 @@ def cmd_solve(args: argparse.Namespace):
     context.__init__(argparse_args=args)
 
     platforms = args.platforms or None
-    file_deps, file_channels, parsed_files = load_parsed_files(
-        args.files, platforms or [NATIVE_SUBDIR]
-    )
+    file_deps, file_channels, parsed_files = load_parsed_files(args.files, platforms)
+    if any(parsed.workspace is not None for parsed in parsed_files):
+        print(
+            "Workspace solving is not supported yet. "
+            "Use --parse to inspect workspace inputs.",
+            file=sys.stderr,
+        )
+        raise SystemExit(1)
 
     specs = [s.strip("\"'") for s in args.specs]
     deps = file_deps + specs
