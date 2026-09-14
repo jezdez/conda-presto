@@ -166,7 +166,8 @@ Omit the solve format to receive native JSON with an `environment`, logical
 Workspace solves use the manifest's requirements and channels, so additional
 inline specs, channel overrides and multiple input files are rejected.
 
-Workspace SBOM requests are not supported yet. `/sbom` still rejects workspace
-manifests. `/capabilities` reports `workspace_parse: true` and
+`/sbom` rejects direct workspace manifests. After creating `conda.lock`, use
+the {doc}`saved-lock SBOM workflow <extract-workspace-lock>` to render selected
+environments without solving again. `/capabilities` reports `workspace_parse: true` and
 `workspace_solve: true`. See {doc}`../reference/http-api` for response fields,
 {doc}`../reference/cli` for options and {doc}`use-github-action` for CI use.
