@@ -9,12 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Add an experimental Python Cloudflare deployment with two native solver containers and independently retrievable outputs in R2.
 - Add optional SBOM generation through conda-sboms and signing and verification through conda-sigstore.
 - Report installed optional adapters and enabled signing configuration through `/capabilities`.
 
 ### Changed
 
-- Focus the roadmap on HTTP integration and operation across replicas, with restored topic docs distinguishing upstream opportunities and historical proposals.
+- Focus the roadmap on deployment across an edge network, with restored topic docs distinguishing upstream opportunities and historical proposals.
 - Preserve requested package roots alongside resolved records for exporter plugins.
 - Focus the supported workflows on HTTP solving, parsing, export, transcoding and retained-result retrieval.
 - Require an explicit HTTP endpoint in the GitHub Action.

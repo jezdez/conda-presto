@@ -8,4 +8,6 @@ A retained response advertises `Location: /r/<key>`. The key identifies the exac
 
 Retrieval returns the retained bytes without solving or checking current repodata. Memory capacity, persistent-store expiry, and eviction limit availability. An expired or evicted result returns HTTP 404. Archive the output separately when it must remain available. Requests or outputs containing detected credentials bypass retention.
 
+The {doc}`Cloudflare adapter <../../how-to/deploy-on-cloudflare>` keeps this output identity and publishes eligible outputs to R2 before forwarding their URLs. Retrieval reads R2 independently of the producing container, with a 24-hour read expiry. Failed publication removes the URL while preserving the solve response. Hosted operation still needs a deployment trial. Portable metadata identity for shared solve lookup remains separate work in the {doc}`edge deployment plan <edge-deployment>`.
+
 See {doc}`../../reference/cache` for identity and retention rules and {doc}`../../how-to/configure-result-cache` for memory, file, and Redis configuration.
