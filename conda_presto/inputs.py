@@ -16,13 +16,16 @@ from conda.base.context import context
 from conda.exceptions import CondaError
 from conda.models.environment import Environment
 from conda.plugins.types import EnvironmentFormat
+from conda_workspaces.lockfile import LOCKFILE_NAME
 from ruamel.yaml import YAML
 from ruamel.yaml.error import YAMLError
 from ruamel.yaml.events import AliasEvent, NodeEvent
 
 from .exceptions import CredentialRedactionFilter, redact_safe_error
+from .exporter import OutputFormat
 from .lockfile_transcode import CondaLockfilesTranscoder
 from .workspace import WorkspaceInput, WorkspaceParseResult
+from .workspace_lock import WorkspaceLockInput, WorkspaceLockParseResult
 
 ALLOWED_EXTENSIONS = {".yml", ".yaml", ".txt", ".lock", ".toml", ".json"}
 HTTP_INPUT_MAX_NODES = 10_000
@@ -45,11 +48,16 @@ class ParsedInputFile:
     source_format: str
     available_platforms: tuple[str, ...] = ()
     environments: tuple[Environment, ...] = ()
-    transcoded_content: str | None = None
+    exported_content: str | None = None
     workspace: WorkspaceInput | None = None
+    workspace_lock: WorkspaceLockInput | None = None
 
     @property
-    def parse_result(self) -> ParseResult | WorkspaceParseResult:
+    def parse_result(
+        self,
+    ) -> ParseResult | WorkspaceParseResult | WorkspaceLockParseResult:
+        if self.workspace_lock is not None:
+            return self.workspace_lock.result
         return (
             self.workspace.result
             if self.workspace is not None
@@ -68,8 +76,9 @@ class ParsedInputFile:
         *,
         specifier_name: str | None = None,
         materialize_lockfiles: bool = True,
-        transcode_format: str | None = None,
+        export_format: str | None = None,
         target_environments: list[str] | tuple[str, ...] | None = None,
+        lockfile_only: bool = False,
     ) -> ParsedInputFile:
         """Preserve workspace configuration or parse through conda's registry.
 
@@ -78,10 +87,9 @@ class ParsedInputFile:
         environment and target requirements without solving. For lockfiles, when every
         target platform is present and ``materialize_lockfiles`` is true,
         ``environments`` contains the corresponding parsed ``Environment``
-        objects. When ``transcode_format`` is set, a supporting lockfile adapter
-        renders the requested platforms without returning temporary package
-        records. Disabled materialization and missing targets leave both results
-        empty.
+        objects. ``export_format`` renders declarations or saved records without
+        solving. ``lockfile_only`` leaves declaration output empty for the
+        compatibility transcode operation.
         """
         if Path(path).name in WorkspaceInput.filenames():
             workspace = WorkspaceInput.from_path(
@@ -89,12 +97,45 @@ class ParsedInputFile:
                 environments=target_environments,
                 platforms=target_platforms,
             )
+            if export_format is not None and not lockfile_only:
+                if not workspace.result.selected:
+                    workspace = workspace.select()
+                exported_content = workspace.export(export_format)[0]
+            else:
+                exported_content = None
             return cls(
                 specs=[],
                 channels=[],
                 environment_format=EnvironmentFormat.environment,
                 source_format=workspace.result.format,
+                exported_content=exported_content,
                 workspace=workspace,
+            )
+        if Path(path).name == LOCKFILE_NAME:
+            workspace_lock = WorkspaceLockInput.from_path(
+                Path(path),
+                environments=target_environments,
+                platforms=target_platforms,
+                select_all=export_format is not None,
+            )
+            return cls(
+                specs=[],
+                channels=workspace_lock.channels,
+                environment_format=EnvironmentFormat.lockfile,
+                source_format=workspace_lock.result.format,
+                available_platforms=tuple(
+                    dict.fromkeys(
+                        target
+                        for environment in workspace_lock.result.environments
+                        for target in environment.platforms
+                    )
+                ),
+                exported_content=(
+                    workspace_lock.render(export_format)
+                    if export_format is not None
+                    else None
+                ),
+                workspace_lock=workspace_lock,
             )
         if target_environments is not None:
             raise ValueError("Environment selection requires a workspace manifest")
@@ -111,19 +152,20 @@ class ParsedInputFile:
         if environment_format == EnvironmentFormat.lockfile:
             available = tuple(getattr(spec, "available_platforms", ()) or ())
             targets = tuple(
-                target_platforms or ((context.subdir,) if materialize_lockfiles else ())
+                target_platforms
+                or ((context.subdir,) if materialize_lockfiles or export_format else ())
             )
             envs: tuple[Environment, ...] = ()
-            transcoded_content = None
+            exported_content = None
             if targets and available and set(targets).issubset(available):
-                if transcode_format is not None:
+                if export_format is not None:
                     # Compatibility for conda-lockfiles 0.2.1. Replace this
                     # adapter with spec.transcode() after
                     # conda/conda-lockfiles#161 ships and the minimum dependency
                     # version is raised.
-                    transcoded_content = CondaLockfilesTranscoder(spec).render(
+                    exported_content = CondaLockfilesTranscoder(spec).render(
                         targets,
-                        format_name=transcode_format,
+                        format_name=export_format,
                     )
                 elif materialize_lockfiles:
                     envs = tuple(spec.env_for(platform) for platform in targets)
@@ -141,19 +183,29 @@ class ParsedInputFile:
                 source_format=specifier.name,
                 available_platforms=available,
                 environments=envs,
-                transcoded_content=transcoded_content,
+                exported_content=exported_content,
             )
 
         env = spec.env
         channels: list[str] = []
         if env.config and env.config.channels:
             channels.extend(env.config.channels)
+        exported_content = None
+        if export_format is not None and not lockfile_only:
+            if target_platforms is not None:
+                raise ValueError(
+                    "Platform selection requires a workspace manifest or lockfile"
+                )
+            output = OutputFormat.named(export_format)
+            output.validate_declared_input(1)
+            exported_content = output.render([env])[0]
         return cls(
             specs=[str(spec) for spec in env.requested_packages],
             channels=channels,
             environment_format=environment_format,
             source_format=specifier.name,
             environments=(env,),
+            exported_content=exported_content,
         )
 
     @classmethod
@@ -164,8 +216,9 @@ class ParsedInputFile:
         target_platforms: list[str] | tuple[str, ...] | None,
         deadline: float,
         *,
-        transcode_format: str | None = None,
+        export_format: str | None = None,
         target_environments: list[str] | tuple[str, ...] | None = None,
+        lockfile_only: bool = False,
     ) -> ParsedInputFile:
         """Parse content in an isolated process before an absolute deadline."""
         if deadline <= time.monotonic():
@@ -205,8 +258,9 @@ class ParsedInputFile:
                         path,
                         target_platforms,
                         deadline,
-                        transcode_format,
+                        export_format,
                         target_environments,
+                        lockfile_only,
                     ),
                 )
                 process.start()
@@ -252,8 +306,9 @@ class ParsedInputFile:
         path: Path,
         target_platforms: list[str] | tuple[str, ...] | None,
         deadline: float,
-        transcode_format: str | None = None,
+        export_format: str | None = None,
         target_environments: list[str] | tuple[str, ...] | None = None,
+        lockfile_only: bool = False,
     ) -> None:
         """Send an input parse result from an isolated process."""
         CredentialRedactionFilter.install()
@@ -334,8 +389,9 @@ class ParsedInputFile:
                             "requirements.txt" if suffix == ".txt" else None
                         ),
                         materialize_lockfiles=False,
-                        transcode_format=transcode_format,
+                        export_format=export_format,
                         target_environments=target_environments,
+                        lockfile_only=lockfile_only,
                     )
             sender.send(("ok", parsed))
         except TimeoutError:

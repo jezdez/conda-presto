@@ -72,6 +72,16 @@ class OutputFormat:
     def is_lockfile(self) -> bool:
         return self.exporter.environment_format == EnvironmentFormat.lockfile
 
+    def validate_declared_input(self, target_count: int) -> None:
+        """Reject declaration exports that require solved records or one target."""
+        if self.is_lockfile:
+            raise ValueError(
+                f"Output format {self.name!r} requires solved package records. "
+                "Resolve the declarations first or export a saved lockfile."
+            )
+        if not self.exporter.multiplatform_export and target_count != 1:
+            raise ValueError("Select one target for this output format")
+
     def cache_identity(self) -> ExporterCacheIdentity | None:
         """Return a versioned provider identity suitable for persistent caches."""
         callback = self.exporter.multiplatform_export or self.exporter.export

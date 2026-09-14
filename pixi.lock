@@ -174,7 +174,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/noarch/uvicorn-0.50.2-pyhc90fa1f_0.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/zipp-4.1.0-pyhcf101f3_0.conda
       - pypi: ./
-      - pypi: git+https://github.com/conda-incubator/conda-workspaces.git?rev=1842215cacbdf772e1b13513f55fbc81dd73b913#1842215cacbdf772e1b13513f55fbc81dd73b913
+      - pypi: git+https://github.com/conda-incubator/conda-workspaces.git?rev=07239e0daf2e36421313a498f28b1cb2fd2982ac#07239e0daf2e36421313a498f28b1cb2fd2982ac
       - pypi: https://files.pythonhosted.org/packages/07/6c/aa3f2f849e01cb6a001cd8554a88d4c77c5c1a31c95bdf1cf9301e6d9ef4/defusedxml-0.7.1-py2.py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/12/dc/7a19864a7bc9f43121ab459e12768ab0080590e3e1b60a29b2f2eb01fb85/sigstore_models-0.0.6-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/13/bc/8c13eb66537dce1d2bd3a57132902f38d0e7f5bb46fa9f4daed9fe9d76ee/tomlkit-0.15.1-py3-none-any.whl
@@ -342,7 +342,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/noarch/uvicorn-0.50.2-pyhc90fa1f_0.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/zipp-4.1.0-pyhcf101f3_0.conda
       - pypi: ./
-      - pypi: git+https://github.com/conda-incubator/conda-workspaces.git?rev=1842215cacbdf772e1b13513f55fbc81dd73b913#1842215cacbdf772e1b13513f55fbc81dd73b913
+      - pypi: git+https://github.com/conda-incubator/conda-workspaces.git?rev=07239e0daf2e36421313a498f28b1cb2fd2982ac#07239e0daf2e36421313a498f28b1cb2fd2982ac
       - pypi: https://files.pythonhosted.org/packages/07/6c/aa3f2f849e01cb6a001cd8554a88d4c77c5c1a31c95bdf1cf9301e6d9ef4/defusedxml-0.7.1-py2.py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/12/dc/7a19864a7bc9f43121ab459e12768ab0080590e3e1b60a29b2f2eb01fb85/sigstore_models-0.0.6-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/13/bc/8c13eb66537dce1d2bd3a57132902f38d0e7f5bb46fa9f4daed9fe9d76ee/tomlkit-0.15.1-py3-none-any.whl
@@ -503,7 +503,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/osx-64/zstandard-0.25.0-py313hcb05632_1.conda
       - conda: https://conda.anaconda.org/conda-forge/osx-64/zstd-1.5.7-h3eecb57_6.conda
       - pypi: ./
-      - pypi: git+https://github.com/conda-incubator/conda-workspaces.git?rev=1842215cacbdf772e1b13513f55fbc81dd73b913#1842215cacbdf772e1b13513f55fbc81dd73b913
+      - pypi: git+https://github.com/conda-incubator/conda-workspaces.git?rev=07239e0daf2e36421313a498f28b1cb2fd2982ac#07239e0daf2e36421313a498f28b1cb2fd2982ac
       - pypi: https://files.pythonhosted.org/packages/07/6c/aa3f2f849e01cb6a001cd8554a88d4c77c5c1a31c95bdf1cf9301e6d9ef4/defusedxml-0.7.1-py2.py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/12/dc/7a19864a7bc9f43121ab459e12768ab0080590e3e1b60a29b2f2eb01fb85/sigstore_models-0.0.6-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/13/bc/8c13eb66537dce1d2bd3a57132902f38d0e7f5bb46fa9f4daed9fe9d76ee/tomlkit-0.15.1-py3-none-any.whl
@@ -664,7 +664,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/zstandard-0.25.0-py313h9734d34_1.conda
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/zstd-1.5.7-hbf9d68e_6.conda
       - pypi: ./
-      - pypi: git+https://github.com/conda-incubator/conda-workspaces.git?rev=1842215cacbdf772e1b13513f55fbc81dd73b913#1842215cacbdf772e1b13513f55fbc81dd73b913
+      - pypi: git+https://github.com/conda-incubator/conda-workspaces.git?rev=07239e0daf2e36421313a498f28b1cb2fd2982ac#07239e0daf2e36421313a498f28b1cb2fd2982ac
       - pypi: https://files.pythonhosted.org/packages/07/6c/aa3f2f849e01cb6a001cd8554a88d4c77c5c1a31c95bdf1cf9301e6d9ef4/defusedxml-0.7.1-py2.py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/12/dc/7a19864a7bc9f43121ab459e12768ab0080590e3e1b60a29b2f2eb01fb85/sigstore_models-0.0.6-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/13/bc/8c13eb66537dce1d2bd3a57132902f38d0e7f5bb46fa9f4daed9fe9d76ee/tomlkit-0.15.1-py3-none-any.whl
@@ -824,7 +824,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/noarch/urllib3-2.7.0-pyhd8ed1ab_0.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/zipp-4.1.0-pyhcf101f3_0.conda
       - pypi: ./
-      - pypi: git+https://github.com/conda-incubator/conda-workspaces.git?rev=1842215cacbdf772e1b13513f55fbc81dd73b913#1842215cacbdf772e1b13513f55fbc81dd73b913
+      - pypi: git+https://github.com/conda-incubator/conda-workspaces.git?rev=07239e0daf2e36421313a498f28b1cb2fd2982ac#07239e0daf2e36421313a498f28b1cb2fd2982ac
       - pypi: https://files.pythonhosted.org/packages/13/bc/8c13eb66537dce1d2bd3a57132902f38d0e7f5bb46fa9f4daed9fe9d76ee/tomlkit-0.15.1-py3-none-any.whl
       linux-aarch64:
       - conda: https://conda.anaconda.org/conda-forge/linux-aarch64/_openmp_mutex-4.5-20_gnu.conda
@@ -957,7 +957,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/noarch/urllib3-2.7.0-pyhd8ed1ab_0.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/zipp-4.1.0-pyhcf101f3_0.conda
       - pypi: ./
-      - pypi: git+https://github.com/conda-incubator/conda-workspaces.git?rev=1842215cacbdf772e1b13513f55fbc81dd73b913#1842215cacbdf772e1b13513f55fbc81dd73b913
+      - pypi: git+https://github.com/conda-incubator/conda-workspaces.git?rev=07239e0daf2e36421313a498f28b1cb2fd2982ac#07239e0daf2e36421313a498f28b1cb2fd2982ac
       - pypi: https://files.pythonhosted.org/packages/13/bc/8c13eb66537dce1d2bd3a57132902f38d0e7f5bb46fa9f4daed9fe9d76ee/tomlkit-0.15.1-py3-none-any.whl
       osx-64:
       - conda: https://conda.anaconda.org/conda-forge/noarch/_python_abi3_support-1.0-hd8ed1ab_2.conda
@@ -1083,7 +1083,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/osx-64/zstandard-0.25.0-py313hcb05632_1.conda
       - conda: https://conda.anaconda.org/conda-forge/osx-64/zstd-1.5.7-h3eecb57_6.conda
       - pypi: ./
-      - pypi: git+https://github.com/conda-incubator/conda-workspaces.git?rev=1842215cacbdf772e1b13513f55fbc81dd73b913#1842215cacbdf772e1b13513f55fbc81dd73b913
+      - pypi: git+https://github.com/conda-incubator/conda-workspaces.git?rev=07239e0daf2e36421313a498f28b1cb2fd2982ac#07239e0daf2e36421313a498f28b1cb2fd2982ac
       - pypi: https://files.pythonhosted.org/packages/13/bc/8c13eb66537dce1d2bd3a57132902f38d0e7f5bb46fa9f4daed9fe9d76ee/tomlkit-0.15.1-py3-none-any.whl
       osx-arm64:
       - conda: https://conda.anaconda.org/conda-forge/noarch/_python_abi3_support-1.0-hd8ed1ab_2.conda
@@ -1209,7 +1209,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/zstandard-0.25.0-py313h9734d34_1.conda
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/zstd-1.5.7-hbf9d68e_6.conda
       - pypi: ./
-      - pypi: git+https://github.com/conda-incubator/conda-workspaces.git?rev=1842215cacbdf772e1b13513f55fbc81dd73b913#1842215cacbdf772e1b13513f55fbc81dd73b913
+      - pypi: git+https://github.com/conda-incubator/conda-workspaces.git?rev=07239e0daf2e36421313a498f28b1cb2fd2982ac#07239e0daf2e36421313a498f28b1cb2fd2982ac
       - pypi: https://files.pythonhosted.org/packages/13/bc/8c13eb66537dce1d2bd3a57132902f38d0e7f5bb46fa9f4daed9fe9d76ee/tomlkit-0.15.1-py3-none-any.whl
   default:
     channels:
@@ -1344,7 +1344,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/noarch/urllib3-2.7.0-pyhd8ed1ab_0.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/zipp-4.1.0-pyhcf101f3_0.conda
       - pypi: ./
-      - pypi: git+https://github.com/conda-incubator/conda-workspaces.git?rev=1842215cacbdf772e1b13513f55fbc81dd73b913#1842215cacbdf772e1b13513f55fbc81dd73b913
+      - pypi: git+https://github.com/conda-incubator/conda-workspaces.git?rev=07239e0daf2e36421313a498f28b1cb2fd2982ac#07239e0daf2e36421313a498f28b1cb2fd2982ac
       - pypi: https://files.pythonhosted.org/packages/13/bc/8c13eb66537dce1d2bd3a57132902f38d0e7f5bb46fa9f4daed9fe9d76ee/tomlkit-0.15.1-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/71/46/17f022dd3e953bf20a04a028a21ec746d942f8d2af30fa0f124fa0e6a684/pygments-2.21.0-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/82/3b/64d4899d73f91ba49a8c18a8ff3f0ea8f1c1d75481760df8c68ef5235bf5/rich-15.0.0-py3-none-any.whl
@@ -1477,7 +1477,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/noarch/urllib3-2.7.0-pyhd8ed1ab_0.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/zipp-4.1.0-pyhcf101f3_0.conda
       - pypi: ./
-      - pypi: git+https://github.com/conda-incubator/conda-workspaces.git?rev=1842215cacbdf772e1b13513f55fbc81dd73b913#1842215cacbdf772e1b13513f55fbc81dd73b913
+      - pypi: git+https://github.com/conda-incubator/conda-workspaces.git?rev=07239e0daf2e36421313a498f28b1cb2fd2982ac#07239e0daf2e36421313a498f28b1cb2fd2982ac
       - pypi: https://files.pythonhosted.org/packages/13/bc/8c13eb66537dce1d2bd3a57132902f38d0e7f5bb46fa9f4daed9fe9d76ee/tomlkit-0.15.1-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/71/46/17f022dd3e953bf20a04a028a21ec746d942f8d2af30fa0f124fa0e6a684/pygments-2.21.0-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/82/3b/64d4899d73f91ba49a8c18a8ff3f0ea8f1c1d75481760df8c68ef5235bf5/rich-15.0.0-py3-none-any.whl
@@ -1603,7 +1603,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/osx-64/zstandard-0.25.0-py313hcb05632_1.conda
       - conda: https://conda.anaconda.org/conda-forge/osx-64/zstd-1.5.7-h3eecb57_6.conda
       - pypi: ./
-      - pypi: git+https://github.com/conda-incubator/conda-workspaces.git?rev=1842215cacbdf772e1b13513f55fbc81dd73b913#1842215cacbdf772e1b13513f55fbc81dd73b913
+      - pypi: git+https://github.com/conda-incubator/conda-workspaces.git?rev=07239e0daf2e36421313a498f28b1cb2fd2982ac#07239e0daf2e36421313a498f28b1cb2fd2982ac
       - pypi: https://files.pythonhosted.org/packages/13/bc/8c13eb66537dce1d2bd3a57132902f38d0e7f5bb46fa9f4daed9fe9d76ee/tomlkit-0.15.1-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/71/46/17f022dd3e953bf20a04a028a21ec746d942f8d2af30fa0f124fa0e6a684/pygments-2.21.0-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/82/3b/64d4899d73f91ba49a8c18a8ff3f0ea8f1c1d75481760df8c68ef5235bf5/rich-15.0.0-py3-none-any.whl
@@ -1729,7 +1729,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/zstandard-0.25.0-py313h9734d34_1.conda
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/zstd-1.5.7-hbf9d68e_6.conda
       - pypi: ./
-      - pypi: git+https://github.com/conda-incubator/conda-workspaces.git?rev=1842215cacbdf772e1b13513f55fbc81dd73b913#1842215cacbdf772e1b13513f55fbc81dd73b913
+      - pypi: git+https://github.com/conda-incubator/conda-workspaces.git?rev=07239e0daf2e36421313a498f28b1cb2fd2982ac#07239e0daf2e36421313a498f28b1cb2fd2982ac
       - pypi: https://files.pythonhosted.org/packages/13/bc/8c13eb66537dce1d2bd3a57132902f38d0e7f5bb46fa9f4daed9fe9d76ee/tomlkit-0.15.1-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/71/46/17f022dd3e953bf20a04a028a21ec746d942f8d2af30fa0f124fa0e6a684/pygments-2.21.0-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/82/3b/64d4899d73f91ba49a8c18a8ff3f0ea8f1c1d75481760df8c68ef5235bf5/rich-15.0.0-py3-none-any.whl
@@ -1887,7 +1887,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/noarch/uvicorn-0.50.2-pyhc90fa1f_0.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/zipp-4.1.0-pyhcf101f3_0.conda
       - pypi: ./
-      - pypi: git+https://github.com/conda-incubator/conda-workspaces.git?rev=1842215cacbdf772e1b13513f55fbc81dd73b913#1842215cacbdf772e1b13513f55fbc81dd73b913
+      - pypi: git+https://github.com/conda-incubator/conda-workspaces.git?rev=07239e0daf2e36421313a498f28b1cb2fd2982ac#07239e0daf2e36421313a498f28b1cb2fd2982ac
       - pypi: https://files.pythonhosted.org/packages/13/bc/8c13eb66537dce1d2bd3a57132902f38d0e7f5bb46fa9f4daed9fe9d76ee/tomlkit-0.15.1-py3-none-any.whl
       linux-aarch64:
       - conda: https://conda.anaconda.org/conda-forge/linux-aarch64/_openmp_mutex-4.5-20_gnu.conda
@@ -2035,7 +2035,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/noarch/uvicorn-0.50.2-pyhc90fa1f_0.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/zipp-4.1.0-pyhcf101f3_0.conda
       - pypi: ./
-      - pypi: git+https://github.com/conda-incubator/conda-workspaces.git?rev=1842215cacbdf772e1b13513f55fbc81dd73b913#1842215cacbdf772e1b13513f55fbc81dd73b913
+      - pypi: git+https://github.com/conda-incubator/conda-workspaces.git?rev=07239e0daf2e36421313a498f28b1cb2fd2982ac#07239e0daf2e36421313a498f28b1cb2fd2982ac
       - pypi: https://files.pythonhosted.org/packages/13/bc/8c13eb66537dce1d2bd3a57132902f38d0e7f5bb46fa9f4daed9fe9d76ee/tomlkit-0.15.1-py3-none-any.whl
       osx-64:
       - conda: https://conda.anaconda.org/conda-forge/noarch/_python_abi3_support-1.0-hd8ed1ab_2.conda
@@ -2176,7 +2176,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/osx-64/zstandard-0.25.0-py313hcb05632_1.conda
       - conda: https://conda.anaconda.org/conda-forge/osx-64/zstd-1.5.7-h3eecb57_6.conda
       - pypi: ./
-      - pypi: git+https://github.com/conda-incubator/conda-workspaces.git?rev=1842215cacbdf772e1b13513f55fbc81dd73b913#1842215cacbdf772e1b13513f55fbc81dd73b913
+      - pypi: git+https://github.com/conda-incubator/conda-workspaces.git?rev=07239e0daf2e36421313a498f28b1cb2fd2982ac#07239e0daf2e36421313a498f28b1cb2fd2982ac
       - pypi: https://files.pythonhosted.org/packages/13/bc/8c13eb66537dce1d2bd3a57132902f38d0e7f5bb46fa9f4daed9fe9d76ee/tomlkit-0.15.1-py3-none-any.whl
       osx-arm64:
       - conda: https://conda.anaconda.org/conda-forge/noarch/_python_abi3_support-1.0-hd8ed1ab_2.conda
@@ -2317,7 +2317,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/zstandard-0.25.0-py313h9734d34_1.conda
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/zstd-1.5.7-hbf9d68e_6.conda
       - pypi: ./
-      - pypi: git+https://github.com/conda-incubator/conda-workspaces.git?rev=1842215cacbdf772e1b13513f55fbc81dd73b913#1842215cacbdf772e1b13513f55fbc81dd73b913
+      - pypi: git+https://github.com/conda-incubator/conda-workspaces.git?rev=07239e0daf2e36421313a498f28b1cb2fd2982ac#07239e0daf2e36421313a498f28b1cb2fd2982ac
       - pypi: https://files.pythonhosted.org/packages/13/bc/8c13eb66537dce1d2bd3a57132902f38d0e7f5bb46fa9f4daed9fe9d76ee/tomlkit-0.15.1-py3-none-any.whl
   docs:
     channels:
@@ -2482,7 +2482,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/noarch/urllib3-2.7.0-pyhd8ed1ab_0.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/zipp-4.1.0-pyhcf101f3_0.conda
       - pypi: ./
-      - pypi: git+https://github.com/conda-incubator/conda-workspaces.git?rev=1842215cacbdf772e1b13513f55fbc81dd73b913#1842215cacbdf772e1b13513f55fbc81dd73b913
+      - pypi: git+https://github.com/conda-incubator/conda-workspaces.git?rev=07239e0daf2e36421313a498f28b1cb2fd2982ac#07239e0daf2e36421313a498f28b1cb2fd2982ac
       - pypi: https://files.pythonhosted.org/packages/13/bc/8c13eb66537dce1d2bd3a57132902f38d0e7f5bb46fa9f4daed9fe9d76ee/tomlkit-0.15.1-py3-none-any.whl
       linux-aarch64:
       - conda: https://conda.anaconda.org/conda-forge/linux-aarch64/_openmp_mutex-4.5-20_gnu.conda
@@ -2641,7 +2641,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/noarch/urllib3-2.7.0-pyhd8ed1ab_0.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/zipp-4.1.0-pyhcf101f3_0.conda
       - pypi: ./
-      - pypi: git+https://github.com/conda-incubator/conda-workspaces.git?rev=1842215cacbdf772e1b13513f55fbc81dd73b913#1842215cacbdf772e1b13513f55fbc81dd73b913
+      - pypi: git+https://github.com/conda-incubator/conda-workspaces.git?rev=07239e0daf2e36421313a498f28b1cb2fd2982ac#07239e0daf2e36421313a498f28b1cb2fd2982ac
       - pypi: https://files.pythonhosted.org/packages/13/bc/8c13eb66537dce1d2bd3a57132902f38d0e7f5bb46fa9f4daed9fe9d76ee/tomlkit-0.15.1-py3-none-any.whl
       osx-64:
       - conda: https://conda.anaconda.org/conda-forge/noarch/_python_abi3_support-1.0-hd8ed1ab_2.conda
@@ -2793,7 +2793,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/osx-64/zstandard-0.25.0-py313hcb05632_1.conda
       - conda: https://conda.anaconda.org/conda-forge/osx-64/zstd-1.5.7-h3eecb57_6.conda
       - pypi: ./
-      - pypi: git+https://github.com/conda-incubator/conda-workspaces.git?rev=1842215cacbdf772e1b13513f55fbc81dd73b913#1842215cacbdf772e1b13513f55fbc81dd73b913
+      - pypi: git+https://github.com/conda-incubator/conda-workspaces.git?rev=07239e0daf2e36421313a498f28b1cb2fd2982ac#07239e0daf2e36421313a498f28b1cb2fd2982ac
       - pypi: https://files.pythonhosted.org/packages/13/bc/8c13eb66537dce1d2bd3a57132902f38d0e7f5bb46fa9f4daed9fe9d76ee/tomlkit-0.15.1-py3-none-any.whl
       osx-arm64:
       - conda: https://conda.anaconda.org/conda-forge/noarch/_python_abi3_support-1.0-hd8ed1ab_2.conda
@@ -2945,7 +2945,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/zstandard-0.25.0-py313h9734d34_1.conda
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/zstd-1.5.7-hbf9d68e_6.conda
       - pypi: ./
-      - pypi: git+https://github.com/conda-incubator/conda-workspaces.git?rev=1842215cacbdf772e1b13513f55fbc81dd73b913#1842215cacbdf772e1b13513f55fbc81dd73b913
+      - pypi: git+https://github.com/conda-incubator/conda-workspaces.git?rev=07239e0daf2e36421313a498f28b1cb2fd2982ac#07239e0daf2e36421313a498f28b1cb2fd2982ac
       - pypi: https://files.pythonhosted.org/packages/13/bc/8c13eb66537dce1d2bd3a57132902f38d0e7f5bb46fa9f4daed9fe9d76ee/tomlkit-0.15.1-py3-none-any.whl
   prod:
     channels:
@@ -3098,7 +3098,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/noarch/uvicorn-0.50.2-pyhc90fa1f_0.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/zipp-4.1.0-pyhcf101f3_0.conda
       - pypi: ./
-      - pypi: git+https://github.com/conda-incubator/conda-workspaces.git?rev=1842215cacbdf772e1b13513f55fbc81dd73b913#1842215cacbdf772e1b13513f55fbc81dd73b913
+      - pypi: git+https://github.com/conda-incubator/conda-workspaces.git?rev=07239e0daf2e36421313a498f28b1cb2fd2982ac#07239e0daf2e36421313a498f28b1cb2fd2982ac
       - pypi: https://files.pythonhosted.org/packages/13/bc/8c13eb66537dce1d2bd3a57132902f38d0e7f5bb46fa9f4daed9fe9d76ee/tomlkit-0.15.1-py3-none-any.whl
       linux-aarch64:
       - conda: https://conda.anaconda.org/conda-forge/linux-aarch64/_openmp_mutex-4.5-20_gnu.conda
@@ -3245,7 +3245,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/noarch/uvicorn-0.50.2-pyhc90fa1f_0.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/zipp-4.1.0-pyhcf101f3_0.conda
       - pypi: ./
-      - pypi: git+https://github.com/conda-incubator/conda-workspaces.git?rev=1842215cacbdf772e1b13513f55fbc81dd73b913#1842215cacbdf772e1b13513f55fbc81dd73b913
+      - pypi: git+https://github.com/conda-incubator/conda-workspaces.git?rev=07239e0daf2e36421313a498f28b1cb2fd2982ac#07239e0daf2e36421313a498f28b1cb2fd2982ac
       - pypi: https://files.pythonhosted.org/packages/13/bc/8c13eb66537dce1d2bd3a57132902f38d0e7f5bb46fa9f4daed9fe9d76ee/tomlkit-0.15.1-py3-none-any.whl
       osx-64:
       - conda: https://conda.anaconda.org/conda-forge/noarch/_python_abi3_support-1.0-hd8ed1ab_2.conda
@@ -3385,7 +3385,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/osx-64/zstandard-0.25.0-py313hcb05632_1.conda
       - conda: https://conda.anaconda.org/conda-forge/osx-64/zstd-1.5.7-h3eecb57_6.conda
       - pypi: ./
-      - pypi: git+https://github.com/conda-incubator/conda-workspaces.git?rev=1842215cacbdf772e1b13513f55fbc81dd73b913#1842215cacbdf772e1b13513f55fbc81dd73b913
+      - pypi: git+https://github.com/conda-incubator/conda-workspaces.git?rev=07239e0daf2e36421313a498f28b1cb2fd2982ac#07239e0daf2e36421313a498f28b1cb2fd2982ac
       - pypi: https://files.pythonhosted.org/packages/13/bc/8c13eb66537dce1d2bd3a57132902f38d0e7f5bb46fa9f4daed9fe9d76ee/tomlkit-0.15.1-py3-none-any.whl
       osx-arm64:
       - conda: https://conda.anaconda.org/conda-forge/noarch/_python_abi3_support-1.0-hd8ed1ab_2.conda
@@ -3525,7 +3525,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/zstandard-0.25.0-py313h9734d34_1.conda
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/zstd-1.5.7-hbf9d68e_6.conda
       - pypi: ./
-      - pypi: git+https://github.com/conda-incubator/conda-workspaces.git?rev=1842215cacbdf772e1b13513f55fbc81dd73b913#1842215cacbdf772e1b13513f55fbc81dd73b913
+      - pypi: git+https://github.com/conda-incubator/conda-workspaces.git?rev=07239e0daf2e36421313a498f28b1cb2fd2982ac#07239e0daf2e36421313a498f28b1cb2fd2982ac
       - pypi: https://files.pythonhosted.org/packages/13/bc/8c13eb66537dce1d2bd3a57132902f38d0e7f5bb46fa9f4daed9fe9d76ee/tomlkit-0.15.1-py3-none-any.whl
   redis:
     channels:
@@ -3678,7 +3678,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/noarch/uvicorn-0.50.2-pyhc90fa1f_0.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/zipp-4.1.0-pyhcf101f3_0.conda
       - pypi: ./
-      - pypi: git+https://github.com/conda-incubator/conda-workspaces.git?rev=1842215cacbdf772e1b13513f55fbc81dd73b913#1842215cacbdf772e1b13513f55fbc81dd73b913
+      - pypi: git+https://github.com/conda-incubator/conda-workspaces.git?rev=07239e0daf2e36421313a498f28b1cb2fd2982ac#07239e0daf2e36421313a498f28b1cb2fd2982ac
       - pypi: https://files.pythonhosted.org/packages/13/bc/8c13eb66537dce1d2bd3a57132902f38d0e7f5bb46fa9f4daed9fe9d76ee/tomlkit-0.15.1-py3-none-any.whl
       linux-aarch64:
       - conda: https://conda.anaconda.org/conda-forge/linux-aarch64/_openmp_mutex-4.5-20_gnu.conda
@@ -3825,7 +3825,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/noarch/uvicorn-0.50.2-pyhc90fa1f_0.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/zipp-4.1.0-pyhcf101f3_0.conda
       - pypi: ./
-      - pypi: git+https://github.com/conda-incubator/conda-workspaces.git?rev=1842215cacbdf772e1b13513f55fbc81dd73b913#1842215cacbdf772e1b13513f55fbc81dd73b913
+      - pypi: git+https://github.com/conda-incubator/conda-workspaces.git?rev=07239e0daf2e36421313a498f28b1cb2fd2982ac#07239e0daf2e36421313a498f28b1cb2fd2982ac
       - pypi: https://files.pythonhosted.org/packages/13/bc/8c13eb66537dce1d2bd3a57132902f38d0e7f5bb46fa9f4daed9fe9d76ee/tomlkit-0.15.1-py3-none-any.whl
       osx-64:
       - conda: https://conda.anaconda.org/conda-forge/noarch/_python_abi3_support-1.0-hd8ed1ab_2.conda
@@ -3965,7 +3965,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/osx-64/zstandard-0.25.0-py313hcb05632_1.conda
       - conda: https://conda.anaconda.org/conda-forge/osx-64/zstd-1.5.7-h3eecb57_6.conda
       - pypi: ./
-      - pypi: git+https://github.com/conda-incubator/conda-workspaces.git?rev=1842215cacbdf772e1b13513f55fbc81dd73b913#1842215cacbdf772e1b13513f55fbc81dd73b913
+      - pypi: git+https://github.com/conda-incubator/conda-workspaces.git?rev=07239e0daf2e36421313a498f28b1cb2fd2982ac#07239e0daf2e36421313a498f28b1cb2fd2982ac
       - pypi: https://files.pythonhosted.org/packages/13/bc/8c13eb66537dce1d2bd3a57132902f38d0e7f5bb46fa9f4daed9fe9d76ee/tomlkit-0.15.1-py3-none-any.whl
       osx-arm64:
       - conda: https://conda.anaconda.org/conda-forge/noarch/_python_abi3_support-1.0-hd8ed1ab_2.conda
@@ -4105,7 +4105,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/zstandard-0.25.0-py313h9734d34_1.conda
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/zstd-1.5.7-hbf9d68e_6.conda
       - pypi: ./
-      - pypi: git+https://github.com/conda-incubator/conda-workspaces.git?rev=1842215cacbdf772e1b13513f55fbc81dd73b913#1842215cacbdf772e1b13513f55fbc81dd73b913
+      - pypi: git+https://github.com/conda-incubator/conda-workspaces.git?rev=07239e0daf2e36421313a498f28b1cb2fd2982ac#07239e0daf2e36421313a498f28b1cb2fd2982ac
       - pypi: https://files.pythonhosted.org/packages/13/bc/8c13eb66537dce1d2bd3a57132902f38d0e7f5bb46fa9f4daed9fe9d76ee/tomlkit-0.15.1-py3-none-any.whl
   release:
     channels:
@@ -4415,7 +4415,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/noarch/uvicorn-0.50.2-pyhc90fa1f_0.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/zipp-4.1.0-pyhcf101f3_0.conda
       - pypi: ./
-      - pypi: git+https://github.com/conda-incubator/conda-workspaces.git?rev=1842215cacbdf772e1b13513f55fbc81dd73b913#1842215cacbdf772e1b13513f55fbc81dd73b913
+      - pypi: git+https://github.com/conda-incubator/conda-workspaces.git?rev=07239e0daf2e36421313a498f28b1cb2fd2982ac#07239e0daf2e36421313a498f28b1cb2fd2982ac
       - pypi: https://files.pythonhosted.org/packages/07/6c/aa3f2f849e01cb6a001cd8554a88d4c77c5c1a31c95bdf1cf9301e6d9ef4/defusedxml-0.7.1-py2.py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/12/dc/7a19864a7bc9f43121ab459e12768ab0080590e3e1b60a29b2f2eb01fb85/sigstore_models-0.0.6-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/13/bc/8c13eb66537dce1d2bd3a57132902f38d0e7f5bb46fa9f4daed9fe9d76ee/tomlkit-0.15.1-py3-none-any.whl
@@ -4589,7 +4589,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/noarch/uvicorn-0.50.2-pyhc90fa1f_0.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/zipp-4.1.0-pyhcf101f3_0.conda
       - pypi: ./
-      - pypi: git+https://github.com/conda-incubator/conda-workspaces.git?rev=1842215cacbdf772e1b13513f55fbc81dd73b913#1842215cacbdf772e1b13513f55fbc81dd73b913
+      - pypi: git+https://github.com/conda-incubator/conda-workspaces.git?rev=07239e0daf2e36421313a498f28b1cb2fd2982ac#07239e0daf2e36421313a498f28b1cb2fd2982ac
       - pypi: https://files.pythonhosted.org/packages/07/6c/aa3f2f849e01cb6a001cd8554a88d4c77c5c1a31c95bdf1cf9301e6d9ef4/defusedxml-0.7.1-py2.py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/12/dc/7a19864a7bc9f43121ab459e12768ab0080590e3e1b60a29b2f2eb01fb85/sigstore_models-0.0.6-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/13/bc/8c13eb66537dce1d2bd3a57132902f38d0e7f5bb46fa9f4daed9fe9d76ee/tomlkit-0.15.1-py3-none-any.whl
@@ -4756,7 +4756,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/osx-64/zstandard-0.25.0-py313hcb05632_1.conda
       - conda: https://conda.anaconda.org/conda-forge/osx-64/zstd-1.5.7-h3eecb57_6.conda
       - pypi: ./
-      - pypi: git+https://github.com/conda-incubator/conda-workspaces.git?rev=1842215cacbdf772e1b13513f55fbc81dd73b913#1842215cacbdf772e1b13513f55fbc81dd73b913
+      - pypi: git+https://github.com/conda-incubator/conda-workspaces.git?rev=07239e0daf2e36421313a498f28b1cb2fd2982ac#07239e0daf2e36421313a498f28b1cb2fd2982ac
       - pypi: https://files.pythonhosted.org/packages/07/6c/aa3f2f849e01cb6a001cd8554a88d4c77c5c1a31c95bdf1cf9301e6d9ef4/defusedxml-0.7.1-py2.py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/12/dc/7a19864a7bc9f43121ab459e12768ab0080590e3e1b60a29b2f2eb01fb85/sigstore_models-0.0.6-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/13/bc/8c13eb66537dce1d2bd3a57132902f38d0e7f5bb46fa9f4daed9fe9d76ee/tomlkit-0.15.1-py3-none-any.whl
@@ -4923,7 +4923,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/zstandard-0.25.0-py313h9734d34_1.conda
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/zstd-1.5.7-hbf9d68e_6.conda
       - pypi: ./
-      - pypi: git+https://github.com/conda-incubator/conda-workspaces.git?rev=1842215cacbdf772e1b13513f55fbc81dd73b913#1842215cacbdf772e1b13513f55fbc81dd73b913
+      - pypi: git+https://github.com/conda-incubator/conda-workspaces.git?rev=07239e0daf2e36421313a498f28b1cb2fd2982ac#07239e0daf2e36421313a498f28b1cb2fd2982ac
       - pypi: https://files.pythonhosted.org/packages/07/6c/aa3f2f849e01cb6a001cd8554a88d4c77c5c1a31c95bdf1cf9301e6d9ef4/defusedxml-0.7.1-py2.py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/12/dc/7a19864a7bc9f43121ab459e12768ab0080590e3e1b60a29b2f2eb01fb85/sigstore_models-0.0.6-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/13/bc/8c13eb66537dce1d2bd3a57132902f38d0e7f5bb46fa9f4daed9fe9d76ee/tomlkit-0.15.1-py3-none-any.whl
@@ -10778,7 +10778,7 @@ packages:
 - pypi: ./
   name: conda-presto
   requires_dist:
-  - conda-workspaces @ git+https://github.com/conda-incubator/conda-workspaces.git@1842215cacbdf772e1b13513f55fbc81dd73b913
+  - conda-workspaces @ git+https://github.com/conda-incubator/conda-workspaces.git@07239e0daf2e36421313a498f28b1cb2fd2982ac
   - msgspec>=0.19
   - redis>=5.0 ; extra == 'redis'
   - conda-sboms>=0.3.0 ; extra == 'sbom'
@@ -10787,9 +10787,9 @@ packages:
   - uvicorn>=0.34 ; extra == 'server'
   - conda-sigstore>=0.1.2 ; extra == 'sigstore'
   requires_python: '>=3.13'
-- pypi: git+https://github.com/conda-incubator/conda-workspaces.git?rev=1842215cacbdf772e1b13513f55fbc81dd73b913#1842215cacbdf772e1b13513f55fbc81dd73b913
+- pypi: git+https://github.com/conda-incubator/conda-workspaces.git?rev=07239e0daf2e36421313a498f28b1cb2fd2982ac#07239e0daf2e36421313a498f28b1cb2fd2982ac
   name: conda-workspaces
-  version: 0.9.1.dev2+g1842215ca
+  version: 0.9.1.dev4+g07239e0da
   requires_dist:
   - backports-zstd ; python_full_version < '3.14'
   - jinja2>=3.0
