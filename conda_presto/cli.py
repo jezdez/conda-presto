@@ -40,6 +40,7 @@ from .config import DEFAULT_CHANNELS, DEFAULT_HOST, DEFAULT_PORT, PARSE_TIMEOUT_
 from .exceptions import (
     SAFE_ERROR_TYPES,
     UnknownFormatError,
+    WorkspaceSolveError,
     redact_safe_error,
     safe_error_message,
 )
@@ -65,7 +66,7 @@ def configure_parser(parser: argparse.ArgumentParser):
         dest="platforms",
         metavar="PLATFORM",
         help="Target platform (e.g. linux-64, osx-arm64), or a declared "
-        "workspace target with --parse. May be specified multiple times.",
+        "workspace target. May be specified multiple times.",
     )
 
     parser.add_argument(
@@ -75,7 +76,7 @@ def configure_parser(parser: argparse.ArgumentParser):
         default=[],
         dest="environments",
         metavar="NAME",
-        help="Select a workspace environment with --parse. "
+        help="Select a workspace environment to inspect or solve. "
         "May be specified multiple times.",
     )
 
@@ -127,8 +128,8 @@ def configure_parser(parser: argparse.ArgumentParser):
 
 def execute(args: argparse.Namespace):
     """Dispatch the requested CLI operation."""
-    if getattr(args, "environments", None) and not getattr(args, "parse", False):
-        print("--environment requires --parse.", file=sys.stderr)
+    if getattr(args, "environments", None) and getattr(args, "serve", False):
+        print("Environment selection requires a workspace manifest.", file=sys.stderr)
         raise SystemExit(1)
     if getattr(args, "parse", False):
         cmd_parse(args)
@@ -190,6 +191,8 @@ def cmd_parse(args: argparse.Namespace):
 def load_parsed_files(
     files: list[str],
     target_platforms: list[str] | None = None,
+    *,
+    target_environments: list[str] | None = None,
 ) -> tuple[list[str], list[str], list[ParsedInputFile]]:
     """Parse input files via conda's env-spec plugin registry.
 
@@ -204,13 +207,14 @@ def load_parsed_files(
     parsed_files: list[ParsedInputFile] = []
     for fpath in files:
         try:
-            parsed = ParsedInputFile.from_path(fpath, target_platforms)
-        except ValueError:
-            print(
-                f"No environment spec plugin can handle: {fpath}",
-                file=sys.stderr,
+            parsed = ParsedInputFile.from_path(
+                fpath,
+                target_platforms,
+                target_environments=target_environments,
             )
-            raise SystemExit(1)
+        except (CondaError, ValueError) as exc:
+            print(f"Input error: {redact_safe_error(str(exc))}", file=sys.stderr)
+            raise SystemExit(1) from exc
         parsed_files.append(parsed)
         deps.extend(parsed.specs)
         channels.extend(parsed.channels)
@@ -237,13 +241,45 @@ def cmd_solve(args: argparse.Namespace):
     context.__init__(argparse_args=args)
 
     platforms = args.platforms or None
-    file_deps, file_channels, parsed_files = load_parsed_files(args.files, platforms)
-    if any(parsed.workspace is not None for parsed in parsed_files):
-        print(
-            "Workspace solving is not supported yet. "
-            "Use --parse to inspect workspace inputs.",
-            file=sys.stderr,
-        )
+    environments = getattr(args, "environments", None) or None
+    file_deps, file_channels, parsed_files = load_parsed_files(
+        args.files, platforms, target_environments=environments
+    )
+    workspaces = [
+        parsed.workspace for parsed in parsed_files if parsed.workspace is not None
+    ]
+    if workspaces:
+        error = None
+        if len(parsed_files) != 1:
+            error = "Workspace solving requires exactly one --file."
+        elif args.specs:
+            error = "Workspace solving does not accept inline package specs."
+        elif (
+            getattr(args, "channel", None)
+            or getattr(args, "override_channels", False)
+            or getattr(args, "use_local", False) is True
+        ):
+            error = "Workspace solving does not accept channel overrides."
+        if error:
+            print(error, file=sys.stderr)
+            raise SystemExit(1)
+        try:
+            workspace = workspaces[0].select(
+                environments=environments, platforms=platforms
+            )
+            workspace.validate_output(args.output_format)
+            result = workspace.solve(args.output_format)
+        except (CondaError, ValueError, WorkspaceSolveError) as exc:
+            print(f"Workspace error: {redact_safe_error(str(exc))}", file=sys.stderr)
+            raise SystemExit(1) from exc
+        if isinstance(result, tuple):
+            sys.stdout.write(result[0].rstrip() + "\n")
+        else:
+            body = msgspec.json.format(msgspec.json.encode(result), indent=2)
+            sys.stdout.buffer.write(body + b"\n")
+        return
+    if environments:
+        print("Environment selection requires a workspace manifest.", file=sys.stderr)
         raise SystemExit(1)
 
     specs = [s.strip("\"'") for s in args.specs]

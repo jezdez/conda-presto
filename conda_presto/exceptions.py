@@ -1,13 +1,13 @@
 """Centralized exception types and error-sanitization helpers.
 
 Keeping these in one place makes it easy to audit which error types
-conda-presto defines (currently just :class:`UnknownFormatError`) and
+conda-presto defines and
 which known-safe exception types it re-surfaces to HTTP clients.
 
 ``SAFE_ERROR_TYPES`` is the allow-list of exception classes whose
 ``str(exc)`` is considered user-actionable and safe to return to
 clients.  Anything not in the list is sanitized via
-:func:`safe_error_message` to a generic message; full detail still
+:func:`safe_error_message` to a generic message. Full detail still
 lands in the server logs.
 """
 
@@ -42,6 +42,17 @@ SAFE_ERROR_TYPES: tuple[type[Exception], ...] = (
     UnsatisfiableError,
     PackagesNotFoundError,
 )
+
+
+class WorkspaceSolveError(RuntimeError):
+    """Identify a failed workspace environment and target with safe detail."""
+
+    def __init__(self, environment: str, platform: str, error: str) -> None:
+        self.environment = environment
+        self.platform = platform
+        self.error = error
+        super().__init__(f"Environment {environment!r} on {platform!r}: {error}")
+
 
 # Start once per scheme-character run. Possessive repeats alone would still
 # retry at every position in a long failed scheme prefix.
