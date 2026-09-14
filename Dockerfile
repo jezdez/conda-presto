@@ -1,4 +1,4 @@
-FROM ghcr.io/prefix-dev/pixi:0.79.0@sha256:80a5b1e06fa988cc22554e8bf9e6b4bae87597771c568873691335667055c87d AS build
+FROM ghcr.io/prefix-dev/pixi:0.80.0@sha256:4cb073300e2c5eaee287bb3bcbadd3ddb7bce4ce36b27c41a19aad74c297c2f3 AS build
 
 ARG PIXI_ENVIRONMENT=prod
 
