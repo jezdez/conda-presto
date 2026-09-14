@@ -53,7 +53,7 @@ jobs:
           done
           exit 1
 
-      - name: Write an environment file
+      - name: Write environment and workspace files
         run: |
           cat > environment.yml <<'YAML'
           channels:
@@ -61,6 +61,20 @@ jobs:
           dependencies:
             - zlib
           YAML
+
+          cat > conda.toml <<'TOML'
+          [workspace]
+          name = "action-smoke"
+          channels = ["conda-forge"]
+          platforms = ["linux-64", "osx-arm64"]
+
+          [dependencies]
+          zlib = "*"
+
+          [environments]
+          default = []
+          test = []
+          TOML
 
       - name: Resolve two platforms
         id: native
@@ -106,6 +120,37 @@ jobs:
           packages = lock["environments"]["default"]["packages"]
           assert set(packages) == {"linux-64", "osx-arm64"}
           assert all(packages.values())
+          PYTHON
+
+      - name: Lock a named workspace environment
+        id: workspace
+        uses: ./
+        with:
+          endpoint: http://127.0.0.1:8765
+          file: conda.toml
+          environments: test
+          platforms: linux-64,osx-arm64
+          format: conda-workspaces-lock-v1
+          output: conda.lock
+
+      - name: Check workspace lock selection
+        env:
+          SOLVED: ${{ steps.workspace.outputs.solved }}
+        run: |
+          test "$SOLVED" = true
+          pixi run -e prod python - <<'PYTHON'
+          from pathlib import Path
+          from ruamel.yaml import YAML
+
+          lock = YAML(typ="safe").load(Path("conda.lock"))
+          assert lock["version"] == 1
+          assert set(lock["environments"]) == {"test"}
+          packages = lock["environments"]["test"]["packages"]
+          assert set(packages) == {"linux-64", "osx-arm64"}
+          assert all(
+              any(ref["conda"].rsplit("/", 1)[-1].startswith("zlib-") for ref in refs)
+              for refs in packages.values()
+          )
           PYTHON
 
       - name: Show server log

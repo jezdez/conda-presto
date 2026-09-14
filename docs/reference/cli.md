@@ -16,7 +16,8 @@ without installing anything. Use `--parse` to inspect declarations without solvi
 
 `SPECS`
 : One or more conda match specs, e.g. `python=3.12 numpy`. These are
-  combined with any specs found in files passed via `--file`.
+  combined with ordinary environment files passed via `--file`.
+  Workspace manifests do not accept additional inline specs.
 
 ## Options
 
@@ -24,7 +25,8 @@ without installing anything. Use `--parse` to inspect declarations without solvi
 : Additional channel to search. Can be repeated. Conda also includes channels
   from `.condarc` unless `--override-channels` is present. When the effective
   conda context has no channels or only `defaults`, conda-presto uses channels
-  from input files, then `CONDA_PRESTO_CHANNELS`.
+  from input files, then `CONDA_PRESTO_CHANNELS`. Workspace solves use the
+  manifest's channels and reject explicit channel overrides.
 
   ```bash
   conda presto -c conda-forge -c bioconda python=3.12
@@ -32,9 +34,10 @@ without installing anything. Use `--parse` to inspect declarations without solvi
 
 `-p`, `--platform`
 : Target platform subdir (e.g. `linux-64`, `osx-arm64`, `win-64`).
-  Can be repeated to solve for multiple platforms in parallel. When
-  omitted, solves for the current host platform only. With `--parse`, this
-  selects workspace target names or their unambiguous conda subdirectories.
+  Can be repeated to solve for multiple platforms. Ordinary inputs default
+  to the host platform. Workspace inputs accept logical target names or
+  their unambiguous conda subdirectories and default to the selected
+  environments' declared targets.
 
   ```bash
   conda presto -p linux-64 -p osx-arm64 python=3.12
@@ -61,8 +64,9 @@ without installing anything. Use `--parse` to inspect declarations without solvi
   ```
 
 `-e`, `--environment`
-: Select a workspace environment in `--parse` mode. Can be repeated.
-  This option does not select an environment for solving.
+: Select a workspace environment for parsing or solving. Can be repeated.
+  Workspace solves default to all environments. This option is rejected
+  for ordinary inputs.
 
 `-f`, `--file`
 : Path to an environment file. Can be repeated. Each file is selected and
@@ -72,7 +76,8 @@ without installing anything. Use `--parse` to inspect declarations without solvi
   The adapter does not accept conda's explicit-file specifier as input. Specs
   from all files are merged with positional specs. Workspace manifests
   (`conda.toml`, `pixi.toml` and supported `pyproject.toml` workspace tables)
-  require `--parse`. Normal CLI solves reject these manifests.
+  use exactly one input file and reject additional inline specs.
+  Use `--parse` to inspect their declarations without solving.
 
   ```bash
   conda presto -f environment.yml -f extra-deps.yml -p linux-64
@@ -82,6 +87,9 @@ without installing anything. Use `--parse` to inspect declarations without solvi
 : Route the output through a conda exporter plugin instead of
   emitting the default JSON. See
   [Output formats](output-formats.md) for the full list.
+
+  Use `conda-workspaces-lock-v1` for a combined workspace lock.
+  Normalized manifest formats require one selected environment.
 
   ```bash
   conda presto --format explicit -c conda-forge -p linux-64 zlib
@@ -153,6 +161,18 @@ conda presto --parse -f conda.toml -e test -p linux-64
 ```
 
 See {doc}`../how-to/parse-workspace` for a complete example.
+
+Solve two workspace environments across two targets into one lock:
+
+```bash
+conda presto -f conda.toml -e default -e test \
+  -p linux-64 -p osx-arm64 \
+  --format conda-workspaces-lock-v1 > conda.lock
+```
+
+Omitting both workspace selectors solves every declared environment and
+target. An environment without declared platforms requires an explicit
+`--platform`.
 
 Resolve a single package for one platform:
 

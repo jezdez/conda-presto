@@ -9,9 +9,14 @@ import time
 from contextlib import suppress
 from typing import Any
 
-from .exceptions import CredentialRedactionFilter, UnknownFormatError
+from .exceptions import (
+    CredentialRedactionFilter,
+    UnknownFormatError,
+    WorkspaceSolveError,
+)
 from .exporter import OutputFormat
 from .resolve import shutdown_process_pool, solve, solve_environments, warmup
+from .workspace import WorkspaceInput
 
 log = logging.getLogger(__name__)
 
@@ -125,9 +130,13 @@ class PersistentSolveWorker:
         platforms: list[str] | None,
         format_name: str | None,
         deadline: float,
+        workspace: WorkspaceInput | None = None,
     ) -> list | tuple[str, str]:
         """Return a solve result before the absolute deadline."""
-        return self.execute((channels, specs, platforms, format_name), deadline)
+        request = (channels, specs, platforms, format_name)
+        if workspace is not None:
+            request += (workspace,)
+        return self.execute(request, deadline)
 
     def execute(self, request: object, deadline: float) -> object:
         """Exchange one request with the persistent worker process."""
@@ -157,6 +166,8 @@ class PersistentSolveWorker:
                 return payload
             if status == "unknown-format":
                 raise UnknownFormatError(payload["format_name"], payload["available"])
+            if status == "workspace-error":
+                raise WorkspaceSolveError(*payload)
             raise RuntimeError("Persistent solve worker failed")
 
     def restart(self) -> None:
@@ -255,8 +266,10 @@ def persistent_solve_worker_entrypoint(
                 break
 
             try:
-                channels, specs, platforms, format_name = request
-                if format_name is None:
+                channels, specs, platforms, format_name, *workspace = request
+                if workspace:
+                    result = workspace[0].solve(format_name)
+                elif format_name is None:
                     result = solve(channels, specs, platforms)
                 else:
                     result = OutputFormat.named(format_name).render(
@@ -268,6 +281,10 @@ def persistent_solve_worker_entrypoint(
                         "unknown-format",
                         {"format_name": exc.format_name, "available": exc.available},
                     )
+                )
+            except WorkspaceSolveError as exc:
+                connection.send(
+                    ("workspace-error", (exc.environment, exc.platform, exc.error))
                 )
             except Exception:
                 log.exception("Persistent solve worker failed")
