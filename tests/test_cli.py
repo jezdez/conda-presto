@@ -21,7 +21,9 @@ from conda_presto.cli import (
     main,
 )
 from conda_presto.config import PARSE_TIMEOUT_S
+from conda_presto.exceptions import WorkspaceSolveError
 from conda_presto.inputs import ParsedInputFile
+from conda_presto.workspace import WorkspaceInput
 
 
 @pytest.fixture()
@@ -118,9 +120,9 @@ def test_parse_workspace_matches_bounded_parser(
         ),
         pytest.param(
             ["--environment", "test", "zlib"],
-            "--environment requires --parse",
+            "Environment selection requires a workspace manifest",
             1,
-            id="environment-without-parse",
+            id="environment-without-workspace",
         ),
     ],
 )
@@ -167,24 +169,165 @@ def test_parse_reports_file_errors(
 
 
 @pytest.mark.parametrize(
-    "extra_args",
+    "selectors,expected",
     [
-        pytest.param([], id="native"),
-        pytest.param(["zlib"], id="extra-specs"),
-        pytest.param(["--format", "environment-yaml"], id="exporter"),
+        pytest.param(
+            [],
+            [
+                ("default", "linux-64"),
+                ("default", "osx-arm64"),
+                ("test", "linux-64"),
+                ("test", "osx-arm64"),
+            ],
+            id="all-environments",
+        ),
+        pytest.param(
+            ["-e", "test", "-p", "osx-arm64"],
+            [("test", "osx-arm64")],
+            id="selected-environment",
+        ),
     ],
 )
-def test_workspace_solve_is_rejected_before_solver(
-    run_cli, workspace_manifest_path, extra_args, monkeypatch, capsys
+@pytest.mark.parametrize("output_format", [None, "conda-workspaces-lock-v1"])
+def test_workspace_solve_uses_selected_targets(
+    run_cli, workspace_manifest_path, monkeypatch, selectors, expected, output_format
+):
+    calls = []
+
+    def validate(self, format_name):
+        calls.append(("validate", format_name))
+
+    def solve(self, format_name=None):
+        pairs = [
+            (target.environment, target.platform) for target in self.result.selected
+        ]
+        calls.append(("solve", format_name, pairs))
+        if format_name is not None:
+            return "locked output\n", "application/yaml"
+        return [
+            {
+                "environment": target.environment,
+                "platform": target.platform,
+                "subdir": target.subdir,
+                "packages": [],
+                "error": None,
+            }
+            for target in self.result.selected
+        ]
+
+    monkeypatch.setattr(WorkspaceInput, "validate_output", validate)
+    monkeypatch.setattr(WorkspaceInput, "solve", solve)
+    arguments = ["-f", str(workspace_manifest_path), *selectors]
+    if output_format is not None:
+        arguments.extend(["--format", output_format])
+    output = run_cli(*arguments)
+    assert calls == [
+        ("validate", output_format),
+        ("solve", output_format, expected),
+    ]
+    if output_format is not None:
+        assert output == "locked output\n"
+    else:
+        assert [
+            (row["environment"], row["platform"]) for row in json.loads(output)
+        ] == expected
+
+
+@pytest.mark.parametrize(
+    "arguments,message",
+    [
+        pytest.param(["zlib"], "inline package specs", id="inline-specs"),
+        pytest.param(["-c", "defaults"], "channel overrides", id="channel"),
+        pytest.param(["--override-channels"], "channel overrides", id="override"),
+        pytest.param(["--use-local"], "channel overrides", id="local"),
+        pytest.param(["-f", "WORKSPACE"], "exactly one --file", id="multiple-files"),
+    ],
+)
+def test_workspace_solve_rejects_mixed_inputs(
+    run_cli, workspace_manifest_path, monkeypatch, capsys, arguments, message
 ):
     def unexpected_solve(*args, **kwargs):
-        pytest.fail("Workspace input reached the solver")
+        pytest.fail("Rejected workspace input reached the solver")
 
-    monkeypatch.setattr("conda_presto.cli.solve", unexpected_solve)
-    monkeypatch.setattr("conda_presto.cli.solve_environments", unexpected_solve)
+    monkeypatch.setattr(WorkspaceInput, "solve", unexpected_solve)
+    arguments = [
+        str(workspace_manifest_path) if argument == "WORKSPACE" else argument
+        for argument in arguments
+    ]
     with pytest.raises(SystemExit, match="1"):
-        run_cli("-f", str(workspace_manifest_path), *extra_args)
-    assert "Workspace solving is not supported yet" in capsys.readouterr().err
+        run_cli("-f", str(workspace_manifest_path), *arguments)
+    assert message in capsys.readouterr().err
+
+
+def test_workspace_output_validation_precedes_solving(
+    run_cli, workspace_manifest_path, monkeypatch, capsys
+):
+    def reject(self, format_name):
+        raise ValueError("This exporter requires one environment")
+
+    def unexpected_solve(*args, **kwargs):
+        pytest.fail("Unsupported output reached the solver")
+
+    monkeypatch.setattr(WorkspaceInput, "validate_output", reject)
+    monkeypatch.setattr(WorkspaceInput, "solve", unexpected_solve)
+    with pytest.raises(SystemExit, match="1"):
+        run_cli("-f", str(workspace_manifest_path), "--format", "environment-yaml")
+    assert "This exporter requires one environment" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize(
+    "selectors,message",
+    [
+        pytest.param(
+            ["-e", "missing"], "Unknown workspace environment", id="environment"
+        ),
+        pytest.param(["-p", "win-64"], "Unknown workspace platform", id="platform"),
+    ],
+)
+def test_workspace_solve_preserves_selection_errors(
+    run_cli, workspace_manifest_path, capsys, selectors, message
+):
+    with pytest.raises(SystemExit, match="1"):
+        run_cli("-f", str(workspace_manifest_path), *selectors)
+    error = capsys.readouterr().err
+    assert message in error
+    assert "No environment spec plugin" not in error
+
+
+def test_workspace_solve_preserves_malformed_manifest_error(run_cli, tmp_path, capsys):
+    path = tmp_path / "conda.toml"
+    path.write_text("[workspace\n")
+    with pytest.raises(SystemExit, match="1"):
+        run_cli("-f", str(path))
+    error = capsys.readouterr().err
+    assert "Input error:" in error
+    assert "No environment spec plugin" not in error
+    assert str(tmp_path) not in error
+    assert "Traceback" not in error
+
+
+def test_workspace_solve_reports_failed_pair(
+    run_cli, workspace_manifest_path, monkeypatch, capsys
+):
+    def fail(self, format_name=None):
+        raise WorkspaceSolveError("test", "linux-64", "Packages unavailable")
+
+    monkeypatch.setattr(WorkspaceInput, "solve", fail)
+    with pytest.raises(SystemExit, match="1"):
+        run_cli("-f", str(workspace_manifest_path), "-e", "test", "-p", "linux-64")
+    error = capsys.readouterr().err
+    assert "Environment 'test' on 'linux-64': Packages unavailable" in error
+    assert "Traceback" not in error
+
+
+def test_environment_selection_requires_workspace_input(
+    run_cli, environment_yml_path, capsys
+):
+    with pytest.raises(SystemExit, match="1"):
+        run_cli("-f", str(environment_yml_path), "-e", "test")
+    assert (
+        "Environment selection requires a workspace manifest" in capsys.readouterr().err
+    )
 
 
 @pytest.mark.parametrize(
@@ -390,7 +533,7 @@ def test_load_parsed_files_unhandled(tmp_path, monkeypatch, capsys):
     )
     with pytest.raises(SystemExit, match="1"):
         load_parsed_files([str(bad)])
-    assert "No environment spec plugin can handle" in capsys.readouterr().err
+    assert "No conda environment spec plugin can handle" in capsys.readouterr().err
 
 
 def test_execute_serve_branch(monkeypatch):

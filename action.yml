@@ -6,20 +6,22 @@ branding:
 
 inputs:
   file:
-    description: Path to an environment file (environment.yml, pixi.lock, etc.)
+    description: Path to an environment or workspace file (environment.yml, conda.toml, etc.)
     required: false
   specs:
     description: Comma-separated package specs (e.g. "python=3.12,numpy")
     required: false
   channels:
-    description: Comma-separated channels (default conda-forge)
+    description: Comma-separated channels for ordinary solves (omitted uses file or service defaults)
     required: false
-    default: conda-forge
+  environments:
+    description: Comma-separated workspace environment names (omitted selects all)
+    required: false
   platforms:
-    description: Comma-separated target platforms (e.g. "linux-64,osx-arm64")
+    description: Comma-separated conda subdirectories or workspace target names
     required: false
   format:
-    description: Output format (explicit, environment-yaml, conda-lock-v1, pixi-lock-v6, etc.)
+    description: Output format (explicit, conda-workspaces-lock-v1, conda-toml, etc.)
     required: false
   output:
     description: Path to write the response body to
@@ -46,6 +48,7 @@ runs:
         INPUT_FILE: ${{ inputs.file }}
         INPUT_SPECS: ${{ inputs.specs }}
         INPUT_CHANNELS: ${{ inputs.channels }}
+        INPUT_ENVIRONMENTS: ${{ inputs.environments }}
         INPUT_PLATFORMS: ${{ inputs.platforms }}
         INPUT_FORMAT: ${{ inputs.format }}
         INPUT_ENDPOINT: ${{ inputs.endpoint }}
@@ -92,6 +95,11 @@ runs:
         if [[ -n "${INPUT_CHANNELS:-}" ]]; then
           body=$(printf '%s' "${body}" | jq --arg value "${INPUT_CHANNELS}" \
             '. + {channels: ($value | split(","))}')
+        fi
+
+        if [[ -n "${INPUT_ENVIRONMENTS:-}" ]]; then
+          body=$(printf '%s' "${body}" | jq --arg value "${INPUT_ENVIRONMENTS}" \
+            '. + {environments: ($value | split(","))}')
         fi
 
         if [[ -n "${INPUT_PLATFORMS:-}" ]]; then

@@ -1,8 +1,8 @@
-# Parse a workspace manifest
+# Parse and solve a workspace manifest
 
-Discover the environments in a workspace and inspect their requirements for
-selected platforms. This operation reads declarations without solving or
-installing packages. Workspace parsing uses the conda-workspaces revision pinned
+Discover the environments in a workspace, inspect their requirements and
+solve selected targets into a combined lock. Parse mode reads declarations
+without solving. Workspace parsing uses the conda-workspaces revision pinned
 in `pyproject.toml` until its parser fixes are released.
 
 ## Create a manifest
@@ -89,6 +89,54 @@ mean each selected environment's declared platforms. Supply a platform
 explicitly when the manifest declares none. Empty, unknown or ambiguous
 selectors produce an error.
 
+## Solve selected environments
+
+Create one lock containing the default and test environments on both platforms:
+
+```bash
+conda presto --file conda.toml \
+  --environment default --environment test \
+  --platform linux-64 --platform osx-arm64 \
+  --format conda-workspaces-lock-v1 > conda.lock
+```
+
+The lock contains four environment/target solutions. A failed pair prevents
+a successful incomplete lock. Omitting both selectors solves all declared
+environments and targets.
+
+The HTTP API accepts the same selection through repeated query parameters
+when uploading raw TOML:
+
+```bash
+curl --fail-with-body --silent --show-error \
+  --header 'Content-Type: application/toml' \
+  --data-binary @conda.toml \
+  'http://127.0.0.1:8000/resolve?filename=conda.toml&environment=default&environment=test&platform=linux-64&platform=osx-arm64&format=conda-workspaces-lock-v1' \
+  --output conda.lock
+```
+
+JSON requests use `environments` and `platforms` arrays alongside `file`
+and `filename`. Successful eligible responses include a `Location` for the
+retained exact output. See {doc}`../reference/http-api`.
+
+## Export normalized dependencies
+
+Select one environment to write its composed requirements as a new manifest:
+
+```bash
+mkdir -p exported
+conda presto --file conda.toml --environment test \
+  --platform linux-64 --platform osx-arm64 \
+  --format conda-toml > exported/conda.toml
+```
+
+The exporter separates shared and target-specific dependencies. It does not
+preserve the original feature organization, comments, tasks or every workspace
+setting. This is a normalized dependency manifest, not a fully pinned lock.
+The `pixi-toml` and `pyproject-toml` formats provide equivalent output in their
+supported syntax. Selected targets must have distinct concrete subdirectories
+and identical ordered channels.
+
 ## Understand the result
 
 `platform` preserves a workspace target's logical name and `subdir` identifies
@@ -101,8 +149,12 @@ that need missing optional conda-pypi support are reported as errors. The
 number of selected environment/platform combinations uses the configured
 platform limit, with specs and channels limits applied to each target.
 
-Workspace solving is not available yet. `/resolve`, `/sbom` and normal CLI
-solves reject workspace manifests. `/capabilities` reports
-`workspace_parse: true` and `workspace_solve: false`. See
-{doc}`../reference/http-api` for response fields and
-{doc}`../reference/cli` for parse-mode options.
+Omit the solve format to receive native JSON with an `environment`, logical
+`platform`, concrete `subdir`, package list and error field for each target.
+Workspace solves use the manifest's requirements and channels, so additional
+inline specs, channel overrides and multiple input files are rejected.
+
+Workspace SBOM requests are not supported yet. `/sbom` still rejects workspace
+manifests. `/capabilities` reports `workspace_parse: true` and
+`workspace_solve: true`. See {doc}`../reference/http-api` for response fields,
+{doc}`../reference/cli` for options and {doc}`use-github-action` for CI use.

@@ -14,6 +14,7 @@ from conda.models.environment import Environment
 import conda_presto.worker as worker_module
 from conda_presto.exceptions import CredentialRedactionFilter
 from conda_presto.resolve import SolveResult
+from conda_presto.workspace import WorkspaceInput
 
 
 @pytest.fixture()
@@ -657,6 +658,59 @@ def test_persistent_solve_worker_entrypoint_handles_exporters(monkeypatch):
     )
 
     assert sent == [("ready", None), ("ok", ("output", "text/plain")), "closed"]
+
+
+@pytest.mark.parametrize("failure", [False, True], ids=["success", "failed-target"])
+def test_persistent_worker_dispatches_workspace_and_preserves_failure(
+    monkeypatch, workspace_manifest_path, failure
+):
+    workspace = WorkspaceInput.from_path(workspace_manifest_path).select(["test"])
+    sent = []
+    requests = iter([([], [], None, "conda-workspaces-lock-v1", workspace), None])
+    connection = SimpleNamespace(
+        recv=lambda: next(requests),
+        send=sent.append,
+        close=lambda: sent.append("closed"),
+    )
+
+    def solve(self, format_name=None):
+        assert self is workspace
+        assert format_name == "conda-workspaces-lock-v1"
+        if failure:
+            raise worker_module.WorkspaceSolveError("test", "linux-64", "Unavailable")
+        return "lock bytes", "application/yaml"
+
+    monkeypatch.setattr(WorkspaceInput, "solve", solve)
+    monkeypatch.setattr(worker_module, "warmup", lambda *_: None)
+    monkeypatch.setattr(worker_module, "shutdown_process_pool", lambda: None)
+    worker_module.persistent_solve_worker_entrypoint(connection, [], [])
+    expected = (
+        ("workspace-error", ("test", "linux-64", "Unavailable"))
+        if failure
+        else ("ok", ("lock bytes", "application/yaml"))
+    )
+    assert sent == [("ready", None), expected, "closed"]
+
+
+def test_persistent_worker_returns_structured_workspace_error(
+    persistent_solve_worker, workspace_manifest_path
+):
+    workspace = WorkspaceInput.from_path(workspace_manifest_path).select(["test"])
+    worker, calls = persistent_solve_worker(
+        [("ready", None), ("workspace-error", ("test", "linux-64", "Unavailable"))]
+    )
+    with pytest.raises(worker_module.WorkspaceSolveError) as raised:
+        worker.solve(
+            [],
+            [],
+            None,
+            "conda-workspaces-lock-v1",
+            time.monotonic() + 10,
+            workspace=workspace,
+        )
+    assert raised.value.environment == "test"
+    assert raised.value.platform == "linux-64"
+    assert calls[-1] == ("send", ([], [], None, "conda-workspaces-lock-v1", workspace))
 
 
 @pytest.mark.parametrize(

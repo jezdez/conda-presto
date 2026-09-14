@@ -45,9 +45,11 @@ from conda_presto.app import (
     version,
 )
 from conda_presto.cache import ResultCache
+from conda_presto.exceptions import WorkspaceSolveError
 from conda_presto.inputs import ParsedInputFile
 from conda_presto.resolve import RepodataSnapshot, SolveResult
 from conda_presto.storage import StoreOperationCoordinator
+from conda_presto.workspace import WorkspaceInput, WorkspaceSolveResult
 
 
 @pytest.fixture()
@@ -2496,9 +2498,8 @@ async def test_parse_rejects_workspace_selectors_for_ordinary_files(client, sele
 
 @pytest.mark.anyio
 @pytest.mark.parametrize(
-    "endpoint", ["/resolve", "/resolve?format=environment-yaml", "/sbom"]
+    "endpoint,extra_specs", [("/resolve", ["zlib"]), ("/sbom", []), ("/sbom", ["zlib"])]
 )
-@pytest.mark.parametrize("extra_specs", [[], ["zlib"]])
 async def test_http_workspace_solve_is_rejected_before_cache(
     client, workspace_manifest_text, monkeypatch, endpoint, extra_specs
 ):
@@ -2516,7 +2517,7 @@ async def test_http_workspace_solve_is_rejected_before_cache(
         },
     )
     assert response.status_code == 400
-    assert "Workspace solving is not supported yet" in response.text
+    assert "Workspace" in response.text
 
 
 def test_spawned_workspace_parse_retains_full_config(workspace_manifest_text):
@@ -2537,6 +2538,149 @@ def test_spawned_workspace_parse_retains_full_config(workspace_manifest_text):
     )
     assert parsed.specs == []
     assert parsed.channels == []
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("raw", [False, True], ids=["json", "raw-toml"])
+async def test_workspace_solve_selectors_reach_worker(
+    client, workspace_manifest_text, monkeypatch, raw
+):
+    calls = []
+
+    async def record(
+        request, specs, channels, platforms, format_name=None, workspace=None
+    ):
+        calls.append((workspace, specs, channels, platforms, format_name))
+        return app_module.Response({"received": True})
+
+    monkeypatch.setattr(app_module, "run_cached_solve", record)
+    url = "/resolve?environment=test&platform=osx-arm64&format=conda-workspaces-lock-v1"
+    if raw:
+        response = await client.post(
+            url + "&filename=conda.toml",
+            content=workspace_manifest_text,
+            headers={"Content-Type": "application/toml"},
+        )
+        expected = [("test", "osx-arm64")]
+    else:
+        response = await client.post(
+            url,
+            json={
+                "file": workspace_manifest_text,
+                "filename": "conda.toml",
+                "environments": ["default"],
+                "platforms": ["linux-64"],
+            },
+        )
+        expected = [("default", "linux-64")]
+    assert response.status_code == 200, response.text
+    workspace, specs, channels, platforms, format_name = calls[0]
+    assert [
+        (target.environment, target.platform) for target in workspace.result.selected
+    ] == expected
+    assert "zlib" in specs
+    assert channels == ["conda-forge"]
+    assert platforms == [expected[0][1]]
+    assert format_name == "conda-workspaces-lock-v1"
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    "fields,format_name",
+    [
+        ({"environments": []}, None),
+        ({"platforms": []}, None),
+        ({"environments": ["missing"]}, None),
+        ({"channels": ["conda-forge"]}, None),
+        ({}, "conda-toml"),
+    ],
+    ids=[
+        "empty-environments",
+        "empty-platforms",
+        "unknown-environment",
+        "override-channels",
+        "multiple-environments-export",
+    ],
+)
+async def test_workspace_solve_rejects_selection_before_worker(
+    client, workspace_manifest_text, monkeypatch, fields, format_name
+):
+    def unexpected_solve(*args, **kwargs):
+        pytest.fail("Invalid selection reached the solver")
+
+    monkeypatch.setattr(WorkspaceInput, "solve", unexpected_solve)
+    response = await client.post(
+        "/resolve" + (f"?format={format_name}" if format_name else ""),
+        json={"file": workspace_manifest_text, "filename": "conda.toml", **fields},
+    )
+    assert response.status_code == 400, response.text
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("format_name", [None, "conda-workspaces-lock-v1"])
+async def test_workspace_solve_retains_exact_output_and_uses_matrix_cache(
+    client, workspace_manifest_text, monkeypatch, format_name
+):
+    calls = []
+    snapshot_options = []
+    snapshot = RepodataSnapshot(
+        (("https://example.org", "repodata.json", 1, 1),), False
+    )
+
+    def capture(*args, **kwargs):
+        snapshot_options.append(kwargs)
+        return snapshot
+
+    monkeypatch.setattr(RepodataSnapshot, "capture", capture)
+    monkeypatch.setattr(
+        WorkspaceInput, "repodata_options", staticmethod(lambda: {"use_shards": True})
+    )
+
+    def solve(self, format_name=None):
+        calls.append(self.result.selected)
+        if format_name:
+            return "version: 1\nenvironments: {}\npackages: []\n", "application/yaml"
+        return [
+            WorkspaceSolveResult(t.environment, t.platform, t.subdir, [])
+            for t in self.result.selected
+        ]
+
+    monkeypatch.setattr(WorkspaceInput, "solve", solve)
+    url = "/resolve" + (f"?format={format_name}" if format_name else "")
+    body = {"file": workspace_manifest_text, "filename": "conda.toml"}
+    first = await client.post(url, json=body)
+    second = await client.post(url, json=body)
+    assert first.status_code == second.status_code == 200, first.text
+    assert len(calls) == 1
+    assert len(calls[0]) == 4
+    retained = await client.get(first.headers["location"])
+    assert retained.content == second.content == first.content
+    third = await client.post(url, json={**body, "environments": ["test"]})
+    assert third.status_code == 200, third.text
+    assert len(calls) == 2
+    assert snapshot_options
+    assert all(options.get("use_shards") is True for options in snapshot_options)
+
+
+@pytest.mark.anyio
+async def test_workspace_export_failure_identifies_pair_without_retention(
+    client, workspace_manifest_text, monkeypatch
+):
+    def fail(self, format_name=None):
+        raise WorkspaceSolveError("test", "osx-arm64", "Packages unavailable")
+
+    monkeypatch.setattr(WorkspaceInput, "solve", fail)
+    response = await client.post(
+        "/resolve?format=conda-workspaces-lock-v1",
+        json={"file": workspace_manifest_text, "filename": "conda.toml"},
+    )
+    assert response.status_code == 500, response.text
+    assert response.json() == {
+        "error": "Packages unavailable",
+        "environment": "test",
+        "platform": "osx-arm64",
+    }
+    assert "location" not in response.headers
 
 
 @pytest.mark.anyio
@@ -3302,7 +3446,7 @@ async def test_capabilities_separates_provider_and_signing_configuration(
     response = await client.get("/capabilities")
     assert response.json() == {
         "workspace_parse": True,
-        "workspace_solve": False,
+        "workspace_solve": True,
         "sbom": True,
         "verify": installed,
         "sign": installed and enabled and not offline,
