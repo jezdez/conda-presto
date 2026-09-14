@@ -1,4 +1,4 @@
-# Check a workspace lock against its manifest
+# Validate a workspace lock against its manifest
 
 Use a saved workspace `conda.lock` to check whether every declared environment and target still satisfies its manifest. This is useful after changing dependencies or channels and before accepting a lock in CI. Start with the `conda.toml` and combined lock from {doc}`parse-workspace`.
 
@@ -7,7 +7,7 @@ Use a saved workspace `conda.lock` to check whether every declared environment a
 Run the check with both input files:
 
 ```bash
-conda presto --check-lock --file conda.lock --manifest conda.toml
+conda presto --validate --file conda.lock --manifest conda.toml
 ```
 
 The standalone `conda-presto` command accepts the same options. The manifest can also be a supported `pixi.toml` or `pyproject.toml`. Keep the saved lock's filename `conda.lock` so the parser selects the workspace lock format.
@@ -28,7 +28,7 @@ Save the report while preserving the command's result:
 
 ```bash
 status=0
-conda-presto --check-lock --file conda.lock --manifest conda.toml \
+conda-presto --validate --file conda.lock --manifest conda.toml \
   > lock-check.json || status=$?
 cat lock-check.json
 exit "$status"
@@ -44,4 +44,4 @@ Virtual package versions come from the target's system requirements, falling bac
 
 Only self-contained conda package records are supported. PyPI dependencies, external package references and `archspec` system requirements fail as unsupported input. A passing result does not establish that packages are current, that downloaded payloads match their metadata or that the environment has no vulnerabilities.
 
-The same operation is available through {doc}`POST /check-lock <../reference/http-api>` for systems that use Presto remotely.
+The same operation is available through {doc}`POST /validate <../reference/http-api>` for systems that use Presto remotely.

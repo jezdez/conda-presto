@@ -185,30 +185,30 @@ def test_parse_workspace_matches_bounded_parser(
             id="manifest-with-serve",
         ),
         pytest.param(
-            ["--check-lock"], "exactly one --file", 2, id="check-missing-file"
+            ["--validate"], "exactly one --file", 2, id="validate-missing-file"
         ),
         pytest.param(
-            ["--check-lock", "-f", "one", "-f", "two", "--manifest", "conda.toml"],
+            ["--validate", "-f", "one", "-f", "two", "--manifest", "conda.toml"],
             "exactly one --file",
             2,
-            id="check-multiple-files",
+            id="validate-multiple-files",
         ),
         pytest.param(
-            ["--check-lock", "-f", "conda.lock"],
+            ["--validate", "-f", "conda.lock"],
             "requires --manifest",
             2,
-            id="check-missing-manifest",
+            id="validate-missing-manifest",
         ),
         pytest.param(
-            ["--check-lock", "-f", "conda.lock", "--manifest", "conda.toml", "zlib"],
+            ["--validate", "-f", "conda.lock", "--manifest", "conda.toml", "zlib"],
             "inline package specs",
             2,
-            id="check-inline-specs",
+            id="validate-inline-specs",
         ),
         *[
             pytest.param(
                 [
-                    "--check-lock",
+                    "--validate",
                     "-f",
                     "conda.lock",
                     "--manifest",
@@ -217,7 +217,7 @@ def test_parse_workspace_matches_bounded_parser(
                 ],
                 message,
                 2,
-                id=f"check-{name}",
+                id=f"validate-{name}",
             )
             for name, option, message in (
                 ("channel", ["-c", "defaults"], "channel overrides"),
@@ -244,7 +244,7 @@ def test_parse_rejects_incompatible_arguments(
 
 @pytest.mark.parametrize(
     "mode,exit_code",
-    [("--parse", 1), ("--export", 1), ("--check-lock", 2)],
+    [("--parse", 1), ("--export", 1), ("--validate", 2)],
 )
 def test_parse_timeout_exits_cleanly(
     run_cli,
@@ -258,7 +258,7 @@ def test_parse_timeout_exits_cleanly(
     monkeypatch.setattr("conda_presto.cli.PARSE_TIMEOUT_S", 0)
     extra = (
         ["--manifest", str(workspace_manifest_path)]
-        if mode == "--check-lock"
+        if mode == "--validate"
         else ["--format", "explicit"]
         if mode == "--export"
         else []
@@ -281,7 +281,7 @@ def test_parse_timeout_exits_cleanly(
 )
 @pytest.mark.parametrize(
     "mode,exit_code",
-    [("--parse", 1), ("--export", 1), ("--check-lock", 2)],
+    [("--parse", 1), ("--export", 1), ("--validate", 2)],
 )
 def test_parse_reports_file_errors(
     run_cli,
@@ -299,7 +299,7 @@ def test_parse_reports_file_errors(
         path.write_bytes(content if isinstance(content, bytes) else content.encode())
     extra = (
         ["--manifest", str(workspace_manifest_path)]
-        if mode == "--check-lock"
+        if mode == "--validate"
         else ["--format", "explicit"]
         if mode == "--export"
         else []
@@ -616,7 +616,7 @@ def test_companion_manifest_requires_workspace_lock_input(
 @pytest.mark.parametrize(
     "content,message", [(None, "Cannot read input file"), (b"\xff", "not valid UTF-8")]
 )
-@pytest.mark.parametrize("mode,exit_code", [("--export", 1), ("--check-lock", 2)])
+@pytest.mark.parametrize("mode,exit_code", [("--export", 1), ("--validate", 2)])
 def test_parse_reports_companion_manifest_file_errors(
     run_cli, workspace_lock_path, tmp_path, capsys, content, message, mode, exit_code
 ):
@@ -639,7 +639,7 @@ def test_parse_reports_companion_manifest_file_errors(
 
 
 @pytest.mark.parametrize("consistent", [True, False], ids=["consistent", "mismatch"])
-def test_check_lock_reports_all_targets_without_changing_inputs(
+def test_validate_reports_all_targets_without_changing_inputs(
     run_cli,
     workspace_consistent_lock_path,
     workspace_consistent_manifest_text,
@@ -669,7 +669,7 @@ def test_check_lock_reports_all_targets_without_changing_inputs(
     monkeypatch.setattr("conda_presto.cli.solve", unexpected_solve)
     monkeypatch.setattr("conda_presto.cli.solve_environments", unexpected_solve)
     arguments = (
-        "--check-lock",
+        "--validate",
         "-f",
         str(workspace_consistent_lock_path),
         "--manifest",

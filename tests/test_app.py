@@ -29,7 +29,6 @@ import conda_presto.inputs as inputs_module
 from conda_presto.app import (
     build_cors_config,
     capabilities,
-    check_lock_post,
     export_post,
     formats,
     health,
@@ -43,6 +42,7 @@ from conda_presto.app import (
     sign_post,
     solver_resources_lifespan,
     transcode_post,
+    validate_post,
     verify_post,
     version,
 )
@@ -63,7 +63,7 @@ def test_app():
             resolve_post,
             export_post,
             transcode_post,
-            check_lock_post,
+            validate_post,
             sbom_post,
             sign_post,
             verify_post,
@@ -2158,7 +2158,7 @@ async def test_openapi_schema(client):
         != data["paths"]["/transcode"]["post"]["operationId"]
     )
     assert "/parse" in data["paths"]
-    assert "/check-lock" in data["paths"]
+    assert "/validate" in data["paths"]
     assert "/r/{key}" in data["paths"]
     assert "/health" in data["paths"]
     assert "/solver/v1" not in data["paths"]
@@ -2184,10 +2184,10 @@ async def test_openapi_schema(client):
         "WorkspaceLockParseResult",
     }
     assert {"400", "504"} <= parse_operation["responses"].keys()
-    check_operation = data["paths"]["/check-lock"]["post"]
+    check_operation = data["paths"]["/validate"]["post"]
     assert check_operation["requestBody"]["content"]["application/json"]["schema"][
         "$ref"
-    ].endswith("/CheckLockRequest")
+    ].endswith("/ValidateRequest")
     assert check_operation["responses"]["200"]["content"]["application/json"]["schema"][
         "$ref"
     ].endswith("/WorkspaceLockCheckResult")
@@ -3361,7 +3361,7 @@ async def test_check_lock_reports_every_target_without_solving_or_retention(
             ]
         check_lock_request["file"] = yaml.safe_dump(workspace_consistent_lock_data)
 
-    response = await client.post("/check-lock", json=check_lock_request)
+    response = await client.post("/validate", json=check_lock_request)
 
     assert response.status_code == 200, response.text
     assert response.headers["cache-control"] == "no-store"
@@ -3406,7 +3406,7 @@ async def test_check_lock_rejects_invalid_inputs(
     client, check_lock_request, field, value
 ):
     check_lock_request[field] = value
-    response = await client.post("/check-lock", json=check_lock_request)
+    response = await client.post("/validate", json=check_lock_request)
     assert response.status_code == 400, response.text
     assert response.headers["cache-control"] == "no-store"
     assert "error" in response.json()
@@ -3420,7 +3420,7 @@ async def test_check_lock_rejects_malformed_record_dependencies(
 ):
     workspace_consistent_lock_data["packages"][0]["depends"] = depends
     check_lock_request["file"] = yaml.safe_dump(workspace_consistent_lock_data)
-    response = await client.post("/check-lock", json=check_lock_request)
+    response = await client.post("/validate", json=check_lock_request)
     assert response.status_code == 400, response.text
     assert response.headers["cache-control"] == "no-store"
     assert "error" in response.json()
@@ -3431,7 +3431,7 @@ async def test_check_lock_rejects_malformed_record_dependencies(
 @pytest.mark.parametrize("content_type", ["text/plain", "application/yaml"])
 async def test_check_lock_requires_json(client, check_lock_request, content_type):
     response = await client.post(
-        "/check-lock",
+        "/validate",
         content=json.dumps(check_lock_request),
         headers={"Content-Type": content_type},
     )
@@ -3448,7 +3448,7 @@ async def test_check_lock_requires_both_named_files(
         del check_lock_request[field]
     else:
         check_lock_request[field] = value
-    response = await client.post("/check-lock", json=check_lock_request)
+    response = await client.post("/validate", json=check_lock_request)
     assert response.status_code == 400, response.text
 
 
@@ -3469,7 +3469,7 @@ async def test_check_lock_rejects_overrides_before_parsing(
         check_lock_request[field] = [] if field != "format" else "json"
     else:
         params = {field.rstrip("s"): "override"}
-    response = await client.post("/check-lock", json=check_lock_request, params=params)
+    response = await client.post("/validate", json=check_lock_request, params=params)
     assert response.status_code == 400, response.text
 
 
@@ -3484,7 +3484,7 @@ async def test_check_lock_uses_the_bounded_parser(
         raise TimeoutError
 
     monkeypatch.setattr(app_module.ParsedInputFile, "from_content_until", timed_out)
-    response = await client.post("/check-lock", json=check_lock_request)
+    response = await client.post("/validate", json=check_lock_request)
     assert response.status_code == 504, response.text
     assert response.headers["cache-control"] == "no-store"
     assert "timeout" in response.json()["error"].lower()
