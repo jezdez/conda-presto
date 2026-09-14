@@ -29,6 +29,7 @@ import conda_presto.inputs as inputs_module
 from conda_presto.app import (
     build_cors_config,
     capabilities,
+    check_lock_post,
     export_post,
     formats,
     health,
@@ -62,6 +63,7 @@ def test_app():
             resolve_post,
             export_post,
             transcode_post,
+            check_lock_post,
             sbom_post,
             sign_post,
             verify_post,
@@ -2156,6 +2158,7 @@ async def test_openapi_schema(client):
         != data["paths"]["/transcode"]["post"]["operationId"]
     )
     assert "/parse" in data["paths"]
+    assert "/check-lock" in data["paths"]
     assert "/r/{key}" in data["paths"]
     assert "/health" in data["paths"]
     assert "/solver/v1" not in data["paths"]
@@ -2181,6 +2184,14 @@ async def test_openapi_schema(client):
         "WorkspaceLockParseResult",
     }
     assert {"400", "504"} <= parse_operation["responses"].keys()
+    check_operation = data["paths"]["/check-lock"]["post"]
+    assert check_operation["requestBody"]["content"]["application/json"]["schema"][
+        "$ref"
+    ].endswith("/CheckLockRequest")
+    assert check_operation["responses"]["200"]["content"]["application/json"]["schema"][
+        "$ref"
+    ].endswith("/WorkspaceLockCheckResult")
+    assert {"400", "504"} <= check_operation["responses"].keys()
     assert {"file", "environments", "platforms", "manifest", "manifest_filename"} <= (
         data["components"]["schemas"]["SbomRequest"]["properties"].keys()
     )
@@ -3307,6 +3318,179 @@ async def test_parse_endpoint_empty_body(client):
 
 
 @pytest.fixture()
+def check_lock_request(
+    workspace_consistent_lock_text, workspace_consistent_manifest_text
+):
+    return {
+        "file": workspace_consistent_lock_text,
+        "filename": "conda.lock",
+        "manifest": workspace_consistent_manifest_text,
+        "manifest_filename": "conda.toml",
+    }
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    "mismatch", [None, "dependency", "manifest", "channel-strings"]
+)
+async def test_check_lock_reports_every_target_without_solving_or_retention(
+    client,
+    monkeypatch,
+    test_app,
+    check_lock_request,
+    workspace_consistent_lock_data,
+    mismatch,
+):
+    def fail(*args, **kwargs):
+        raise AssertionError("consistency checking must not solve or retain artifacts")
+
+    monkeypatch.setattr(app_module, "solve", fail)
+    monkeypatch.setattr(app_module, "solve_environments", fail)
+    monkeypatch.setattr(test_app.state.result_cache, "remember", fail)
+    if mismatch == "dependency":
+        workspace_consistent_lock_data["packages"][0]["depends"] = ["missing >=1"]
+        check_lock_request["file"] = yaml.safe_dump(workspace_consistent_lock_data)
+    elif mismatch == "manifest":
+        check_lock_request["manifest"] = check_lock_request["manifest"].replace(
+            '"==1.0"', '"==2.0"'
+        )
+    elif mismatch == "channel-strings":
+        for environment in workspace_consistent_lock_data["environments"].values():
+            environment["channels"] = [
+                entry["url"] for entry in environment["channels"]
+            ]
+        check_lock_request["file"] = yaml.safe_dump(workspace_consistent_lock_data)
+
+    response = await client.post("/check-lock", json=check_lock_request)
+
+    assert response.status_code == 200, response.text
+    assert response.headers["cache-control"] == "no-store"
+    assert "location" not in response.headers
+    result = response.json()
+    assert result["consistent"] is (mismatch in (None, "channel-strings"))
+    targets = result["targets"]
+    assert {
+        (item["environment"], item["platform"], item["subdir"]) for item in targets
+    } == {
+        (environment, platform, subdir)
+        for environment in ("default", "test")
+        for platform, subdir in (
+            ("cpu", "linux-64"),
+            ("gpu", "linux-64"),
+            ("osx-arm64", "osx-arm64"),
+        )
+    }
+    for item in targets:
+        if mismatch == "manifest":
+            assert item["consistent"] is False
+            assert item["reason"]
+        elif mismatch == "dependency" and item["platform"] == "cpu":
+            assert item["consistent"] is False
+            assert "missing" in item["reason"]
+        else:
+            assert item["consistent"] is True
+            assert item["reason"] is None
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    "field, value",
+    [
+        pytest.param("file", "invalid", id="invalid-lock"),
+        pytest.param("filename", "pixi.lock", id="ordinary-lock"),
+        pytest.param("manifest", "[workspace", id="invalid-manifest"),
+        pytest.param("manifest_filename", "environment.yml", id="ordinary-manifest"),
+    ],
+)
+async def test_check_lock_rejects_invalid_inputs(
+    client, check_lock_request, field, value
+):
+    check_lock_request[field] = value
+    response = await client.post("/check-lock", json=check_lock_request)
+    assert response.status_code == 400, response.text
+    assert response.headers["cache-control"] == "no-store"
+    assert "error" in response.json()
+    assert "targets" not in response.json()
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("depends", ["invalid", [">=1"]])
+async def test_check_lock_rejects_malformed_record_dependencies(
+    client, check_lock_request, workspace_consistent_lock_data, depends
+):
+    workspace_consistent_lock_data["packages"][0]["depends"] = depends
+    check_lock_request["file"] = yaml.safe_dump(workspace_consistent_lock_data)
+    response = await client.post("/check-lock", json=check_lock_request)
+    assert response.status_code == 400, response.text
+    assert response.headers["cache-control"] == "no-store"
+    assert "error" in response.json()
+    assert "targets" not in response.json()
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("content_type", ["text/plain", "application/yaml"])
+async def test_check_lock_requires_json(client, check_lock_request, content_type):
+    response = await client.post(
+        "/check-lock",
+        content=json.dumps(check_lock_request),
+        headers={"Content-Type": content_type},
+    )
+    assert response.status_code == 400, response.text
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("field", ["file", "filename", "manifest", "manifest_filename"])
+@pytest.mark.parametrize("value", [None, "", []])
+async def test_check_lock_requires_both_named_files(
+    client, check_lock_request, field, value
+):
+    if value is None:
+        del check_lock_request[field]
+    else:
+        check_lock_request[field] = value
+    response = await client.post("/check-lock", json=check_lock_request)
+    assert response.status_code == 400, response.text
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    "field", ["specs", "channels", "platforms", "environments", "format"]
+)
+@pytest.mark.parametrize("source", ["body", "query"])
+async def test_check_lock_rejects_overrides_before_parsing(
+    client, monkeypatch, check_lock_request, field, source
+):
+    def fail(*args, **kwargs):
+        raise AssertionError("invalid requests must not start parsing")
+
+    monkeypatch.setattr(app_module.ParsedInputFile, "from_content_until", fail)
+    params = None
+    if source == "body":
+        check_lock_request[field] = [] if field != "format" else "json"
+    else:
+        params = {field.rstrip("s"): "override"}
+    response = await client.post("/check-lock", json=check_lock_request, params=params)
+    assert response.status_code == 400, response.text
+
+
+@pytest.mark.anyio
+async def test_check_lock_uses_the_bounded_parser(
+    client, monkeypatch, check_lock_request
+):
+    def timed_out(*args, **kwargs):
+        assert kwargs["check_lock"] is True
+        assert kwargs["manifest_content"] == check_lock_request["manifest"]
+        assert kwargs["manifest_filename"] == "conda.toml"
+        raise TimeoutError
+
+    monkeypatch.setattr(app_module.ParsedInputFile, "from_content_until", timed_out)
+    response = await client.post("/check-lock", json=check_lock_request)
+    assert response.status_code == 504, response.text
+    assert response.headers["cache-control"] == "no-store"
+    assert "timeout" in response.json()["error"].lower()
+
+
+@pytest.fixture()
 def inline_attestation(monkeypatch):
     def run_until(service, operation, *, deadline, **kwargs):
         if operation == "verify":
@@ -3552,6 +3736,7 @@ async def test_capabilities_separates_provider_and_signing_configuration(
         "workspace_solve": True,
         "workspace_lock_parse": True,
         "workspace_lock_export": True,
+        "workspace_lock_check": True,
         "workspace_lock_sbom": True,
         "export": True,
         "sbom": True,
