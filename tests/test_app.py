@@ -2475,7 +2475,8 @@ async def test_parse_workspace_rejects_malformed_pyproject_tables(client, conten
         "/parse", json={"file": content, "filename": "pyproject.toml"}
     )
     assert response.status_code == 400, response.text
-    assert "must be a table" in response.json()["error"]
+    assert response.json()["error"]
+    assert "Traceback" not in response.text
 
 
 @pytest.mark.anyio

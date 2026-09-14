@@ -2,8 +2,8 @@
 
 Discover the environments in a workspace, inspect their requirements and
 solve selected targets into a combined lock. Parse mode reads declarations
-without solving. Standard Presto installations include conda-workspaces
-0.9.0 or later for workspace support.
+without solving. Workspace parsing uses the conda-workspaces revision pinned
+in `pyproject.toml` until its parser fixes are released.
 
 ## Create a manifest
 

@@ -26,7 +26,8 @@ maintainers = [{ name = "Jannis Leidel", email = "jannis@leidel.info" }]
 requires-python = ">=3.13"
 dependencies = [
     # conda and conda-rattler-solver are supplied by the active conda environment.
-    "conda-workspaces>=0.9.0",
+    # Use the parser fixes until they are available in a release.
+    "conda-workspaces @ git+https://github.com/conda-incubator/conda-workspaces.git@1842215cacbdf772e1b13513f55fbc81dd73b913",
     "msgspec>=0.19",
 ]
 dynamic = ["version"]
@@ -52,6 +53,12 @@ conda-presto = "conda_presto.cli:main"
 
 [tool.hatch.version]
 source = "vcs"
+
+[tool.hatch.version.raw-options]
+dist_name = "conda-presto"
+
+[tool.hatch.metadata]
+allow-direct-references = true
 
 [tool.hatch.build.hooks.vcs]
 version-file = "conda_presto/_version.py"

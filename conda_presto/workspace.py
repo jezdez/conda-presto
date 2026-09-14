@@ -19,7 +19,6 @@ from conda.exceptions import CondaError
 from conda.models.environment import Environment, EnvironmentConfig
 from conda_workspaces.context import WorkspaceContext
 from conda_workspaces.manifests import PARSER_BY_FILENAME
-from conda_workspaces.manifests.toml import WorkspaceDependencyResolver
 from conda_workspaces.models import redact_channel_name
 from conda_workspaces.resolver import resolve_environment
 
@@ -121,25 +120,7 @@ class WorkspaceInput:
             raise ValueError("Unsupported workspace manifest filename")
         try:
             content = parser.read_manifest_text(path)
-            data = parser.parse_toml_text_with_redacted_errors(content, path).unwrap()
-            parser.validate_no_url_credentials(data, path, content=content)
-            source = data
-            if parser.format_alias == "pyproject":
-                tool = data.get("tool", {})
-                if not isinstance(tool, dict):
-                    raise ValueError("The pyproject tool configuration must be a table")
-                source = {}
-                for name in ("conda", "pixi"):
-                    section = tool.get(name, {})
-                    if not isinstance(section, dict):
-                        raise ValueError(
-                            f"The tool.{name} configuration must be a table"
-                        )
-                    if section.get("workspace"):
-                        source = section
-                        break
-            cls.validate_requirement_tables(source, path)
-            config = parser.parse_text(path, content)
+            config = parser.parse_text(path, content, reject_url_credentials=True)
             return cls.from_config(
                 config,
                 parser.exporter_format,
@@ -385,46 +366,6 @@ class WorkspaceInput:
                         )
                     )
         return output.render(environments) if output is not None else results
-
-    @staticmethod
-    def validate_requirement_tables(source: dict[str, Any], path: Path) -> None:
-        """Reject requirements that tolerant provider parsing would alter or omit."""
-        validator = WorkspaceDependencyResolver(path=path)
-        pending = [source, source.get("workspace", {})]
-        while pending:
-            table = pending.pop()
-            if not isinstance(table, dict):
-                continue
-            dependencies = table.get("dependencies", {})
-            if not isinstance(dependencies, dict):
-                raise ValueError("Conda dependencies must be a table")
-            for name, dependency in dependencies.items():
-                validator.reject_source_fields(name, dependency, "Conda dependencies")
-            pypi_dependencies = table.get("pypi-dependencies", {})
-            if not isinstance(pypi_dependencies, dict):
-                raise ValueError("PyPI dependencies must be a table")
-            for name, dependency in pypi_dependencies.items():
-                if not isinstance(dependency, (str, dict)):
-                    raise ValueError(
-                        f"PyPI dependency {name!r} must be a string or table"
-                    )
-            channels = table.get("channels", [])
-            if not isinstance(channels, list) or any(
-                not isinstance(channel, str)
-                and not (
-                    isinstance(channel, dict)
-                    and isinstance(channel.get("channel"), str)
-                )
-                for channel in channels
-            ):
-                raise ValueError(
-                    "Workspace channels must be a list of strings"
-                    " or tables with a string channel field"
-                )
-            for key in ("feature", "environments", "target"):
-                children = table.get(key, {})
-                if isinstance(children, dict):
-                    pending.extend(children.values())
 
     def target(self, name: str, platform: str, subdir: str) -> WorkspaceTarget:
         """Compose and validate one selected environment using the provider."""
