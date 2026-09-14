@@ -93,6 +93,7 @@ from .resolve import (
 from .storage import StoreOperationCoordinator
 from .worker import PersistentSolveWorker
 from .workspace import WorkspaceInput
+from .workspace_lock import WorkspaceLockParseResult
 
 log = logging.getLogger(__name__)
 
@@ -231,6 +232,16 @@ class ResolveRequest:
             if isinstance(parsed, Response):
                 return parsed
             parsed_file = parsed
+            if parsed_file.workspace_lock is not None and allow_lockfile:
+                return Response(
+                    ErrorResponse(
+                        error=(
+                            "Workspace lockfiles cannot be solved. "
+                            "Use POST /export to export their exact locked records."
+                        )
+                    ),
+                    status_code=HTTP_400_BAD_REQUEST,
+                )
             if parsed_file.workspace is not None:
                 if allow_lockfile and not specs and not channels:
                     try:
@@ -319,11 +330,12 @@ class ResolveRequest:
 
 @dataclass
 class TranscodeRequest:
-    """JSON body for ``POST /transcode``."""
+    """JSON body for exact lockfile conversion and export."""
 
     file: str | None = None
     filename: str | None = None
     platforms: list[str] | None = None
+    environments: list[str] | None = None
     specs: list[str] | None = None
     channels: list[str] | None = None
 
@@ -858,6 +870,8 @@ def transcode_rejection(
     target_platforms: list[str],
     has_extra_specs: bool,
     has_channel_override: bool,
+    *,
+    operation: Literal["transcode", "export"] = "transcode",
 ) -> Response:
     """Return a structured transcode rejection response."""
     reasons: list[str] = []
@@ -873,17 +887,18 @@ def transcode_rejection(
             )
         elif (
             output_format is not None
-            and output_format.is_lockfile
+            and (output_format.is_lockfile or operation == "export")
             and not has_extra_specs
             and not has_channel_override
         ):
             if parsed.transcoded_content is None:
                 reasons.append(
-                    "input lockfile format does not support no-download transcoding"
+                    "input lockfile format does not support no-download "
+                    + ("transcoding" if operation == "transcode" else "exporting")
                 )
     if output_format is None:
         reasons.append("no output format was requested")
-    elif not output_format.is_lockfile:
+    elif not output_format.is_lockfile and operation == "transcode":
         reasons.append("output format is not a lockfile")
     if has_extra_specs:
         reasons.append("additional specs require solving")
@@ -891,7 +906,11 @@ def transcode_rejection(
         reasons.append("channel overrides require solving")
     return Response(
         {
-            "error": "Request cannot be transcoded",
+            "error": (
+                "Request cannot be transcoded"
+                if operation == "transcode"
+                else "Request cannot be exported"
+            ),
             "reasons": reasons,
         },
         status_code=HTTP_400_BAD_REQUEST,
@@ -1016,7 +1035,7 @@ async def resolve_post(
 
 
 @post(
-    "/transcode",
+    ["/transcode", "/export"],
     status_code=200,
 )
 async def transcode_post(
@@ -1026,13 +1045,18 @@ async def transcode_post(
     platform: FromQuery[list[str] | None] = None,
     format: FromQuery[str | None] = None,
     filename: FromQuery[str | None] = None,
+    environment: FromQuery[list[str] | None] = None,
 ) -> Response:
-    """Convert one lockfile format to another without solving."""
+    """Convert or export exact locked records without solving or downloading."""
+    operation: Literal["transcode", "export"] = (
+        "export" if request.url.path == "/export" else "transcode"
+    )
     content_type, _ = request.content_type
 
     file_content: str | None = None
     file_name: str | None = None
-    platforms: list[str] = platform or []
+    platforms: list[str] | None = platform
+    environments = environment
     body_specs: list[str] = []
     body_channels: list[str] = []
 
@@ -1052,6 +1076,9 @@ async def transcode_post(
         file_content = data.file
         file_name = data.filename or filename
         platforms = data.platforms if data.platforms is not None else platforms
+        environments = (
+            data.environments if data.environments is not None else environments
+        )
         body_specs = data.specs or []
         body_channels = data.channels or []
     elif content_type in RAW_CONTENT_TYPE_EXTENSIONS:
@@ -1084,8 +1111,6 @@ async def transcode_post(
         )
 
     target_platforms = platforms or [NATIVE_SUBDIR]
-    if cap_error := validate_caps([], [], target_platforms):
-        return cap_error
 
     has_extra_specs = bool(spec) or bool(body_specs)
     has_channel_override = bool(channel) or bool(body_channels)
@@ -1105,12 +1130,13 @@ async def transcode_post(
             target_platforms,
             has_extra_specs,
             has_channel_override,
+            operation=operation,
         )
 
     transcode_format = (
         output_format.exporter.name
         if output_format is not None
-        and output_format.is_lockfile
+        and (output_format.is_lockfile or operation == "export")
         and not has_extra_specs
         and not has_channel_override
         else None
@@ -1119,21 +1145,45 @@ async def transcode_post(
         request,
         file_content,
         file_name,
-        target_platforms,
+        platforms,
         transcode_format=transcode_format,
+        target_environments=environments,
     )
     if isinstance(parsed, Response):
         return parsed
     parsed_file = parsed
+    if parsed_file.workspace_lock is None:
+        if cap_error := validate_caps([], [], target_platforms):
+            return cap_error
+    else:
+        target_platforms = [
+            target.platform for target in parsed_file.workspace_lock.result.selected
+        ]
 
     if (
         parsed_file.is_lockfile
         and output_format is not None
         and not has_extra_specs
         and not has_channel_override
-        and output_format.is_lockfile
+        and (output_format.is_lockfile or operation == "export")
         and parsed_file.transcoded_content is not None
     ):
+        if parsed_file.workspace_lock is not None:
+            cache: ResultCache = request.app.state.result_cache
+            exporter_identity = output_format.cache_identity()
+            identity = {
+                "operation": operation,
+                "input": parsed_file.workspace_lock.cache_identity(),
+                "output": output_format.exporter.name,
+                "exporter": exporter_identity,
+            }
+            digest = hashlib.sha256(msgspec.json.encode(identity)).hexdigest()
+            return await cache.remember(
+                cache.request_key(digest),
+                parsed_file.transcoded_content.encode("utf-8"),
+                output_format.media_type,
+                retain=exporter_identity is not None,
+            )
         return Response(
             parsed_file.transcoded_content,
             media_type=output_format.media_type,
@@ -1146,6 +1196,7 @@ async def transcode_post(
         target_platforms,
         has_extra_specs,
         has_channel_override,
+        operation=operation,
     )
 
 
@@ -1320,6 +1371,8 @@ async def capabilities() -> dict[str, bool]:
     return {
         "workspace_parse": True,
         "workspace_solve": True,
+        "workspace_lock_parse": True,
+        "workspace_lock_export": True,
         "sbom": "cyclonedx-json-v1.7" in OutputFormat.available(),
         "verify": available,
         "sign": available
@@ -1367,8 +1420,10 @@ async def version() -> dict[str, str]:
     status_code=200,
     responses={
         200: ResponseSpec(
-            data_container=ParseResult | WorkspaceParseResult,
-            description="Parsed requirements or workspace discovery and selection",
+            data_container=ParseResult
+            | WorkspaceParseResult
+            | WorkspaceLockParseResult,
+            description="Requirements, workspace manifests, or named locked targets",
         ),
         HTTP_400_BAD_REQUEST: ResponseSpec(
             data_container=ErrorResponse | ValidationErrorResponse,
@@ -1381,7 +1436,7 @@ async def version() -> dict[str, str]:
     },
 )
 async def parse(request: Request, data: ParseRequest) -> Response:
-    """Inspect input requirements or select workspace environments and targets."""
+    """Inspect input requirements or select manifest and lockfile targets."""
     if not data.file:
         return Response(
             ErrorResponse(error="Field 'file' is required"),
@@ -1397,6 +1452,8 @@ async def parse(request: Request, data: ParseRequest) -> Response:
     if isinstance(parsed, Response):
         return parsed
     parsed_file = parsed
+    if parsed_file.workspace_lock is not None:
+        return Response(parsed_file.parse_result)
     if parsed_file.workspace is not None:
         for target in parsed_file.workspace.result.selected:
             if cap_error := validate_caps(
@@ -1408,7 +1465,9 @@ async def parse(request: Request, data: ParseRequest) -> Response:
         return Response(parsed_file.parse_result)
     if data.platforms is not None:
         return Response(
-            ErrorResponse(error="Platform selection requires a workspace manifest"),
+            ErrorResponse(
+                error="Platform selection requires a workspace manifest or lockfile"
+            ),
             status_code=HTTP_400_BAD_REQUEST,
         )
     if cap_error := validate_caps(parsed_file.specs, parsed_file.channels, []):

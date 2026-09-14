@@ -16,6 +16,7 @@ from conda.base.context import context
 from conda.exceptions import CondaError
 from conda.models.environment import Environment
 from conda.plugins.types import EnvironmentFormat
+from conda_workspaces.lockfile import LOCKFILE_NAME
 from ruamel.yaml import YAML
 from ruamel.yaml.error import YAMLError
 from ruamel.yaml.events import AliasEvent, NodeEvent
@@ -23,6 +24,7 @@ from ruamel.yaml.events import AliasEvent, NodeEvent
 from .exceptions import CredentialRedactionFilter, redact_safe_error
 from .lockfile_transcode import CondaLockfilesTranscoder
 from .workspace import WorkspaceInput, WorkspaceParseResult
+from .workspace_lock import WorkspaceLockInput, WorkspaceLockParseResult
 
 ALLOWED_EXTENSIONS = {".yml", ".yaml", ".txt", ".lock", ".toml", ".json"}
 HTTP_INPUT_MAX_NODES = 10_000
@@ -47,9 +49,14 @@ class ParsedInputFile:
     environments: tuple[Environment, ...] = ()
     transcoded_content: str | None = None
     workspace: WorkspaceInput | None = None
+    workspace_lock: WorkspaceLockInput | None = None
 
     @property
-    def parse_result(self) -> ParseResult | WorkspaceParseResult:
+    def parse_result(
+        self,
+    ) -> ParseResult | WorkspaceParseResult | WorkspaceLockParseResult:
+        if self.workspace_lock is not None:
+            return self.workspace_lock.result
         return (
             self.workspace.result
             if self.workspace is not None
@@ -96,6 +103,32 @@ class ParsedInputFile:
                 source_format=workspace.result.format,
                 workspace=workspace,
             )
+        if Path(path).name == LOCKFILE_NAME:
+            workspace_lock = WorkspaceLockInput.from_path(
+                Path(path),
+                environments=target_environments,
+                platforms=target_platforms,
+                select_all=transcode_format is not None,
+            )
+            return cls(
+                specs=[],
+                channels=workspace_lock.channels,
+                environment_format=EnvironmentFormat.lockfile,
+                source_format=workspace_lock.result.format,
+                available_platforms=tuple(
+                    dict.fromkeys(
+                        target
+                        for environment in workspace_lock.result.environments
+                        for target in environment.platforms
+                    )
+                ),
+                transcoded_content=(
+                    workspace_lock.render(transcode_format)
+                    if transcode_format is not None
+                    else None
+                ),
+                workspace_lock=workspace_lock,
+            )
         if target_environments is not None:
             raise ValueError("Environment selection requires a workspace manifest")
         path_str = str(path)
@@ -111,7 +144,12 @@ class ParsedInputFile:
         if environment_format == EnvironmentFormat.lockfile:
             available = tuple(getattr(spec, "available_platforms", ()) or ())
             targets = tuple(
-                target_platforms or ((context.subdir,) if materialize_lockfiles else ())
+                target_platforms
+                or (
+                    (context.subdir,)
+                    if materialize_lockfiles or transcode_format
+                    else ()
+                )
             )
             envs: tuple[Environment, ...] = ()
             transcoded_content = None

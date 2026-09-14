@@ -10,7 +10,7 @@ conda presto [OPTIONS] [SPECS...]
 ```
 
 Resolve package specs or environment files to fully pinned package lists
-without installing anything. Use `--parse` to inspect declarations without solving.
+without installing anything. Use `--parse` to inspect declarations or saved workspace locks, and `--export` to export locked records without solving.
 
 ## Positional arguments
 
@@ -64,9 +64,21 @@ without installing anything. Use `--parse` to inspect declarations without solvi
   ```
 
 `-e`, `--environment`
-: Select a workspace environment for parsing or solving. Can be repeated.
+: Select a workspace environment for parsing, solving or locked export. Can be repeated.
   Workspace solves default to all environments. This option is rejected
   for ordinary inputs.
+
+`--export`
+: Export exactly one lockfile through the required `--format` without solving or downloading packages. Workspace `conda.lock` input accepts named environments and logical targets through `-e` and `-p`. Omitted selectors include all saved environments and targets. Empty, unknown and ambiguous selections fail.
+
+  Use `conda-workspaces-lock-v1` to extract source entries with their package URLs, hashes and metadata. Other formats use conda's exporter registry and require one selected environment. Exporters without a multiplatform callback require one target. Targets sharing a concrete subdir cannot be combined outside workspace lock output.
+
+  Export mode rejects additional specs, multiple input files and channel overrides. Workspace locks require `--parse` or `--export`, they are not solve inputs. Existing conda-lockfiles lock-to-lock conversion remains available with its supported formats and restrictions. See {doc}`../how-to/extract-workspace-lock`.
+
+  ```bash
+  conda presto --parse -f conda.lock
+  conda presto --export -f conda.lock -e test -p linux-64 --format workspace-lock
+  ```
 
 `-f`, `--file`
 : Path to an environment file. Can be repeated. Each file is selected and

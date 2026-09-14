@@ -1,5 +1,7 @@
 # Transcode lockfiles without solving
 
+For named environment extraction from workspace `conda.lock` files, use {doc}`extract-workspace-lock`. That workflow uses explicit selection and preserves source lock metadata.
+
 Use the lockfile fast path when an existing lockfile already contains every
 requested platform and the output is another lockfile format.
 

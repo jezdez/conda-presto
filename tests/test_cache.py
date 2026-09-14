@@ -371,6 +371,11 @@ async def test_result_cache_can_return_a_credentialed_result_without_retaining_i
             id="exporter",
         ),
         pytest.param(
+            b"https://user:\nsecret@cdn.example.test/zlib.conda",
+            "text/plain",
+            id="url-with-newline",
+        ),
+        pytest.param(
             b'{"purl":"pkg:conda/zlib@1.3?channel=https%3A%2F%2Fuser%3Asecret%40example.test"}',
             "application/json",
             id="purl-credentialed-channel",
@@ -409,6 +414,24 @@ async def test_result_cache_does_not_retain_credentialed_output(body, media_type
     assert "Location" not in response.headers
     assert cache.entries == {}
     assert await store.get("key") is None
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("credentialed", [False, True])
+async def test_explicit_file_comments_do_not_hide_or_invent_credentials(credentialed):
+    host = "user:secret@conda.example" if credentialed else "conda.example"
+    body = (
+        "# This file can create an environment.\n"
+        "# platform: linux-64\n@EXPLICIT\n"
+        f"https://{host}/linux-64/probe-1.0-0.conda\n"
+    ).encode()
+    cache = ResultCache(max_size=10)
+    response = await cache.remember("explicit", body, "text/plain")
+    assert response.content == body
+    assert ("Location" in response.headers) is not credentialed
+    if not credentialed:
+        retained = await cache.get_response("explicit")
+        assert retained.content == body
 
 
 @pytest.mark.anyio

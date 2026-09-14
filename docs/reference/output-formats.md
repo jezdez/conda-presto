@@ -65,3 +65,9 @@ Named exporter output requires every platform solve to succeed. A solve or rende
 Workspace failures identify the affected environment and target. Combined locks require every selected pair to succeed. Unsupported manifest-export selections are rejected before rendering.
 
 See {doc}`http-api`, {doc}`cli` and {doc}`../how-to/transcode-lockfiles` for invocation and conversion details.
+
+## Exporting saved workspace locks
+
+`POST /export` and CLI `--export` render selected exact records from `conda.lock` without solving. Workspace lock output uses conda-workspaces' source selection API, preserving saved URLs, hashes and metadata. Other outputs use registered conda exporters. Normalized TOML and environment YAML are different representations and do not preserve all lock metadata or the original workspace manifest.
+
+Select one environment for non-workspace outputs and one target for exporters without a multiplatform callback. Logical targets sharing a concrete subdir cannot be combined in those outputs. Targets with an unknown concrete subdir can only be extracted as workspace locks. Conversions from workspace locks to `conda-lock-v1` and `rattler-lock-v6` fail explicitly until their provider can preserve the saved metadata. See {doc}`../how-to/extract-workspace-lock` for examples and the upstream provider requirements.

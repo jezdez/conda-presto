@@ -11,8 +11,9 @@ Pass ``--format <name>`` to route through conda's exporter plugins
 (``explicit``, ``environment-yaml``, ``conda-lock-v1``,
 ``rattler-lock-v6``/``pixi-lock-v6``, …) instead.
 
-Resolve is the default action. Use ``--parse`` to inspect an input file
-or ``--serve`` to start the HTTP API. The ``--host`` and ``--port`` defaults use
+Resolve is the default action. Use ``--parse`` to inspect an input file,
+``--export`` to extract locked records, or ``--serve`` to start the HTTP API.
+The ``--host`` and ``--port`` defaults use
 ``CONDA_PRESTO_HOST`` and ``CONDA_PRESTO_PORT`` environment variables
 (see :mod:`conda_presto.config`).
 
@@ -50,7 +51,7 @@ from .resolve import solve, solve_environments
 
 
 def configure_parser(parser: argparse.ArgumentParser):
-    """Add solve, parse, and server arguments to *parser*.
+    """Add solve, parse, export, and server arguments to *parser*.
 
     Used by both the conda plugin hook and the standalone ``main()``.
     """
@@ -76,7 +77,7 @@ def configure_parser(parser: argparse.ArgumentParser):
         default=[],
         dest="environments",
         metavar="NAME",
-        help="Select a workspace environment to inspect or solve. "
+        help="Select a workspace environment to inspect, export or solve. "
         "May be specified multiple times.",
     )
 
@@ -110,6 +111,12 @@ def configure_parser(parser: argparse.ArgumentParser):
         help="Inspect one input file without solving and write JSON.",
     )
     mode_group.add_argument(
+        "--export",
+        action="store_true",
+        default=False,
+        help="Export one lockfile without solving. Requires --file and --format.",
+    )
+    mode_group.add_argument(
         "--serve",
         action="store_true",
         default=False,
@@ -131,7 +138,7 @@ def execute(args: argparse.Namespace):
     if getattr(args, "environments", None) and getattr(args, "serve", False):
         print("Environment selection requires a workspace manifest.", file=sys.stderr)
         raise SystemExit(1)
-    if getattr(args, "parse", False):
+    if getattr(args, "parse", False) or getattr(args, "export", False):
         cmd_parse(args)
     elif args.serve:
         cmd_serve(args)
@@ -140,19 +147,23 @@ def execute(args: argparse.Namespace):
 
 
 def cmd_parse(args: argparse.Namespace):
-    """Inspect one input file through the bounded content parser."""
+    """Inspect or export one input file through the bounded content parser."""
+    export = getattr(args, "export", False)
+    mode = "--export" if export else "--parse"
     error = None
     if len(args.files) != 1:
-        error = "--parse requires exactly one --file."
+        error = f"{mode} requires exactly one --file."
     elif args.specs:
-        error = "--parse does not accept inline package specs."
+        error = f"{mode} does not accept inline package specs."
     elif (
         getattr(args, "channel", None)
         or getattr(args, "override_channels", False)
         or getattr(args, "use_local", False) is True
     ):
-        error = "--parse does not accept channel overrides."
-    elif args.output_format is not None:
+        error = f"{mode} does not accept channel overrides."
+    elif export and args.output_format is None:
+        error = "--export requires --format."
+    elif not export and args.output_format is not None:
         error = "--parse does not accept --format."
     if error:
         print(error, file=sys.stderr)
@@ -160,16 +171,29 @@ def cmd_parse(args: argparse.Namespace):
 
     path = Path(args.files[0])
     try:
+        output_format = OutputFormat.named(args.output_format) if export else None
         content = path.read_text(encoding="utf-8")
         parsed = ParsedInputFile.from_content_until(
             content,
             path.name,
             args.platforms or None,
             time.monotonic() + PARSE_TIMEOUT_S,
+            transcode_format=output_format.exporter.name if output_format else None,
             target_environments=getattr(args, "environments", None) or None,
         )
-        if parsed.workspace is None and args.platforms:
-            raise ValueError("Platform selection requires a workspace manifest")
+        if export:
+            if not parsed.is_lockfile:
+                raise ValueError("--export requires a lockfile")
+            if parsed.transcoded_content is None:
+                raise ValueError("The lockfile cannot be exported with this selection")
+        elif (
+            parsed.workspace is None
+            and parsed.workspace_lock is None
+            and args.platforms
+        ):
+            raise ValueError(
+                "Platform selection requires a workspace manifest or workspace lockfile"
+            )
     except TimeoutError:
         error = f"Parse exceeded {PARSE_TIMEOUT_S}s timeout"
     except UnicodeError:
@@ -181,8 +205,13 @@ def cmd_parse(args: argparse.Namespace):
     except RuntimeError:
         error = "Input parser failed"
     else:
-        body = msgspec.json.format(msgspec.json.encode(parsed.parse_result), indent=2)
-        sys.stdout.buffer.write(body + b"\n")
+        if export:
+            sys.stdout.buffer.write(parsed.transcoded_content.encode("utf-8"))
+        else:
+            body = msgspec.json.format(
+                msgspec.json.encode(parsed.parse_result), indent=2
+            )
+            sys.stdout.buffer.write(body + b"\n")
         return
     print(f"Input error: {error}", file=sys.stderr)
     raise SystemExit(1)
@@ -245,6 +274,13 @@ def cmd_solve(args: argparse.Namespace):
     file_deps, file_channels, parsed_files = load_parsed_files(
         args.files, platforms, target_environments=environments
     )
+    if any(parsed.workspace_lock is not None for parsed in parsed_files):
+        print(
+            "Workspace lockfiles contain solved records. Use --parse to inspect "
+            "or --export with --format to extract them.",
+            file=sys.stderr,
+        )
+        raise SystemExit(1)
     workspaces = [
         parsed.workspace for parsed in parsed_files if parsed.workspace is not None
     ]

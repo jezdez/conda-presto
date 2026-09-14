@@ -116,7 +116,7 @@ def contains_credentials(value: object) -> bool:
                     parsed.username
                     or parsed.password
                     or parsed.query
-                    or parsed.fragment
+                    or (parsed.fragment and (parsed.scheme or parsed.netloc))
                     or "t" in path_parts[:-1]
                 ):
                     return True
