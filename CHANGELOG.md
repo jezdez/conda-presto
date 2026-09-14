@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Add workspace discovery and target selection through `POST /parse` and CLI `--parse`, using conda-workspaces without solving.
 - Add optional SBOM generation through conda-sboms and signing and verification through conda-sigstore.
 - Report installed optional adapters and enabled signing configuration through `/capabilities`.
 
