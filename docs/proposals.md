@@ -1,22 +1,20 @@
 # Roadmap
 
-conda-presto makes conda capabilities easy to call from other systems. Development focuses on reliable HTTP integration and growing service capacity with additional instances.
+conda-presto makes conda capabilities easy to call from other systems. Development focuses on reliable HTTP integration and deployment across an edge network.
 
-The next milestone is service operation under representative concurrent load. Existing capabilities, possible upstream contributions and historical proposals are listed separately below. Historical proposals carry no delivery commitment or accepted design requirements.
+The planned architecture combines edge request handling, distributed native computation, immutable object storage and durable coordination where needed. Presto consumes published conda metadata and exposes solving, parsing and artifact operations through its existing HTTP API.
 
-## Next milestone: a dependable shared service
+## Next milestone: Presto across an edge network
 
-The current CI exercises the GitHub Action against a real service. It also runs two independent HTTP instances with separate conda metadata caches and shared Redis, checks retained-result retrieval after the producing instance exits, and reports durations for concurrent uncached work on one and two instances. These checks establish a useful baseline, without demonstrating representative scaling gains.
+The experimental Python {doc}`Cloudflare adapter <how-to/deploy-on-cloudflare>` implements the first deployment configuration. Prove the {doc}`edge deployment approach <proposals/integration/edge-deployment>` with the existing synchronous HTTP API and native conda runtime:
 
-Build on those checks:
+1. Run independent Presto containers through an edge entry point without a fixed central Presto server. Record where uncached solves actually execute.
+2. Consume the same immutable channel metadata snapshot in both instances and make retained outputs retrievable independently of their producing container. Define portable metadata identity for shared solve lookup.
+3. Measure representative concurrent dependency solves, cold startup, metadata loading, warm execution and retained-output retrieval. Exercise failure during active requests and retrieval after a producing instance stops.
 
-1. **Measure capacity with realistic dependency solves.** Compare one and two replicas using the same workload, channel content and target platforms. Record throughput, latency distribution, errors, CPU and memory. Distinguish cold startup, uncached solves, persistent index reuse and retained-output retrieval.
-2. **Exercise failure during active requests.** Stop a replica while requests are in flight through the chosen client or routing setup. Record affected requests, timeouts and errors, continued service and recovery. Keep the existing checks for retrieval after producer shutdown.
-3. **Make the deployment reproducible for callers.** Extend the existing HTTP and Action examples with the deployment configuration, workload, observed limits and failure behavior. Use the measurements to choose improvements to workers, request handling or storage.
+Completion means a reproducible deployment exercise with observed execution locations, correct outputs, latency, throughput, resource use, cost and recovery behavior. The adapter has a fixed two-instance pool and shared R2 output retrieval. Hosted geographic execution and portable shared solve lookup still need evidence and implementation respectively. Provider selection, routing and the metadata identifier representation remain open until the experiment establishes their behavior.
 
-Completion means a repeatable deployment exercise and recorded results that explain the capacity and failure behavior a caller can expect. Shared Redis alone does not imply shared solve-cache hits: request keys can differ between hosts, while retained artifacts can be retrieved through another instance.
-
-See {doc}`how-to/benchmark-performance`, {doc}`explanation/performance` and {doc}`reference/cache`. This milestone does not require restoring local acceleration, a browser workbench or additional diagnostic endpoints.
+Existing capabilities, possible upstream contributions and historical proposals are listed below. Historical proposals carry no delivery commitment or accepted design requirements.
 
 ## Existing service capabilities
 
@@ -52,6 +50,13 @@ Doctor currently operates on installed environments, and compare uses an install
 The restored notes on {doc}`receipts <proposals/trust/receipt>`, {doc}`solve attestations <proposals/trust/attestation>`, {doc}`attestation retrieval <proposals/trust/serving-attestations>`, {doc}`admission <proposals/trust/admit>` and {doc}`a shared solve format <proposals/trust/cep-solve-attestation>` preserve the original questions. They are outside the current delivery plan and do not form a planned sequence.
 
 A future construction-information request needs a specific consumer. Presto could contribute facts from its execution, with instrumentation owned by conda and the solver. Signing remains with conda-sigstore, trust and admission decisions with the recipient, and archival storage with the operator. Standardization should follow working producer and consumer integrations.
+
+```{toctree}
+:hidden:
+:caption: Edge deployment
+
+proposals/integration/edge-deployment
+```
 
 ```{toctree}
 :hidden:

@@ -5,6 +5,7 @@ Operate or integrate the service.
 ```{toctree}
 
 run-with-docker
+deploy-on-cloudflare
 use-github-action
 configure-result-cache
 monitor-service

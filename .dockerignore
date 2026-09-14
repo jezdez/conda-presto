@@ -8,3 +8,5 @@ tests/
 benchmarks/
 demos/
 *.egg-info
+deploy/
+docs/_build/
