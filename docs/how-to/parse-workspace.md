@@ -2,8 +2,8 @@
 
 Discover the environments in a workspace and inspect their requirements for
 selected platforms. This operation reads declarations without solving or
-installing packages. Standard Presto installations include conda-workspaces
-0.9.0 or later for workspace parsing.
+installing packages. Workspace parsing uses the conda-workspaces revision pinned
+in `pyproject.toml` until its parser fixes are released.
 
 ## Create a manifest
 

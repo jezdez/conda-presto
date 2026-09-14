@@ -214,10 +214,10 @@ def test_workspace_selected_pypi_requires_provider_and_preserves_declaration(
             "[environments.test.target.linux-64.pypi-dependencies]\nrequests = true",
             "PyPI dependency",
         ),
-        ("[workspace]\nchannels = [42]", "Workspace channels"),
-        ('[feature.test]\nchannels = "conda-forge"', "Workspace channels"),
-        ("[environments.test]\nchannels = [{}]", "Workspace channels"),
-        ("[target.linux-64]\nchannels = [{ channel = 42 }]", "Workspace channels"),
+        ("[workspace]\nchannels = [42]", "Channel"),
+        ('[feature.test]\nchannels = "conda-forge"', "Channel"),
+        ("[environments.test]\nchannels = [{}]", "channels"),
+        ("[target.linux-64]\nchannels = [{ channel = 42 }]", "channels"),
     ],
     ids=[
         "pypi-number",
@@ -247,9 +247,7 @@ def test_workspace_accepts_channel_tables(manifest):
 @pytest.mark.parametrize(
     "source", ['path = "."', 'git = "https://example.org/project"']
 )
-def test_workspace_rejects_conda_source_fields_before_provider_omits_them(
-    manifest, source
-):
+def test_workspace_rejects_unsupported_conda_source_fields(manifest, source):
     path = manifest(
         '[workspace]\nplatforms = ["linux-64"]\n[dependencies]\n'
         f"project = {{ {source} }}"
