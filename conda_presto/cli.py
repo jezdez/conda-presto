@@ -12,8 +12,8 @@ Pass ``--format <name>`` to route through conda's exporter plugins
 ``rattler-lock-v6``/``pixi-lock-v6``, …) instead.
 
 Resolve is the default action. Use ``--parse`` to inspect an input file,
-``--export`` to render declarations or saved records, or ``--serve`` to start
-the HTTP API.
+``--export`` to render declarations or saved records, ``--check-lock`` to compare
+a workspace manifest with its saved lock, or ``--serve`` to start the HTTP API.
 The ``--host`` and ``--port`` defaults use
 ``CONDA_PRESTO_HOST`` and ``CONDA_PRESTO_PORT`` environment variables
 (see :mod:`conda_presto.config`).
@@ -52,7 +52,7 @@ from .resolve import solve, solve_environments
 
 
 def configure_parser(parser: argparse.ArgumentParser):
-    """Add solve, parse, export, and server arguments to *parser*.
+    """Add solve, parse, export, lock check, and server arguments to *parser*.
 
     Used by both the conda plugin hook and the standalone ``main()``.
     """
@@ -96,8 +96,8 @@ def configure_parser(parser: argparse.ArgumentParser):
         "--manifest",
         default=None,
         metavar="PATH",
-        help="Match a workspace manifest to the saved lock when exporting. "
-        "Requires --export.",
+        help="Match a workspace manifest to the saved lock. "
+        "Requires --export or --check-lock.",
     )
 
     output_group = parser.add_argument_group("Output Format")
@@ -125,6 +125,13 @@ def configure_parser(parser: argparse.ArgumentParser):
         help="Export one input file without solving. Requires --file and --format.",
     )
     mode_group.add_argument(
+        "--check-lock",
+        action="store_true",
+        default=False,
+        help="Check all manifest targets against a saved workspace lock without "
+        "solving. Requires --file and --manifest.",
+    )
+    mode_group.add_argument(
         "--serve",
         action="store_true",
         default=False,
@@ -143,15 +150,19 @@ def configure_parser(parser: argparse.ArgumentParser):
 
 def execute(args: argparse.Namespace):
     """Dispatch the requested CLI operation."""
-    if getattr(args, "manifest", None) is not None and not getattr(
-        args, "export", False
+    if getattr(args, "manifest", None) is not None and not (
+        getattr(args, "export", False) or getattr(args, "check_lock", False)
     ):
-        print("--manifest requires --export.", file=sys.stderr)
+        print("--manifest requires --export or --check-lock.", file=sys.stderr)
         raise SystemExit(1)
     if getattr(args, "environments", None) and getattr(args, "serve", False):
         print("Environment selection requires a workspace manifest.", file=sys.stderr)
         raise SystemExit(1)
-    if getattr(args, "parse", False) or getattr(args, "export", False):
+    if (
+        getattr(args, "parse", False)
+        or getattr(args, "export", False)
+        or getattr(args, "check_lock", False)
+    ):
         cmd_parse(args)
     elif args.serve:
         cmd_serve(args)
@@ -160,9 +171,11 @@ def execute(args: argparse.Namespace):
 
 
 def cmd_parse(args: argparse.Namespace):
-    """Inspect or export one input file through the bounded content parser."""
+    """Inspect, export or check an input through the bounded content parser."""
     export = getattr(args, "export", False)
-    mode = "--export" if export else "--parse"
+    check_lock = getattr(args, "check_lock", False)
+    mode = "--check-lock" if check_lock else "--export" if export else "--parse"
+    error_status = 2 if check_lock else 1
     error = None
     if len(args.files) != 1:
         error = f"{mode} requires exactly one --file."
@@ -177,10 +190,18 @@ def cmd_parse(args: argparse.Namespace):
     elif export and args.output_format is None:
         error = "--export requires --format."
     elif not export and args.output_format is not None:
-        error = "--parse does not accept --format."
+        error = f"{mode} does not accept --format."
+    elif check_lock and not getattr(args, "manifest", None):
+        error = "--check-lock requires --manifest."
+    elif check_lock and args.platforms:
+        error = "--check-lock checks every target and does not accept --platform."
+    elif check_lock and getattr(args, "environments", None):
+        error = (
+            "--check-lock checks every environment and does not accept --environment."
+        )
     if error:
         print(error, file=sys.stderr)
-        raise SystemExit(1)
+        raise SystemExit(error_status)
 
     path = Path(args.files[0])
     try:
@@ -193,6 +214,8 @@ def cmd_parse(args: argparse.Namespace):
                 "manifest_content": manifest_path.read_text(encoding="utf-8"),
                 "manifest_filename": manifest_path.name,
             }
+        if check_lock:
+            manifest_args["check_lock"] = True
         parsed = ParsedInputFile.from_content_until(
             content,
             path.name,
@@ -202,7 +225,12 @@ def cmd_parse(args: argparse.Namespace):
             target_environments=getattr(args, "environments", None) or None,
             **manifest_args,
         )
-        if export:
+        if check_lock:
+            if parsed.lock_check is None:
+                raise ValueError(
+                    "This input cannot be checked against a workspace manifest"
+                )
+        elif export:
             if parsed.exported_content is None:
                 raise ValueError(
                     "This input cannot be exported with this format and selection"
@@ -230,12 +258,17 @@ def cmd_parse(args: argparse.Namespace):
             sys.stdout.buffer.write(parsed.exported_content.encode("utf-8"))
         else:
             body = msgspec.json.format(
-                msgspec.json.encode(parsed.parse_result), indent=2
+                msgspec.json.encode(
+                    parsed.lock_check if check_lock else parsed.parse_result
+                ),
+                indent=2,
             )
             sys.stdout.buffer.write(body + b"\n")
+            if check_lock and not parsed.lock_check.consistent:
+                raise SystemExit(1)
         return
     print(f"Input error: {error}", file=sys.stderr)
-    raise SystemExit(1)
+    raise SystemExit(error_status)
 
 
 def load_parsed_files(

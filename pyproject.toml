@@ -27,7 +27,7 @@ requires-python = ">=3.13"
 dependencies = [
     # conda and conda-rattler-solver are supplied by the active conda environment.
     # Use the parser and lock-selection APIs until they are released.
-    "conda-workspaces @ git+https://github.com/conda-incubator/conda-workspaces.git@07239e0daf2e36421313a498f28b1cb2fd2982ac",
+    "conda-workspaces @ git+https://github.com/conda-incubator/conda-workspaces.git@dcea90552700a1ab8e0cf134b47db65725c53285",
     "msgspec>=0.19",
 ]
 dynamic = ["version"]

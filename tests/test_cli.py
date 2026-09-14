@@ -184,6 +184,53 @@ def test_parse_workspace_matches_bounded_parser(
             1,
             id="manifest-with-serve",
         ),
+        pytest.param(
+            ["--check-lock"], "exactly one --file", 2, id="check-missing-file"
+        ),
+        pytest.param(
+            ["--check-lock", "-f", "one", "-f", "two", "--manifest", "conda.toml"],
+            "exactly one --file",
+            2,
+            id="check-multiple-files",
+        ),
+        pytest.param(
+            ["--check-lock", "-f", "conda.lock"],
+            "requires --manifest",
+            2,
+            id="check-missing-manifest",
+        ),
+        pytest.param(
+            ["--check-lock", "-f", "conda.lock", "--manifest", "conda.toml", "zlib"],
+            "inline package specs",
+            2,
+            id="check-inline-specs",
+        ),
+        *[
+            pytest.param(
+                [
+                    "--check-lock",
+                    "-f",
+                    "conda.lock",
+                    "--manifest",
+                    "conda.toml",
+                    *option,
+                ],
+                message,
+                2,
+                id=f"check-{name}",
+            )
+            for name, option, message in (
+                ("channel", ["-c", "defaults"], "channel overrides"),
+                ("override-channels", ["--override-channels"], "channel overrides"),
+                ("local-channel", ["--use-local"], "channel overrides"),
+                ("format", ["--format", "explicit"], "does not accept --format"),
+                ("platform", ["-p", "cpu"], "does not accept --platform"),
+                ("environment", ["-e", "test"], "does not accept --environment"),
+                ("parse", ["--parse"], "not allowed with argument"),
+                ("export", ["--export"], "not allowed with argument"),
+                ("serve", ["--serve"], "not allowed with argument"),
+            )
+        ],
     ],
 )
 def test_parse_rejects_incompatible_arguments(
@@ -195,13 +242,30 @@ def test_parse_rejects_incompatible_arguments(
     assert message in capsys.readouterr().err
 
 
-@pytest.mark.parametrize("mode", [("--parse",), ("--export", "--format", "explicit")])
+@pytest.mark.parametrize(
+    "mode,exit_code",
+    [("--parse", 1), ("--export", 1), ("--check-lock", 2)],
+)
 def test_parse_timeout_exits_cleanly(
-    run_cli, workspace_manifest_path, monkeypatch, capsys, mode
+    run_cli,
+    workspace_manifest_path,
+    workspace_lock_path,
+    monkeypatch,
+    capsys,
+    mode,
+    exit_code,
 ):
     monkeypatch.setattr("conda_presto.cli.PARSE_TIMEOUT_S", 0)
-    with pytest.raises(SystemExit, match="1"):
-        run_cli(*mode, "-f", str(workspace_manifest_path))
+    extra = (
+        ["--manifest", str(workspace_manifest_path)]
+        if mode == "--check-lock"
+        else ["--format", "explicit"]
+        if mode == "--export"
+        else []
+    )
+    with pytest.raises(SystemExit) as exc:
+        run_cli(mode, "-f", str(workspace_lock_path), *extra)
+    assert exc.value.code == exit_code
     assert "Parse exceeded 0s timeout" in capsys.readouterr().err
 
 
@@ -215,15 +279,34 @@ def test_parse_timeout_exits_cleanly(
         pytest.param("missing.toml", None, "Cannot read input file", id="missing-file"),
     ],
 )
-@pytest.mark.parametrize("mode", [("--parse",), ("--export", "--format", "explicit")])
+@pytest.mark.parametrize(
+    "mode,exit_code",
+    [("--parse", 1), ("--export", 1), ("--check-lock", 2)],
+)
 def test_parse_reports_file_errors(
-    run_cli, tmp_path, capsys, filename, content, message, mode
+    run_cli,
+    tmp_path,
+    capsys,
+    workspace_manifest_path,
+    filename,
+    content,
+    message,
+    mode,
+    exit_code,
 ):
     path = tmp_path / filename
     if content is not None:
         path.write_bytes(content if isinstance(content, bytes) else content.encode())
-    with pytest.raises(SystemExit, match="1"):
-        run_cli(*mode, "-f", str(path))
+    extra = (
+        ["--manifest", str(workspace_manifest_path)]
+        if mode == "--check-lock"
+        else ["--format", "explicit"]
+        if mode == "--export"
+        else []
+    )
+    with pytest.raises(SystemExit) as exc:
+        run_cli(mode, "-f", str(path), *extra)
+    assert exc.value.code == exit_code
     error = capsys.readouterr().err
     assert message in error
     assert str(tmp_path) not in error
@@ -533,25 +616,94 @@ def test_companion_manifest_requires_workspace_lock_input(
 @pytest.mark.parametrize(
     "content,message", [(None, "Cannot read input file"), (b"\xff", "not valid UTF-8")]
 )
-def test_export_reports_companion_manifest_file_errors(
-    run_cli, workspace_lock_path, tmp_path, capsys, content, message
+@pytest.mark.parametrize("mode,exit_code", [("--export", 1), ("--check-lock", 2)])
+def test_parse_reports_companion_manifest_file_errors(
+    run_cli, workspace_lock_path, tmp_path, capsys, content, message, mode, exit_code
 ):
     manifest = tmp_path / "conda.toml"
     if content is not None:
         manifest.write_bytes(content)
-    with pytest.raises(SystemExit, match="1"):
+    with pytest.raises(SystemExit) as exc:
         run_cli(
-            "--export",
+            mode,
             "-f",
             str(workspace_lock_path),
-            "--format",
-            "cyclonedx-json-v1.7",
+            *(["--format", "cyclonedx-json-v1.7"] if mode == "--export" else []),
             "--manifest",
             str(manifest),
         )
+    assert exc.value.code == exit_code
     error = capsys.readouterr().err
     assert message in error
     assert str(tmp_path) not in error
+
+
+@pytest.mark.parametrize("consistent", [True, False], ids=["consistent", "mismatch"])
+def test_check_lock_reports_all_targets_without_changing_inputs(
+    run_cli,
+    workspace_consistent_lock_path,
+    workspace_consistent_manifest_text,
+    tmp_path,
+    capsys,
+    monkeypatch,
+    consistent,
+):
+    manifest = tmp_path / "conda.toml"
+    manifest.write_text(workspace_consistent_manifest_text)
+    if not consistent:
+        workspace_consistent_lock_path.write_text(
+            workspace_consistent_lock_path.read_text().replace(
+                "/linux-64/probe-1.0-", "/linux-64/probe-2.0-"
+            )
+        )
+    lock_before = workspace_consistent_lock_path.read_bytes()
+    manifest_before = manifest.read_bytes()
+    package_cache = tmp_path / "package-cache"
+    package_cache.mkdir()
+    monkeypatch.setenv("CONDA_PKGS_DIRS", str(package_cache))
+    monkeypatch.setenv("CONDA_OFFLINE", "true")
+
+    def unexpected_solve(*args, **kwargs):
+        pytest.fail("Workspace lock check reached the solver")
+
+    monkeypatch.setattr("conda_presto.cli.solve", unexpected_solve)
+    monkeypatch.setattr("conda_presto.cli.solve_environments", unexpected_solve)
+    arguments = (
+        "--check-lock",
+        "-f",
+        str(workspace_consistent_lock_path),
+        "--manifest",
+        str(manifest),
+    )
+    if consistent:
+        output = run_cli(*arguments)
+    else:
+        with pytest.raises(SystemExit) as exc:
+            run_cli(*arguments)
+        assert exc.value.code == 1
+        captured = capsys.readouterr()
+        assert not captured.err
+        output = captured.out
+    report = json.loads(output)
+    assert report["consistent"] is consistent
+    assert len(report["targets"]) == 6
+    targets = {
+        (target["environment"], target["platform"]): target
+        for target in report["targets"]
+    }
+    for environment in ("default", "test"):
+        for platform, subdir in (
+            ("cpu", "linux-64"),
+            ("gpu", "linux-64"),
+            ("osx-arm64", "osx-arm64"),
+        ):
+            target = targets[environment, platform]
+            assert target["subdir"] == subdir
+            assert target["consistent"] is (consistent or platform != "cpu")
+            assert (target["reason"] is None) is target["consistent"]
+    assert workspace_consistent_lock_path.read_bytes() == lock_before
+    assert manifest.read_bytes() == manifest_before
+    assert not any(path.is_file() for path in package_cache.rglob("*"))
 
 
 @pytest.mark.parametrize("arguments", [[], ["--format", "conda-workspaces-lock-v1"]])
