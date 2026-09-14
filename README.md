@@ -65,11 +65,11 @@ The server image listens on port 8000 and uses a persistent worker. Call `/resol
 ## Development
 
 ```bash
-pixi install
+pixi install -e dev
 pixi run lint
 pixi run format
 pixi run -e test test
-pixi run serve
+pixi run -e dev serve
 pixi run -e docs docs
 ```
 
