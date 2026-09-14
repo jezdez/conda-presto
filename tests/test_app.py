@@ -2148,6 +2148,7 @@ async def test_openapi_schema(client):
     assert "/diff" not in data["paths"]
     assert "/explain" not in data["paths"]
     assert "/transcode" in data["paths"]
+    assert "/export" in data["paths"]
     assert "/parse" in data["paths"]
     assert "/r/{key}" in data["paths"]
     assert "/health" in data["paths"]
@@ -2171,6 +2172,7 @@ async def test_openapi_schema(client):
     assert {entry["$ref"].rsplit("/", 1)[-1] for entry in parse_schema["oneOf"]} == {
         "ParseResult",
         "WorkspaceParseResult",
+        "WorkspaceLockParseResult",
     }
     assert {"400", "504"} <= parse_operation["responses"].keys()
 
@@ -3447,6 +3449,8 @@ async def test_capabilities_separates_provider_and_signing_configuration(
     assert response.json() == {
         "workspace_parse": True,
         "workspace_solve": True,
+        "workspace_lock_parse": True,
+        "workspace_lock_export": True,
         "sbom": True,
         "verify": installed,
         "sign": installed and enabled and not offline,
