@@ -92,6 +92,13 @@ def configure_parser(parser: argparse.ArgumentParser):
         "through conda's env spec plugins. Explicit package-list files are "
         "output-only. May be specified multiple times.",
     )
+    parser.add_argument(
+        "--manifest",
+        default=None,
+        metavar="PATH",
+        help="Match a workspace manifest to the saved lock when exporting. "
+        "Requires --export.",
+    )
 
     output_group = parser.add_argument_group("Output Format")
     output_group.add_argument(
@@ -136,6 +143,11 @@ def configure_parser(parser: argparse.ArgumentParser):
 
 def execute(args: argparse.Namespace):
     """Dispatch the requested CLI operation."""
+    if getattr(args, "manifest", None) is not None and not getattr(
+        args, "export", False
+    ):
+        print("--manifest requires --export.", file=sys.stderr)
+        raise SystemExit(1)
     if getattr(args, "environments", None) and getattr(args, "serve", False):
         print("Environment selection requires a workspace manifest.", file=sys.stderr)
         raise SystemExit(1)
@@ -174,6 +186,13 @@ def cmd_parse(args: argparse.Namespace):
     try:
         output_format = OutputFormat.named(args.output_format) if export else None
         content = path.read_text(encoding="utf-8")
+        manifest_args = {}
+        if getattr(args, "manifest", None) is not None:
+            manifest_path = Path(args.manifest)
+            manifest_args = {
+                "manifest_content": manifest_path.read_text(encoding="utf-8"),
+                "manifest_filename": manifest_path.name,
+            }
         parsed = ParsedInputFile.from_content_until(
             content,
             path.name,
@@ -181,6 +200,7 @@ def cmd_parse(args: argparse.Namespace):
             time.monotonic() + PARSE_TIMEOUT_S,
             export_format=output_format.exporter.name if output_format else None,
             target_environments=getattr(args, "environments", None) or None,
+            **manifest_args,
         )
         if export:
             if parsed.exported_content is None:

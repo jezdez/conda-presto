@@ -8,7 +8,7 @@ Start the service with `conda presto --serve`. `/openapi.json` and `/` return th
 | GET, POST | `/resolve` | Solve requirements or selected workspace environments, optionally rendering an exporter format |
 | POST | `/export` | Render declarations or selected locked records without solving |
 | POST | `/transcode` | Convert supported lockfiles through the lock-to-lock compatibility operation |
-| POST | `/sbom` | Solve requirements and export separate platform SBOMs |
+| POST | `/sbom` | Export separate SBOMs from solved requirements or selected workspace lock entries |
 | POST | `/sign` | Sign a retained output using the service identity |
 | POST | `/verify` | Check supplied bytes, a bundle and an expected signer |
 | GET | `/r/{key}` | Retrieve an exact retained output |
@@ -95,7 +95,7 @@ The number of selected environment/platform combinations is limited by `CONDA_PR
 
 With `filename: "conda.lock"`, parsing uses conda-workspaces' lock loader. The response has `format: "conda-workspaces-lock-v1"`, `environments` entries containing `name` and `platforms`, and `selected` entries containing `environment`, `platform` and `subdir`. Saved logical target names remain distinct from concrete conda subdirectories.
 
-Omitting both selectors returns discovery with `selected: []`. Supplying either selects the requested saved entries, defaulting the other selector to all available values. A concrete subdir is accepted only if it identifies one target in each selected environment. For a logical target containing only noarch packages or no packages, `subdir` is `null` when the backing platform cannot be inferred. Such a target can be extracted as a workspace lock but cannot be exported to a format requiring a concrete subdir.
+Omitting both selectors returns discovery with `selected: []`. Supplying either selects the requested saved entries, defaulting the other selector to all available values. A concrete subdir is accepted only if it identifies one target in each selected environment. For a logical target containing only noarch packages or no packages, `subdir` is `null` when the backing platform cannot be inferred. Such a target can be extracted as a workspace lock. Exporters requiring a concrete subdir need a matching companion manifest to supply it.
 
 Inspection uses embedded metadata only. Malformed selected records, unsupported external references, missing names, inconsistent hashes or package identities and credential-bearing input fail explicitly. Lock requests use the configured target and channel count limits. They do not apply the solve channel allowlist because they never fetch channel data.
 
@@ -114,9 +114,11 @@ Declarations can produce normalized `conda-toml`, `pixi-toml`, `pyproject-toml`,
 
 Workspace selectors use declared targets for manifests and saved targets for locks. Omitted selectors include all environments and targets. Ordinary declaration exports reject platform and environment selectors, leaving the parser's environment unchanged. Ordinary lockfiles use the server host platform unless `platform` is supplied. Empty, unknown and ambiguous workspace selectors fail.
 
-Select one environment for outputs other than a workspace lock. Targets must have distinct known concrete subdirs. Exporters without a multiplatform callback require one target, so the response is one valid document. TOML exports also require the same ordered channels across selected targets. A registered exporter name does not imply that every input or target selection can produce that format.
+Select one environment for outputs other than a workspace lock. Targets must resolve to distinct concrete subdirs from the saved records or a matching companion manifest. Exporters without a multiplatform callback require one target, so the response is one valid document. TOML exports also require the same ordered channels across selected targets. A registered exporter name does not imply that every input or target selection can produce that format.
 
 For workspace `conda.lock`, `format=conda-workspaces-lock-v1` and its aliases preserve selected source entries, including URLs, hashes and metadata. Other supported outputs use conda's exporter registry with exact saved records. Normalized outputs do not preserve every lock field or recover the original manifest. Conversion from workspace locks to `conda-lock-v1` and `rattler-lock-v6` is rejected because the current provider discards some saved metadata.
+
+JSON workspace-lock exports can include `manifest` with a companion workspace manifest's content and `manifest_filename` set to `conda.toml`, `pixi.toml` or `pyproject.toml`. The selected environment and target, concrete platform, ordered channels and direct requirements must agree with the saved records. A matching manifest can supply the concrete subdir for a logical target whose saved records are all noarch. It also supplies declared roots to exporters such as conda-sboms. Without a companion manifest, SBOM roots are inferred from the saved dependency graph. PyPI declarations are unsupported in companion manifests. Source workspace-lock extraction rejects manifest context because it only copies saved source entries.
 
 Export runs inside the bounded parser process. It does not fetch repodata, download archives, install packages or execute tasks. Successful eligible workspace lock exports return a retained location. Declaration exports and ordinary lock conversions use `Cache-Control: no-store`. The workspace lock request identity includes uploaded content, environment and target selections, output format and provider versions. See {doc}`../how-to/extract-workspace-lock` for saved-record examples and {doc}`../how-to/resolve-from-cli` for declaration export.
 
@@ -124,6 +126,8 @@ Export runs inside the bounded parser process. It does not fetch repodata, downl
 ## Transcode compatibility
 
 `POST /transcode?format=FORMAT` keeps the lock-to-lock compatibility operation. It accepts the same file envelopes and selectors as `/export`, but requires both input and output to be lock formats. It does not solve or download packages. Workspace source extraction is available on this route too, with the same selection restrictions as `/export`.
+
+The compatibility route rejects `manifest` and `manifest_filename`. Use `/export` when a supported exporter needs companion manifest context.
 
 Ordinary lock conversion through either route supports `conda-lock-v1` and `rattler-lock-v6`, including their registered aliases. Workspace locks default to all saved environments and targets. Ordinary lockfiles default to the server host platform.
 
@@ -145,15 +149,23 @@ A new `/resolve` request checks freshness before reusing a solve. Missing or evi
 
 ## Optional SBOM generation
 
-`POST /sbom` accepts the ordinary resolve JSON fields, with at least one explicit platform. It solves new requirements and delegates to conda-sboms' `cyclonedx-json-v1.7` exporter. Workspace manifests and supplied resolved lockfiles are rejected. It does not inspect installed files or scan for vulnerabilities.
-
-SBOM rendering uses the same exporter registry as other output formats. `/sbom` remains a solve-based wrapper that collects separate platform documents. Named locked-environment SBOM collections are tracked in [#128](https://github.com/jezdez/conda-presto/issues/128).
+`POST /sbom` accepts JSON and delegates rendering to conda-sboms' `cyclonedx-json-v1.7` exporter. Ordinary resolve fields retain their solve-based behavior, with at least one explicit platform:
 
 ```json
 {"sboms":[{"platform":"linux-64","content":"...exact CycloneDX JSON text...","sha256":"...","location":"/r/..."}]}
 ```
 
-Each `content` is a separate complete document. Requested roots and exact selected package records are passed to the provider, whose coverage markers remain intact. `location` is present only if that document was retained. Any failed platform makes the request fail without returning a successful SBOM collection.
+To use saved records without solving, supply `file` with the lock content, `filename: "conda.lock"`, and explicit nonempty `environments` and `platforms` arrays. Logical target names are preserved, including multiple targets backed by the same conda subdir. Extra specs and channel overrides are rejected. Each selected pair adds an item with this shape:
+
+```json
+{"environment":"test","platform":"linux-cuda","subdir":"linux-64","content":"...exact CycloneDX JSON text...","sha256":"...","location":"/r/..."}
+```
+
+Optional `manifest` and `manifest_filename` fields have the same meaning and validation as `/export`. A companion manifest supplies direct requested roots only after its selected requirements are checked against the saved records. Without it, conda-sboms infers roots from the saved graph and reports `inferred-graph-roots` in its environment properties. Matching manifest roots are reported as `requested-packages`. This checks the supplied context, not whether a lock is current with every manifest setting.
+
+Each `content` is a separate complete document. Package URLs, hashes, dependency edges and the provider's coverage markers come from the selected records. `location` is present only if that document was retained. Lock rendering runs in the bounded parser process without repodata access, downloads or solves. Any invalid selection or failed rendering rejects the request without returning a successful partial collection. Direct workspace-manifest SBOM requests and ordinary conda-lock or rattler-lock uploads remain unsupported.
+
+SBOMs describe resolved conda package records. They do not inspect installed files, scan for vulnerabilities or establish the complete contents of a released product. See {doc}`../how-to/extract-workspace-lock` for HTTP and CLI examples.
 
 Save the UTF-8 bytes of `content` unchanged. For example, `jq -j '.sboms[0].content' response.json > environment.cdx.json` avoids adding a newline.
 
@@ -187,7 +199,7 @@ Success returns `signature_verified`, `artifact_verified` and `signer_verified` 
 
 ## Availability, limits and errors
 
-`GET /capabilities` returns booleans named `export`, `sbom`, `sign`, `verify`, `workspace_parse`, `workspace_solve`, `workspace_lock_parse` and `workspace_lock_export`. `export` reports the no-solve export operation, subject to the input and format restrictions above. The lock capabilities report workspace lock inspection, selection and exact-record export support. `workspace_parse` and `workspace_solve` report workspace discovery, selection and solving support. `sign` reports installed support and enabled configuration, not a guarantee that credentials or remote signing services are currently available. Provider versions, including conda-workspaces, appear in `/version` when installed.
+`GET /capabilities` returns booleans named `export`, `sbom`, `sign`, `verify`, `workspace_parse`, `workspace_solve`, `workspace_lock_parse`, `workspace_lock_export` and `workspace_lock_sbom`. `export` reports the no-solve export operation, subject to the input and format restrictions above. The lock capabilities report workspace lock inspection, selection and exact-record export support. `workspace_lock_sbom` requires the installed CycloneDX exporter and reports support for named locked-environment collections. `workspace_parse` and `workspace_solve` report workspace discovery, selection and solving support. `sign` reports installed support and enabled configuration, not a guarantee that credentials or remote signing services are currently available. Provider versions, including conda-workspaces, appear in `/version` when installed.
 
 `GET /health` returns HTTP 200 with `{"status":"ok"}` when the configured persistent worker is ready. A stopped worker produces HTTP 503 with `{"status":"unavailable"}` while recovery begins. Without persistent-worker mode, the probe reports HTTP 200.
 
