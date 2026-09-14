@@ -12,6 +12,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 import msgspec
+from conda.auxlib.exceptions import ValidationError as RecordValidationError
 from conda.base.context import context
 from conda.exceptions import CondaError
 from conda.models.environment import Environment
@@ -26,6 +27,7 @@ from .exporter import OutputFormat
 from .lockfile_transcode import CondaLockfilesTranscoder
 from .workspace import WorkspaceInput, WorkspaceParseResult
 from .workspace_lock import (
+    WorkspaceLockCheckResult,
     WorkspaceLockExport,
     WorkspaceLockInput,
     WorkspaceLockParseResult,
@@ -56,6 +58,7 @@ class ParsedInputFile:
     workspace: WorkspaceInput | None = None
     workspace_lock: WorkspaceLockInput | None = None
     exported_documents: list[WorkspaceLockExport] = field(default_factory=list)
+    lock_check: WorkspaceLockCheckResult | None = None
 
     @property
     def parse_result(
@@ -87,6 +90,7 @@ class ParsedInputFile:
         export_each: bool = False,
         manifest_content: str | None = None,
         manifest_filename: str | None = None,
+        check_lock: bool = False,
     ) -> ParsedInputFile:
         """Preserve workspace configuration or parse through conda's registry.
 
@@ -99,6 +103,19 @@ class ParsedInputFile:
         solving. ``lockfile_only`` leaves declaration output empty for the
         compatibility transcode operation.
         """
+        if check_lock:
+            if manifest_content is None or manifest_filename is None:
+                raise ValueError("Lock consistency requires a companion manifest")
+            if (
+                target_platforms is not None
+                or target_environments is not None
+                or export_format is not None
+                or export_each
+            ):
+                raise ValueError(
+                    "Lock consistency checks the complete workspace without "
+                    "selectors or an output format"
+                )
         if export_each and export_format is None:
             raise ValueError("Per-target export requires an output format")
         if export_each or manifest_content is not None or manifest_filename is not None:
@@ -110,7 +127,7 @@ class ParsedInputFile:
             raise ValueError("Companion manifest filename is required")
         if manifest_filename is not None and manifest_content is None:
             raise ValueError("Companion manifest content is required")
-        if manifest_content is not None and export_format is None:
+        if manifest_content is not None and export_format is None and not check_lock:
             raise ValueError("Companion manifest requires an output format")
         if Path(path).name in WorkspaceInput.filenames():
             workspace = WorkspaceInput.from_path(
@@ -138,6 +155,7 @@ class ParsedInputFile:
                 environments=target_environments,
                 platforms=target_platforms,
                 select_all=export_format is not None,
+                allow_empty=check_lock,
             )
             if manifest_content is not None and manifest_filename is not None:
                 workspace_lock = workspace_lock.with_manifest(
@@ -166,6 +184,7 @@ class ParsedInputFile:
                     else []
                 ),
                 workspace_lock=workspace_lock,
+                lock_check=workspace_lock.check_consistency() if check_lock else None,
             )
         if target_environments is not None:
             raise ValueError("Environment selection requires a workspace manifest")
@@ -252,6 +271,7 @@ class ParsedInputFile:
         export_each: bool = False,
         manifest_content: str | None = None,
         manifest_filename: str | None = None,
+        check_lock: bool = False,
     ) -> ParsedInputFile:
         """Parse content in an isolated process before an absolute deadline."""
         if deadline <= time.monotonic():
@@ -287,6 +307,7 @@ class ParsedInputFile:
                         export_each,
                         manifest_content,
                         manifest_filename,
+                        check_lock,
                     ),
                 )
                 process.start()
@@ -338,6 +359,7 @@ class ParsedInputFile:
         export_each: bool = False,
         manifest_content: str | None = None,
         manifest_filename: str | None = None,
+        check_lock: bool = False,
     ) -> None:
         """Send an input parse result from an isolated process."""
         CredentialRedactionFilter.install()
@@ -375,11 +397,12 @@ class ParsedInputFile:
                         export_each=export_each,
                         manifest_content=manifest_content,
                         manifest_filename=manifest_filename,
+                        check_lock=check_lock,
                     )
             sender.send(("ok", parsed))
         except TimeoutError:
             sender.send(("timeout", None))
-        except (CondaError, ValueError) as exc:
+        except (CondaError, ValueError, RecordValidationError) as exc:
             message = str(exc).replace(str(path), path.name)
             message = message.replace(str(path.parent), "[temporary-directory]")
             sender.send(("invalid", redact_safe_error(message)))

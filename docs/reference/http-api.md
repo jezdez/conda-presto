@@ -9,6 +9,7 @@ Start the service with `conda presto --serve`. `/openapi.json` and `/` return th
 | POST | `/export` | Render declarations or selected locked records without solving |
 | POST | `/transcode` | Convert supported lockfiles through the lock-to-lock compatibility operation |
 | POST | `/sbom` | Export separate SBOMs from solved requirements or selected workspace lock entries |
+| POST | `/validate` | Check a complete workspace lock against its manifest without solving |
 | POST | `/sign` | Sign a retained output using the service identity |
 | POST | `/verify` | Check supplied bytes, a bundle and an expected signer |
 | GET | `/r/{key}` | Retrieve an exact retained output |
@@ -169,6 +170,42 @@ SBOMs describe resolved conda package records. They do not inspect installed fil
 
 Save the UTF-8 bytes of `content` unchanged. For example, `jq -j '.sboms[0].content' response.json > environment.cdx.json` avoids adding a newline.
 
+## Check workspace lock consistency
+
+`POST /validate` accepts a JSON envelope containing both complete uploaded files:
+
+| Field | Type | Meaning |
+|---|---|---|
+| `file` | String | Workspace `conda.lock` content |
+| `filename` | String | Required parser hint `conda.lock` |
+| `manifest` | String | Workspace manifest content |
+| `manifest_filename` | String | Required parser hint `conda.toml`, `pixi.toml` or `pyproject.toml` |
+
+All four fields are required. This checks the whole workspace, so the endpoint rejects additional fields, including `specs`, `channels`, `platforms`, `environments` and `format`. It also rejects query parameters. Ordinary lockfile formats, PyPI dependencies, external package references and `archspec` system requirements are unsupported. The upstream checker currently treats `archspec` as a version constraint, while conda represents it as a virtual package build.
+
+The operation reuses conda-workspaces' `check_lockfile_satisfiability()` to compare the manifest with saved records for every declared environment and logical target. Checks include required packages, ordered channels, dependency edges, constraints and virtual package requirements. Referenced package records are checked. Unused top-level metadata follows the provider's handling and is not independently validated. Logical targets remain distinct even when they use the same concrete conda subdirectory. Results do not depend on the server host platform.
+
+Both a consistent lock and a supported mismatch return HTTP 200:
+
+```json
+{
+  "consistent": false,
+  "targets": [
+    {
+      "environment": "default",
+      "platform": "linux-64",
+      "subdir": "linux-64",
+      "consistent": false,
+      "reason": "A provider diagnostic describing the mismatch"
+    }
+  ]
+}
+```
+
+`consistent` is true only when every target passes. Each target includes its logical `platform`, concrete `subdir` and a provider `reason` for a mismatch. A consistent target has `reason: null`. Workspace-wide declaration mismatches can repeat across target results and identify another affected environment. Treat reasons as diagnostic text, not stable error codes. Malformed or unsupported input returns HTTP 400 without a partial result. The shared parser timeout produces HTTP 504.
+
+Checking runs in the bounded parser process without solving, fetching repodata, downloading archives, installing packages or executing tasks. Check results use `Cache-Control: no-store` and are not retained. Consistency does not establish package freshness, archive integrity, vulnerability policy or whether the lock is the newest possible solution. See {doc}`../tutorials/http-api` for an example with a changed manifest.
+
 ## Optional signing
 
 `POST /sign` accepts only `{"key":"..."}`, using the key from a retained output's `/r/` location. It does not accept caller-authored artifacts or statements.
@@ -199,7 +236,7 @@ Success returns `signature_verified`, `artifact_verified` and `signer_verified` 
 
 ## Availability, limits and errors
 
-`GET /capabilities` returns booleans named `export`, `sbom`, `sign`, `verify`, `workspace_parse`, `workspace_solve`, `workspace_lock_parse`, `workspace_lock_export` and `workspace_lock_sbom`. `export` reports the no-solve export operation, subject to the input and format restrictions above. The lock capabilities report workspace lock inspection, selection and exact-record export support. `workspace_lock_sbom` requires the installed CycloneDX exporter and reports support for named locked-environment collections. `workspace_parse` and `workspace_solve` report workspace discovery, selection and solving support. `sign` reports installed support and enabled configuration, not a guarantee that credentials or remote signing services are currently available. Provider versions, including conda-workspaces, appear in `/version` when installed.
+`GET /capabilities` returns booleans named `export`, `sbom`, `sign`, `verify`, `workspace_parse`, `workspace_solve`, `workspace_lock_parse`, `workspace_lock_export`, `workspace_lock_sbom` and `workspace_lock_check`. `export` reports the no-solve export operation, subject to the input and format restrictions above. The lock capabilities report workspace lock inspection, selection and exact-record export support. `workspace_lock_sbom` requires the installed CycloneDX exporter and reports support for named locked-environment collections. `workspace_lock_check` reports whole-workspace manifest–lock consistency checking. `workspace_parse` and `workspace_solve` report workspace discovery, selection and solving support. `sign` reports installed support and enabled configuration, not a guarantee that credentials or remote signing services are currently available. Provider versions, including conda-workspaces, appear in `/version` when installed.
 
 `GET /health` returns HTTP 200 with `{"status":"ok"}` when the configured persistent worker is ready. A stopped worker produces HTTP 503 with `{"status":"unavailable"}` while recovery begins. Without persistent-worker mode, the probe reports HTTP 200.
 

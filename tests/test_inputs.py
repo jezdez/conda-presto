@@ -6,6 +6,8 @@ import json
 import time
 
 import pytest
+from conda.auxlib.exceptions import ValidationError as RecordValidationError
+from conda.common.serialize.yaml import dumps as yaml_dumps
 from conda.core.package_cache_data import ProgressiveFetchExtract
 from conda.exceptions import CondaError
 from conda.models.match_spec import MatchSpec
@@ -173,4 +175,98 @@ def test_companion_manifest_uses_bounded_parser_rules(
             export_each=True,
             manifest_content=content,
             manifest_filename=filename,
+        )
+
+
+@pytest.mark.parametrize(
+    "options,message",
+    [
+        ({"manifest_content": None}, "requires a companion manifest"),
+        ({"target_platforms": ["cpu"]}, "without selectors"),
+        ({"target_environments": ["test"]}, "without selectors"),
+        ({"export_format": "explicit"}, "without selectors"),
+    ],
+)
+def test_lock_check_requires_complete_manifest_without_overrides(
+    workspace_consistent_lock_path, workspace_consistent_manifest_text, options, message
+):
+    arguments = {
+        "check_lock": True,
+        "manifest_content": workspace_consistent_manifest_text,
+        "manifest_filename": "conda.toml",
+    }
+    arguments.update(options)
+    with pytest.raises(ValueError, match=message):
+        ParsedInputFile.from_path(workspace_consistent_lock_path, **arguments)
+
+
+@pytest.mark.parametrize("filename", ["conda.toml", "pixi.toml", "pyproject.toml"])
+def test_lock_check_uses_each_registered_workspace_manifest(
+    tmp_path, workspace_consistent_lock_data, filename, no_declaration_solve
+):
+    data = workspace_consistent_lock_data
+    for env in data["environments"].values():
+        env["packages"] = {"linux-64": env["packages"]["cpu"]}
+    path = tmp_path / "conda.lock"
+    path.write_text(yaml_dumps(data))
+    manifest = """\
+[workspace]
+name = "example"
+channels = ["conda-forge"]
+platforms = ["linux-64"]
+[dependencies]
+probe = "==1.0"
+[environments]
+test = []
+"""
+    if filename == "pyproject.toml":
+        manifest = (
+            manifest.replace("[", "[tool.conda.", 1)
+            .replace("[dependencies]", "[tool.conda.dependencies]")
+            .replace("[environments]", "[tool.conda.environments]")
+        )
+    parsed = ParsedInputFile.from_path(
+        path, check_lock=True, manifest_content=manifest, manifest_filename=filename
+    )
+    assert parsed.lock_check.consistent
+    assert len(parsed.lock_check.targets) == 2
+
+
+@pytest.mark.parametrize(
+    "invalid",
+    [
+        "version",
+        "external-ref",
+        "empty-bad-packages",
+        "bad-dependency",
+        "bad-match-spec",
+    ],
+)
+def test_lock_check_rejects_malformed_or_unsupported_saved_records(
+    workspace_consistent_lock_path,
+    workspace_consistent_lock_data,
+    workspace_consistent_manifest_text,
+    invalid,
+):
+    data = workspace_consistent_lock_data
+    if invalid == "version":
+        data["version"] = 99
+    elif invalid == "external-ref":
+        data["environments"]["test"]["packages"]["gpu"] = [
+            {"pypi": "https://example.test/package.whl"}
+        ]
+    elif invalid == "empty-bad-packages":
+        data["environments"] = {}
+        data["packages"] = "invalid"
+    elif invalid == "bad-dependency":
+        data["packages"][0]["depends"] = "invalid"
+    else:
+        data["packages"][0]["depends"] = [">=1"]
+    workspace_consistent_lock_path.write_text(yaml_dumps(data))
+    with pytest.raises((CondaError, ValueError, RecordValidationError)):
+        ParsedInputFile.from_path(
+            workspace_consistent_lock_path,
+            check_lock=True,
+            manifest_content=workspace_consistent_manifest_text,
+            manifest_filename="conda.toml",
         )
