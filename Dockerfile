@@ -2,11 +2,16 @@ FROM ghcr.io/prefix-dev/pixi:0.81.0@sha256:788ae451641666e2d1f79d3dbe35392dfc7e9
 
 ARG PIXI_ENVIRONMENT=prod
 
+# The temporary Workspaces source dependency needs Git in the build stage.
+RUN apt-get update \
+    && apt-get install --no-install-recommends -y git \
+    && rm -rf /var/lib/apt/lists/*
+
 WORKDIR /app
 COPY pyproject.toml pixi.lock README.md ./
 COPY conda_presto/ conda_presto/
 ARG CONDA_PRESTO_VERSION=0.0.0
-ENV SETUPTOOLS_SCM_PRETEND_VERSION=${CONDA_PRESTO_VERSION}
+ENV SETUPTOOLS_SCM_PRETEND_VERSION_FOR_CONDA_PRESTO=${CONDA_PRESTO_VERSION}
 
 RUN pixi install --locked -e "${PIXI_ENVIRONMENT}"
 RUN pixi shell-hook -e "${PIXI_ENVIRONMENT}" -s bash > /shell-hook
