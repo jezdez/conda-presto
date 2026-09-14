@@ -613,13 +613,14 @@ def test_workspace_virtual_root_is_a_requirement_without_becoming_a_package(
         ("pyproject-toml", "pyproject.toml"),
     ],
 )
+@pytest.mark.parametrize("operation", ["solve", "export"])
 def test_workspace_normalized_manifest_export_preserves_declared_requirements(
-    manifest, rich_manifest, workspace_solver, format_name, filename
+    manifest, rich_manifest, workspace_solver, format_name, filename, operation
 ):
     parsed = WorkspaceInput.from_path(
         rich_manifest, environments=["test"], platforms=["gpu"]
     )
-    body, media_type = parsed.solve(format_name)
+    body, media_type = getattr(parsed, operation)(format_name)
     exported = WorkspaceInput.from_path(
         manifest(body, filename), platforms=["linux-64"]
     ).result.selected[0]
@@ -631,4 +632,43 @@ def test_workspace_normalized_manifest_export_preserves_declared_requirements(
     }
     assert exported.channels == parsed.result.selected[0].channels
     assert exported.subdir == "linux-64"
-    assert [call["target"] for call in workspace_solver[0]] == [("test", "gpu")]
+    assert [call["target"] for call in workspace_solver[0]] == (
+        [("test", "gpu")] if operation == "solve" else []
+    )
+
+
+@pytest.mark.parametrize(
+    "environments,platforms,format_name,message",
+    [
+        (["default", "test"], ["cpu"], "conda-toml", "Select one environment"),
+        (["test"], ["cpu", "gpu"], "conda-toml", "sharing a conda subdir"),
+        (["test"], ["cpu", "osx-arm64"], "environment-yaml", "Select one target"),
+    ],
+)
+def test_workspace_declaration_export_rejects_unrepresentable_selection(
+    rich_manifest, workspace_solver, environments, platforms, format_name, message
+):
+    parsed = WorkspaceInput.from_path(
+        rich_manifest, environments=environments, platforms=platforms
+    )
+    with pytest.raises(ValueError, match=message):
+        parsed.export(format_name)
+    assert workspace_solver[0] == []
+
+
+def test_workspace_declaration_export_preserves_multiple_platforms(
+    workspace_manifest_path, workspace_solver, manifest
+):
+    selected = WorkspaceInput.from_path(workspace_manifest_path, environments=["test"])
+    body, _ = selected.export("conda-toml")
+    exported = WorkspaceInput.from_path(
+        manifest(body, "conda.toml"), platforms=["linux-64", "osx-arm64"]
+    )
+    assert {
+        target.subdir: {MatchSpec(spec) for spec in target.specs}
+        for target in exported.result.selected
+    } == {
+        target.subdir: {MatchSpec(spec) for spec in target.specs}
+        for target in selected.result.selected
+    }
+    assert workspace_solver[0] == []

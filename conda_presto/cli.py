@@ -12,7 +12,8 @@ Pass ``--format <name>`` to route through conda's exporter plugins
 ``rattler-lock-v6``/``pixi-lock-v6``, …) instead.
 
 Resolve is the default action. Use ``--parse`` to inspect an input file,
-``--export`` to extract locked records, or ``--serve`` to start the HTTP API.
+``--export`` to render declarations or saved records, or ``--serve`` to start
+the HTTP API.
 The ``--host`` and ``--port`` defaults use
 ``CONDA_PRESTO_HOST`` and ``CONDA_PRESTO_PORT`` environment variables
 (see :mod:`conda_presto.config`).
@@ -114,7 +115,7 @@ def configure_parser(parser: argparse.ArgumentParser):
         "--export",
         action="store_true",
         default=False,
-        help="Export one lockfile without solving. Requires --file and --format.",
+        help="Export one input file without solving. Requires --file and --format.",
     )
     mode_group.add_argument(
         "--serve",
@@ -178,14 +179,14 @@ def cmd_parse(args: argparse.Namespace):
             path.name,
             args.platforms or None,
             time.monotonic() + PARSE_TIMEOUT_S,
-            transcode_format=output_format.exporter.name if output_format else None,
+            export_format=output_format.exporter.name if output_format else None,
             target_environments=getattr(args, "environments", None) or None,
         )
         if export:
-            if not parsed.is_lockfile:
-                raise ValueError("--export requires a lockfile")
-            if parsed.transcoded_content is None:
-                raise ValueError("The lockfile cannot be exported with this selection")
+            if parsed.exported_content is None:
+                raise ValueError(
+                    "This input cannot be exported with this format and selection"
+                )
         elif (
             parsed.workspace is None
             and parsed.workspace_lock is None
@@ -206,7 +207,7 @@ def cmd_parse(args: argparse.Namespace):
         error = "Input parser failed"
     else:
         if export:
-            sys.stdout.buffer.write(parsed.transcoded_content.encode("utf-8"))
+            sys.stdout.buffer.write(parsed.exported_content.encode("utf-8"))
         else:
             body = msgspec.json.format(
                 msgspec.json.encode(parsed.parse_result), indent=2

@@ -13,6 +13,7 @@ import pytest
 import yaml
 from conda.base.context import context
 from conda.exceptions import PackagesNotFoundError
+from conda.models.match_spec import MatchSpec
 from conda.plugins.types import EnvironmentFormat
 
 from conda_presto.cli import (
@@ -224,7 +225,7 @@ def test_export_preserves_rendered_bytes_and_passes_selection(
         assert platforms == ["gpu"]
         assert deadline > time.monotonic()
         assert kwargs == {
-            "transcode_format": "conda-workspaces-lock-v1",
+            "export_format": "conda-workspaces-lock-v1",
             "target_environments": ["test"],
         }
         return ParsedInputFile(
@@ -232,7 +233,7 @@ def test_export_preserves_rendered_bytes_and_passes_selection(
             channels=[],
             environment_format=EnvironmentFormat.lockfile,
             source_format="conda-workspaces-lock-v1",
-            transcoded_content=rendered,
+            exported_content=rendered,
         )
 
     monkeypatch.setattr(ParsedInputFile, "from_content_until", parse)
@@ -252,10 +253,34 @@ def test_export_preserves_rendered_bytes_and_passes_selection(
     )
 
 
-def test_export_rejects_environment_file(run_cli, environment_yml_path, capsys):
+def test_export_rejects_unresolved_explicit_output(
+    run_cli, environment_yml_path, capsys
+):
     with pytest.raises(SystemExit, match="1"):
         run_cli("--export", "-f", str(environment_yml_path), "--format", "explicit")
-    assert "--export requires a lockfile" in capsys.readouterr().err
+    assert "requires solved package records" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize(
+    "filename", ["environment.yml", "requirements.txt", "conda.toml"]
+)
+def test_export_declarations_preserves_requirements(run_cli, tmp_path, filename):
+    path = tmp_path / filename
+    content = {
+        "environment.yml": "channels: [conda-forge]\ndependencies: ['zlib >=1']\n",
+        "requirements.txt": "zlib >=1\n",
+        "conda.toml": (
+            '[workspace]\nchannels = ["conda-forge"]\nplatforms = ["linux-64"]\n'
+            '[dependencies]\nzlib = ">=1"\n'
+        ),
+    }[filename]
+    path.write_text(content)
+    exported = json.loads(
+        run_cli("--export", "-f", str(path), "--format", "environment-json")
+    )
+    assert [MatchSpec(spec) for spec in exported["dependencies"]] == [
+        MatchSpec("zlib >=1")
+    ]
 
 
 def test_export_reports_unknown_format(run_cli, environment_yml_path, capsys):

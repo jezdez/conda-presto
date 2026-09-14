@@ -29,6 +29,7 @@ import conda_presto.inputs as inputs_module
 from conda_presto.app import (
     build_cors_config,
     capabilities,
+    export_post,
     formats,
     health,
     openapi_json,
@@ -59,6 +60,7 @@ def test_app():
             openapi_json,
             resolve_get,
             resolve_post,
+            export_post,
             transcode_post,
             sbom_post,
             sign_post,
@@ -1804,7 +1806,7 @@ package:
     assert response.headers["cache-control"] == "no-store"
     assert len(parsed_results) == 1
     assert parsed_results[0].environments == ()
-    assert parsed_results[0].transcoded_content == response.text
+    assert parsed_results[0].exported_content == response.text
     data = yaml.safe_load(response.text)
     assert data["version"] == expected_version
     if expected_version == 1:
@@ -2149,6 +2151,10 @@ async def test_openapi_schema(client):
     assert "/explain" not in data["paths"]
     assert "/transcode" in data["paths"]
     assert "/export" in data["paths"]
+    assert (
+        data["paths"]["/export"]["post"]["operationId"]
+        != data["paths"]["/transcode"]["post"]["operationId"]
+    )
     assert "/parse" in data["paths"]
     assert "/r/{key}" in data["paths"]
     assert "/health" in data["paths"]
@@ -3543,6 +3549,7 @@ async def test_capabilities_separates_provider_and_signing_configuration(
         "workspace_solve": True,
         "workspace_lock_parse": True,
         "workspace_lock_export": True,
+        "export": True,
         "sbom": True,
         "verify": installed,
         "sign": installed and enabled and not offline,

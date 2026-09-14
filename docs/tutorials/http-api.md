@@ -22,6 +22,19 @@ cmp pixi.lock saved.lock
 
 A new solve checks channel freshness. Retrieval returns the saved bytes until eviction. An absent `Location` means the solve succeeded without retaining its output.
 
+## Export declarations without solving
+
+To change the representation of declared requirements, send the file to `/export`:
+
+```bash
+curl --fail-with-body "$CONDA_PRESTO_URL/export?filename=environment.yml&format=requirements" \
+  --header 'Content-Type: application/yaml' \
+  --data-binary $'channels:\n  - conda-forge\ndependencies:\n  - python=3.13\n  - zlib\n' \
+  --output requirements.txt
+```
+
+The output contains the requested MatchSpecs. This operation does not solve or download packages. Unsolved declarations cannot produce locks, explicit package lists or SBOMs. Workspace manifests use the same export operation, with named selections shown in {doc}`../how-to/parse-workspace`. Saved locks can also be exported, as shown in {doc}`../how-to/extract-workspace-lock`.
+
 ## Generate an SBOM
 
 Use a server with the optional providers installed, as described in {doc}`../how-to/run-with-docker`. Check `/capabilities` first.
@@ -33,7 +46,7 @@ curl --fail-with-body "$CONDA_PRESTO_URL/sbom" \
 jq -j '.sboms[0].content' sboms.json > environment.cdx.json
 ```
 
-The document describes selected package records. It does not establish which files a downstream product ships. Multiple requested platforms produce separate documents.
+The document describes selected package records. It does not establish which files a downstream product ships. Multiple requested platforms produce separate documents. `/sbom` solves the supplied requirements and reuses the registered SBOM exporter. It does not accept uploaded lockfiles.
 
 ## Sign and verify the saved bytes
 

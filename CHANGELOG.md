@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- Inspect and extract named workspace lock entries, and export their exact records through `POST /export` and CLI `--export` without solving or downloads.
+- Render declarations or saved exact records through `POST /export` and CLI `--export` without solving or downloads, including named workspace lock extraction.
 - Add workspace discovery and target selection through `POST /parse` and CLI `--parse`, using conda-workspaces without solving.
 - Solve named workspace environments and targets through HTTP, CLI and the GitHub Action, with combined locks and normalized manifest exports.
 - Add optional SBOM generation through conda-sboms and signing and verification through conda-sigstore.
