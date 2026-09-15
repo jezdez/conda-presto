@@ -79,6 +79,41 @@ The response reports `consistent: false` and a reason for each affected target. 
 
 This operation checks the complete workspace and does not accept environment or platform selectors. It does not check repository freshness, download or verify archives, or evaluate vulnerability policy. The response is not retained in the artifact cache.
 
+## Update one target from a saved lock
+
+Use the original matching `conda.toml` and `conda.lock` from {doc}`../how-to/parse-workspace`. Update the direct `pytest` dependency in `test/linux-64`:
+
+```bash
+jq -n --rawfile file conda.lock --rawfile manifest conda.toml \
+  '{file: $file, filename: "conda.lock", manifest: $manifest, manifest_filename: "conda.toml",
+    environment: "test", platform: "linux-64", packages: ["pytest"]}' |
+  curl --fail-with-body "$CONDA_PRESTO_URL/update" \
+    --header 'Content-Type: application/json' --data-binary @- \
+    --output updated.lock
+```
+
+The response is a complete workspace lock. The manifest's `pytest >=8` constraint still applies. Dependencies inside the selected target may also change, while the saved selections for `default` and `test/osx-arm64` remain unchanged. The provider can keep the current version when no suitable update is selected.
+
+In the conda environment containing Presto, compare the unselected package references:
+
+```bash
+python - <<'PY'
+from pathlib import Path
+from ruamel.yaml import YAML
+
+reader = YAML(typ="safe")
+before = reader.load(Path("conda.lock").read_text())
+after = reader.load(Path("updated.lock").read_text())
+for environment, data in before["environments"].items():
+    for target, packages in data["packages"].items():
+        if (environment, target) != ("test", "linux-64"):
+            assert after["environments"][environment]["packages"][target] == packages
+print("Unselected package references are unchanged")
+PY
+```
+
+The baseline must satisfy every manifest target before an update starts. A changed manifest, missing target or unsupported input fails instead of triggering a full relock. Leave `conda.lock` in place while inspecting `updated.lock`. If updating fails, no partial lock is returned and previously retained outputs remain available.
+
 ## Sign and verify the saved bytes
 
 On a deployment with signing deliberately enabled and noninteractive credentials configured:

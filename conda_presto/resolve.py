@@ -50,7 +50,7 @@ VIRTUAL_PACKAGES: dict[str, dict[str, str]] = {
 NATIVE_SUBDIR: str = context.subdir
 
 current_platform: str | None = None
-platform_lock = threading.Lock()
+platform_lock = threading.RLock()
 context_configured = False
 
 index_lock = threading.Lock()

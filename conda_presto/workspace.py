@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 from contextlib import contextmanager
 from dataclasses import dataclass
 from importlib.metadata import PackageNotFoundError, version
@@ -34,6 +35,7 @@ from .resolve import VIRTUAL_PACKAGES, ResolvedPackage, platform_lock
 
 if TYPE_CHECKING:
     from conda_workspaces.models import WorkspaceConfig
+    from conda_workspaces.resolver import ResolvedEnvironment
 
 
 class WorkspaceEnvironment(msgspec.Struct):
@@ -56,6 +58,37 @@ class WorkspaceTarget(msgspec.Struct):
     channel_priority: str | None
     system_requirements: dict[str, str]
     pypi_dependencies: dict[str, str | dict[str, Any]]
+
+    @contextmanager
+    def virtual_package_context(self, resolved: ResolvedEnvironment):
+        """Use declared target virtuals without detecting service host hardware."""
+        with platform_lock, context._override("_subdir", self.subdir):
+            overrides = {
+                package.name: ""
+                for package in context.plugin_manager.get_hook_results(
+                    "virtual_packages"
+                )
+                if package.override_entity
+            }
+            overrides.update(VIRTUAL_PACKAGES.get(self.subdir.split("-", 1)[0], {}))
+            for name in overrides:
+                if version := resolved.system_requirement_version(name):
+                    overrides[name] = version
+            variables = {
+                f"CONDA_OVERRIDE_{name.upper()}": value
+                for name, value in overrides.items()
+            }
+            saved = {name: os.environ.get(name) for name in variables}
+            # Environment overrides take precedence over conda context.
+            os.environ.update(variables)
+            try:
+                yield
+            finally:
+                for name, value in saved.items():
+                    if value is None:
+                        os.environ.pop(name, None)
+                    else:
+                        os.environ[name] = value
 
     @contextmanager
     def solver_context(self):

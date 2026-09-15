@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import hashlib
 import io
-import os
-from dataclasses import dataclass, replace
+from contextlib import ExitStack, contextmanager
+from dataclasses import dataclass, field, replace
+from enum import Enum
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from typing import Any
 
 import msgspec
@@ -15,21 +17,23 @@ from conda.common.serialize.yaml import dump as yaml_dump
 from conda.models.channel import Channel
 from conda.models.environment import Environment
 from conda.models.match_spec import MatchSpec
+from conda_workspaces.context import WorkspaceContext
 from conda_workspaces.lockfile import (
     FORMAT,
     CondaLockLoader,
     check_lockfile_satisfiability,
     load_lockfile_data,
+    render_lockfile,
 )
 from conda_workspaces.manifests import PARSER_BY_FILENAME
 from conda_workspaces.models import LockfileStatus, has_url_credentials_in_data
 from conda_workspaces.resolver import resolve_environment
 
-from .config import MAX_CHANNELS, MAX_PLATFORMS
-from .exceptions import redact_safe_error
+from .config import MAX_CHANNELS, MAX_PLATFORMS, MAX_SPECS
+from .exceptions import WorkspaceSolveError, redact_safe_error, safe_error_message
 from .exporter import OutputFormat
-from .resolve import VIRTUAL_PACKAGES, platform_lock
-from .workspace import WorkspaceInput
+from .resolve import platform_lock
+from .workspace import WorkspaceInput, WorkspaceTarget
 
 
 class WorkspaceLockEnvironment(msgspec.Struct):
@@ -92,6 +96,7 @@ class WorkspaceLockInput:
     source_data: dict[str, Any]
     manifest: WorkspaceInput | None = None
     manifest_digest: str | None = None
+    manifest_content: str | None = None
 
     @classmethod
     def from_path(
@@ -213,6 +218,7 @@ class WorkspaceLockInput:
             self,
             manifest=manifest,
             manifest_digest=hashlib.sha256(content.encode("utf-8")).hexdigest(),
+            manifest_content=content,
         )
 
     def environment(self, target: WorkspaceLockTarget) -> Environment:
@@ -296,41 +302,13 @@ class WorkspaceLockInput:
             resolved = resolve_environment(
                 self.manifest.config, target.environment, target.platform
             )
-            with platform_lock, context._override("_subdir", target.subdir):
-                overrides = {
-                    package.name: ""
-                    for package in context.plugin_manager.get_hook_results(
-                        "virtual_packages"
-                    )
-                    if package.override_entity
-                }
-                overrides.update(
-                    VIRTUAL_PACKAGES.get(target.subdir.split("-", 1)[0], {})
+            with target.virtual_package_context(resolved):
+                status = check_lockfile_satisfiability(
+                    self.manifest.config,
+                    self.source_data,
+                    target.platform,
+                    environment=target.environment,
                 )
-                for name in overrides:
-                    if version := resolved.system_requirement_version(name):
-                        overrides[name] = version
-                variables = {
-                    f"CONDA_OVERRIDE_{name.upper()}": value
-                    for name, value in overrides.items()
-                }
-                saved = {name: os.environ.get(name) for name in variables}
-                # Environment overrides take precedence over conda context and
-                # prevent the provider from detecting the service host's hardware.
-                os.environ.update(variables)
-                try:
-                    status = check_lockfile_satisfiability(
-                        self.manifest.config,
-                        self.source_data,
-                        target.platform,
-                        environment=target.environment,
-                    )
-                finally:
-                    for name, value in saved.items():
-                        if value is None:
-                            os.environ.pop(name, None)
-                        else:
-                            os.environ[name] = value
             checks.append(
                 WorkspaceLockTargetCheck(
                     target.environment,
@@ -383,6 +361,49 @@ class WorkspaceLockInput:
             raise ValueError("Select one target for this output format")
         return output.render(envs)[0]
 
+    def prepare_update(
+        self, environment: str, platform: str, packages: tuple[str, ...]
+    ) -> WorkspaceLockUpdate:
+        """Require a complete baseline and explicitly declared update roots."""
+        check = self.check_consistency()
+        if not check.consistent:
+            mismatch = next(target for target in check.targets if not target.consistent)
+            raise ValueError(
+                f"Baseline lock is inconsistent for {mismatch.environment!r} "
+                f"on {mismatch.platform!r}: {mismatch.reason}"
+            )
+        if not environment or not platform or not packages:
+            raise ValueError("Lock updates require an environment, target and packages")
+        if len(packages) > MAX_SPECS:
+            raise ValueError(f"Too many update packages: limit {MAX_SPECS}")
+        workspace = self.manifest.select([environment], [platform])
+        target = workspace.result.selected[0]
+        if target.platform != platform:
+            raise ValueError(
+                "Lock updates require an exact declared logical target name"
+            )
+        resolved = resolve_environment(
+            self.manifest.config, environment, target.platform
+        )
+        names = set(packages)
+        unknown = names - resolved.conda_dependencies.keys()
+        if unknown:
+            raise ValueError(
+                "Update packages must be exact declared direct conda names: "
+                + ", ".join(sorted(unknown))
+            )
+        installed = {
+            record.name
+            for record in self.loader.package_records_for_env_data(
+                self.source_data, environment, target.platform
+            )
+        }
+        if missing := names - installed:
+            raise ValueError(
+                "Baseline is missing update roots: " + ", ".join(sorted(missing))
+            )
+        return WorkspaceLockUpdate(self, target, tuple(sorted(names)))
+
     def render_each(self, format_name: str) -> list[WorkspaceLockExport]:
         """Render every selected pair completely before returning documents."""
         output = OutputFormat.named(format_name)
@@ -418,3 +439,129 @@ class WorkspaceLockInput:
                 for name in ("conda", "conda_workspaces", "conda_lockfiles")
             },
         }
+
+
+@dataclass(frozen=True)
+class WorkspaceLockUpdate:
+    """One validated update with its original complete baseline."""
+
+    lock: WorkspaceLockInput
+    target: WorkspaceTarget
+    packages: tuple[str, ...]
+    settings: dict[str, Any] = field(default_factory=dict)
+
+    def configured(self) -> WorkspaceLockUpdate:
+        """Carry the caller's effective solve settings into an isolated worker."""
+        with platform_lock:
+            settings = {
+                name: getattr(context, name)
+                for name in (
+                    "pinned_packages",
+                    "_aggressive_update_packages",
+                    "deps_modifier",
+                    "ignore_pinned",
+                    "auto_update_conda",
+                    "offline",
+                    "use_index_cache",
+                    "repodata_use_shards",
+                    "repodata_fns",
+                    "repodata_use_zst",
+                    "ssl_verify",
+                    "no_lock",
+                    "use_only_tar_bz2",
+                    "channel_priority",
+                    "local_repodata_ttl",
+                )
+            }
+            settings["_pkgs_dirs"] = tuple(context.pkgs_dirs)
+        return replace(self, settings=settings)
+
+    @contextmanager
+    def solver_context(self, workspace: WorkspaceInput):
+        """Apply caller settings and the declared target's virtual packages."""
+        resolved = resolve_environment(
+            workspace.config, self.target.environment, self.target.platform
+        )
+        with platform_lock, ExitStack() as stack:
+            for name, value in self.settings.items():
+                stack.enter_context(context._override(name, value))
+            stack.enter_context(self.target.solver_context())
+            stack.enter_context(self.target.virtual_package_context(resolved))
+            yield resolved
+
+    def repodata_options(self) -> dict[str, bool]:
+        return {
+            "use_shards": bool(self.settings.get("repodata_use_shards", True)),
+            "use_index_cache": bool(self.settings.get("use_index_cache", False)),
+        }
+
+    def cache_identity(self) -> dict[str, Any]:
+        """Identify exact inputs, update roots, target and effective solve settings."""
+        workspace = self.lock.manifest.select(
+            [self.target.environment], [self.target.platform]
+        )
+        with self.solver_context(workspace):
+            solve_identity = workspace.cache_identity()
+        return {
+            "operation": "update",
+            "input": self.lock.cache_identity(),
+            "packages": self.packages,
+            "solve": solve_identity,
+            "settings": {
+                name: value.value if isinstance(value, Enum) else value
+                for name, value in self.settings.items()
+            },
+        }
+
+    def solve(self, format_name: str | None = FORMAT) -> tuple[str, str]:
+        """Update through Workspaces and return only a complete consistent lock."""
+        if format_name != FORMAT:
+            raise ValueError("Lock updates return conda-workspaces-lock-v1")
+        with TemporaryDirectory(prefix="conda-presto-update-") as directory:
+            try:
+                # Input parser paths no longer exist after its process returns.
+                path = Path(directory) / "conda.lock"
+                stream = io.StringIO()
+                yaml_dump(self.lock.source_data, stream)
+                path.write_text(stream.getvalue(), encoding="utf-8")
+                manifest_filename = Path(self.lock.manifest.config.manifest_path).name
+                lock = WorkspaceLockInput.from_path(path).with_manifest(
+                    self.lock.manifest_content, manifest_filename
+                )
+                with self.solver_context(lock.manifest) as resolved:
+                    # This target is already resolved. The complete pre/post checks
+                    # use a separate virtual package context for every declared pair.
+                    content = render_lockfile(
+                        WorkspaceContext(lock.manifest.config),
+                        {self.target.environment: resolved},
+                        baseline_data=lock.source_data,
+                        update_targets={
+                            (self.target.environment, self.target.platform): set(
+                                self.packages
+                            )
+                        },
+                    )
+                path.write_text(content, encoding="utf-8")
+                updated = WorkspaceLockInput.from_path(path).with_manifest(
+                    self.lock.manifest_content, manifest_filename
+                )
+                check = updated.check_consistency()
+                if not check.consistent:
+                    mismatch = next(
+                        target for target in check.targets if not target.consistent
+                    )
+                    raise WorkspaceSolveError(
+                        self.target.environment,
+                        self.target.platform,
+                        f"Updated lock is inconsistent for {mismatch.environment!r} "
+                        f"on {mismatch.platform!r}: {mismatch.reason}",
+                    )
+                return content, OutputFormat.named(FORMAT).media_type
+            except WorkspaceSolveError:
+                raise
+            except Exception as exc:
+                error = safe_error_message(exc.__cause__ or exc)
+                error = error.replace(directory, "[temporary-directory]")
+                raise WorkspaceSolveError(
+                    self.target.environment, self.target.platform, error
+                ) from exc

@@ -171,7 +171,7 @@ def test_setup_pixi_uses_pinned_version(path):
     setup_count = text.count("prefix-dev/setup-pixi@")
 
     assert setup_count > 0
-    assert text.count("pixi-version: v0.70.1") == setup_count
+    assert text.count("pixi-version: v0.80.0") == setup_count
 
 
 def test_dev_server_disables_uvicorn_access_log():
