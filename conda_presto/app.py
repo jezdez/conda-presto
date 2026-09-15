@@ -94,7 +94,11 @@ from .resolve import (
 from .storage import StoreOperationCoordinator
 from .worker import PersistentSolveWorker
 from .workspace import WorkspaceInput
-from .workspace_lock import WorkspaceLockCheckResult, WorkspaceLockParseResult
+from .workspace_lock import (
+    WorkspaceLockCheckResult,
+    WorkspaceLockParseResult,
+    WorkspaceLockUpdate,
+)
 
 log = logging.getLogger(__name__)
 
@@ -675,6 +679,18 @@ class ValidateRequest(msgspec.Struct, forbid_unknown_fields=True):
     manifest_filename: str
 
 
+class UpdateRequest(msgspec.Struct, forbid_unknown_fields=True):
+    """Update direct dependency names in one named workspace lock target."""
+
+    file: str
+    filename: str
+    manifest: str
+    manifest_filename: str
+    environment: str
+    platform: str
+    packages: list[str]
+
+
 class ValidationErrorResponse(msgspec.Struct, omit_defaults=True):
     """Litestar's request validation error payload."""
 
@@ -799,12 +815,18 @@ async def parse_input_for_request(
     manifest_content: str | None = None,
     manifest_filename: str | None = None,
     check_lock: bool = False,
+    update: tuple[str, str, tuple[str, ...]] | None = None,
+    deadline: float | None = None,
 ) -> ParsedInputFile | Response:
     """Parse input off the event loop with a bounded wall-clock time."""
     capacity = request.app.state.solver_limiter
-    deadline = time.monotonic() + PARSE_TIMEOUT_S
+    parse_deadline = time.monotonic() + PARSE_TIMEOUT_S
+    deadline = parse_deadline if deadline is None else min(deadline, parse_deadline)
     try:
-        with anyio.fail_after(PARSE_TIMEOUT_S):
+        remaining_s = deadline - time.monotonic()
+        if remaining_s <= 0:
+            raise TimeoutError
+        with anyio.fail_after(remaining_s):
             return await anyio.to_thread.run_sync(
                 partial(
                     ParsedInputFile.from_content_until,
@@ -819,6 +841,7 @@ async def parse_input_for_request(
                     manifest_content=manifest_content,
                     manifest_filename=manifest_filename,
                     check_lock=check_lock,
+                    update=update,
                 ),
                 limiter=capacity,
                 abandon_on_cancel=False,
@@ -840,7 +863,7 @@ async def run_solve(
     platforms: list[str] | None,
     format_name: str | None = None,
     timeout_s: float | None = None,
-    workspace: WorkspaceInput | None = None,
+    workspace: WorkspaceInput | WorkspaceLockUpdate | None = None,
 ) -> Response | tuple[bytes, str]:
     """Shared solve runner: threadpool + timeout + error sanitization.
 
@@ -937,7 +960,7 @@ def run_solve_work(
     specs: list[str],
     platforms: list[str] | None,
     format_name: str | None,
-    workspace: WorkspaceInput | None = None,
+    workspace: WorkspaceInput | WorkspaceLockUpdate | None = None,
 ) -> list | tuple[str, str]:
     """Run the blocking solve/export path in a worker."""
     if workspace is not None:
@@ -958,7 +981,7 @@ def run_solve_in_process(
     platforms: list[str] | None,
     format_name: str | None,
     deadline: float,
-    workspace: WorkspaceInput | None = None,
+    workspace: WorkspaceInput | WorkspaceLockUpdate | None = None,
 ) -> list | tuple[str, str]:
     """Run solve work in a child process until the request deadline."""
     if deadline <= time.monotonic():
@@ -1011,7 +1034,7 @@ def solve_process_entrypoint(
     specs: list[str],
     platforms: list[str] | None,
     format_name: str | None,
-    workspace: WorkspaceInput | None = None,
+    workspace: WorkspaceInput | WorkspaceLockUpdate | None = None,
 ) -> None:
     """Send a solve result from an isolated process."""
     CredentialRedactionFilter.install()
@@ -1050,7 +1073,8 @@ async def run_cached_solve(
     channels: list[str],
     platforms: list[str] | None,
     format_name: str | None = None,
-    workspace: WorkspaceInput | None = None,
+    workspace: WorkspaceInput | WorkspaceLockUpdate | None = None,
+    deadline: float | None = None,
 ) -> Response:
     """Run a solve through the retained result cache."""
     cache: ResultCache = request.app.state.result_cache
@@ -1071,10 +1095,21 @@ async def run_cached_solve(
         retain_result = retain_result and exporter_identity is not None
     resolved_platforms = list(platforms or [NATIVE_SUBDIR])
     capacity = request.app.state.solver_limiter
-    deadline = time.monotonic() + SOLVE_TIMEOUT_S
-    repodata_options = workspace.repodata_options() if workspace is not None else {}
+    deadline = time.monotonic() + SOLVE_TIMEOUT_S if deadline is None else deadline
     try:
-        with anyio.fail_after(SOLVE_TIMEOUT_S):
+        remaining_s = deadline - time.monotonic()
+        if remaining_s <= 0:
+            raise TimeoutError
+        with anyio.fail_after(remaining_s):
+            if isinstance(workspace, WorkspaceLockUpdate):
+                workspace = await anyio.to_thread.run_sync(
+                    workspace.configured,
+                    limiter=capacity,
+                    abandon_on_cancel=False,
+                )
+            repodata_options = (
+                workspace.repodata_options() if workspace is not None else {}
+            )
             workspace_args = {}
             if workspace is not None:
                 workspace_args["workspace_identity"] = await anyio.to_thread.run_sync(
@@ -1409,6 +1444,90 @@ async def validate_post(request: Request, data: ValidateRequest) -> Response:
     return Response(parsed.lock_check, headers={"Cache-Control": "no-store"})
 
 
+@post(
+    "/update",
+    status_code=200,
+    responses={
+        200: ResponseSpec(
+            data_container=str,
+            media_type="application/yaml",
+            description="Complete updated workspace lock",
+        ),
+        HTTP_400_BAD_REQUEST: ResponseSpec(
+            data_container=ErrorResponse | ValidationErrorResponse,
+            description="Invalid selection or unusable baseline",
+        ),
+        HTTP_500_INTERNAL_SERVER_ERROR: ResponseSpec(
+            data_container=ErrorResponse,
+            description="Lock update failed",
+        ),
+        HTTP_504_GATEWAY_TIMEOUT: ResponseSpec(
+            data_container=ErrorResponse,
+            description="Lock update exceeded its deadline",
+        ),
+    },
+)
+async def update_post(request: Request, data: UpdateRequest) -> Response:
+    """Update selected direct roots and return a complete workspace lock."""
+    deadline = time.monotonic() + SOLVE_TIMEOUT_S
+    error = None
+    if request.content_type[0] != "application/json":
+        error = "POST /update requires application/json"
+    elif request.query_params:
+        error = "POST /update does not accept query parameters"
+    elif (
+        not all(
+            value.strip()
+            for value in (
+                data.file,
+                data.filename,
+                data.manifest,
+                data.manifest_filename,
+                data.environment,
+                data.platform,
+            )
+        )
+        or not data.packages
+        or not all(name.strip() for name in data.packages)
+    ):
+        error = (
+            "Provide both named files, one environment and target, and package names"
+        )
+    if error:
+        return Response(
+            ErrorResponse(error=error),
+            status_code=HTTP_400_BAD_REQUEST,
+            headers={"Cache-Control": "no-store"},
+        )
+
+    parsed = await parse_input_for_request(
+        request,
+        data.file,
+        data.filename,
+        manifest_content=data.manifest,
+        manifest_filename=data.manifest_filename,
+        update=(data.environment, data.platform, tuple(data.packages)),
+        deadline=deadline,
+    )
+    if isinstance(parsed, Response):
+        parsed.headers["Cache-Control"] = "no-store"
+        return parsed
+    update = parsed.workspace_update
+    target = update.target
+    if cap_error := validate_caps(target.specs, target.channels, [target.subdir]):
+        cap_error.headers["Cache-Control"] = "no-store"
+        return cap_error
+    return await run_cached_solve(
+        request,
+        target.specs,
+        target.channels,
+        [target.subdir],
+        format_name="conda-workspaces-lock-v1",
+        workspace=update,
+        deadline=deadline,
+    )
+
+
 @post("/sbom", status_code=200)
 async def sbom_post(request: Request, data: SbomRequest) -> Response:
     """Return CycloneDX documents from new solves or selected workspace lock records."""
@@ -1573,6 +1692,7 @@ async def capabilities() -> dict[str, bool]:
         "workspace_lock_parse": True,
         "workspace_lock_export": True,
         "workspace_lock_check": True,
+        "workspace_lock_update": True,
         "workspace_lock_sbom": "cyclonedx-json-v1.7" in OutputFormat.available(),
         "export": True,
         "sbom": "cyclonedx-json-v1.7" in OutputFormat.available(),
@@ -1797,6 +1917,7 @@ app = Litestar(
         transcode_post,
         export_post,
         validate_post,
+        update_post,
         sbom_post,
         sign_post,
         verify_post,

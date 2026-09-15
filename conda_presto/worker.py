@@ -17,6 +17,7 @@ from .exceptions import (
 from .exporter import OutputFormat
 from .resolve import shutdown_process_pool, solve, solve_environments, warmup
 from .workspace import WorkspaceInput
+from .workspace_lock import WorkspaceLockUpdate
 
 log = logging.getLogger(__name__)
 
@@ -130,7 +131,7 @@ class PersistentSolveWorker:
         platforms: list[str] | None,
         format_name: str | None,
         deadline: float,
-        workspace: WorkspaceInput | None = None,
+        workspace: WorkspaceInput | WorkspaceLockUpdate | None = None,
     ) -> list | tuple[str, str]:
         """Return a solve result before the absolute deadline."""
         request = (channels, specs, platforms, format_name)
