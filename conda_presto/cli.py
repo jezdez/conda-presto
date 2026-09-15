@@ -13,7 +13,8 @@ Pass ``--format <name>`` to route through conda's exporter plugins
 
 Resolve is the default action. Use ``--parse`` to inspect an input file,
 ``--export`` to render declarations or saved records, ``--validate`` to compare
-a workspace manifest with its saved lock, or ``--serve`` to start the HTTP API.
+a workspace manifest with its saved lock, ``--update`` to update selected locked
+dependencies, or ``--serve`` to start the HTTP API.
 The ``--host`` and ``--port`` defaults use
 ``CONDA_PRESTO_HOST`` and ``CONDA_PRESTO_PORT`` environment variables
 (see :mod:`conda_presto.config`).
@@ -38,7 +39,13 @@ from conda.cli.helpers import (
 )
 from conda.exceptions import CondaError
 
-from .config import DEFAULT_CHANNELS, DEFAULT_HOST, DEFAULT_PORT, PARSE_TIMEOUT_S
+from .config import (
+    DEFAULT_CHANNELS,
+    DEFAULT_HOST,
+    DEFAULT_PORT,
+    PARSE_TIMEOUT_S,
+    SOLVE_TIMEOUT_S,
+)
 from .exceptions import (
     SAFE_ERROR_TYPES,
     UnknownFormatError,
@@ -52,7 +59,7 @@ from .resolve import solve, solve_environments
 
 
 def configure_parser(parser: argparse.ArgumentParser):
-    """Add solve, parse, export, validation, and server arguments to *parser*.
+    """Add solve, parse, export, validation, update, and server arguments to *parser*.
 
     Used by both the conda plugin hook and the standalone ``main()``.
     """
@@ -78,7 +85,7 @@ def configure_parser(parser: argparse.ArgumentParser):
         default=[],
         dest="environments",
         metavar="NAME",
-        help="Select a workspace environment to inspect, export or solve. "
+        help="Select a workspace environment to inspect, export, update or solve. "
         "May be specified multiple times.",
     )
 
@@ -97,7 +104,7 @@ def configure_parser(parser: argparse.ArgumentParser):
         default=None,
         metavar="PATH",
         help="Match a workspace manifest to the saved lock. "
-        "Requires --export or --validate.",
+        "Requires --export, --validate or --update.",
     )
 
     output_group = parser.add_argument_group("Output Format")
@@ -132,6 +139,13 @@ def configure_parser(parser: argparse.ArgumentParser):
         "solving. Requires --file and --manifest.",
     )
     mode_group.add_argument(
+        "--update",
+        action="store_true",
+        default=False,
+        help="Update named direct conda dependencies in one saved workspace target. "
+        "Requires --file, --manifest, --environment and --platform.",
+    )
+    mode_group.add_argument(
         "--serve",
         action="store_true",
         default=False,
@@ -145,20 +159,26 @@ def configure_parser(parser: argparse.ArgumentParser):
         "--port", type=int, default=DEFAULT_PORT, help="Server port."
     )
 
-    parser.add_argument("specs", nargs="*", help="Inline package specs")
+    parser.add_argument(
+        "specs", nargs="*", help="Inline package specs, or direct names for --update"
+    )
 
 
 def execute(args: argparse.Namespace):
     """Dispatch the requested CLI operation."""
     if getattr(args, "manifest", None) is not None and not (
-        getattr(args, "export", False) or getattr(args, "validate", False)
+        getattr(args, "export", False)
+        or getattr(args, "validate", False)
+        or getattr(args, "update", False)
     ):
-        print("--manifest requires --export or --validate.", file=sys.stderr)
+        print("--manifest requires --export, --validate or --update.", file=sys.stderr)
         raise SystemExit(1)
     if getattr(args, "environments", None) and getattr(args, "serve", False):
         print("Environment selection requires a workspace manifest.", file=sys.stderr)
         raise SystemExit(1)
-    if (
+    if getattr(args, "update", False):
+        cmd_update(args)
+    elif (
         getattr(args, "parse", False)
         or getattr(args, "export", False)
         or getattr(args, "validate", False)
@@ -267,6 +287,94 @@ def cmd_parse(args: argparse.Namespace):
         return
     print(f"Input error: {error}", file=sys.stderr)
     raise SystemExit(error_status)
+
+
+def cmd_update(args: argparse.Namespace):
+    """Update one workspace target in an isolated solver process."""
+    from .worker import PersistentSolveWorker
+
+    error = None
+    if len(args.files) != 1:
+        error = "--update requires exactly one --file."
+    elif not getattr(args, "manifest", None):
+        error = "--update requires --manifest."
+    elif len(args.environments) != 1:
+        error = "--update requires exactly one --environment."
+    elif len(args.platforms) != 1:
+        error = "--update requires exactly one --platform."
+    elif not args.specs:
+        error = "--update requires direct conda dependency names."
+    elif (
+        getattr(args, "channel", None)
+        or getattr(args, "override_channels", False)
+        or getattr(args, "use_local", False) is True
+    ):
+        error = "--update does not accept channel overrides."
+    elif args.output_format is not None:
+        error = "--update does not accept --format."
+    if error:
+        print(error, file=sys.stderr)
+        raise SystemExit(2)
+
+    context.__init__(argparse_args=args)
+    deadline = time.monotonic() + SOLVE_TIMEOUT_S
+    path = Path(args.files[0])
+    manifest_path = Path(args.manifest)
+    try:
+        parsed = ParsedInputFile.from_content_until(
+            path.read_text(encoding="utf-8"),
+            path.name,
+            None,
+            min(deadline, time.monotonic() + PARSE_TIMEOUT_S),
+            manifest_content=manifest_path.read_text(encoding="utf-8"),
+            manifest_filename=manifest_path.name,
+            update=(args.environments[0], args.platforms[0], tuple(args.specs)),
+        )
+        if parsed.workspace_update is None:
+            raise ValueError("Updating requires a workspace lock and its manifest")
+        prepared = parsed.workspace_update.configured()
+    except TimeoutError:
+        error = "Workspace update input parsing exceeded its deadline"
+    except UnicodeError:
+        error = "Input file is not valid UTF-8"
+    except OSError:
+        error = "Cannot read input file"
+    except (CondaError, ValueError) as exc:
+        error = redact_safe_error(str(exc))
+    except RuntimeError:
+        error = "Input parser failed"
+    if error:
+        print(f"Input error: {error}", file=sys.stderr)
+        raise SystemExit(2)
+
+    worker = PersistentSolveWorker(
+        [], [], startup_timeout_s=max(0, deadline - time.monotonic())
+    )
+    try:
+        if deadline <= time.monotonic():
+            raise TimeoutError
+        worker.start()
+        result = worker.solve(
+            [],
+            [],
+            None,
+            "conda-workspaces-lock-v1",
+            deadline,
+            workspace=prepared,
+        )
+    except TimeoutError:
+        error = f"Workspace update exceeded {SOLVE_TIMEOUT_S}s timeout"
+    except (CondaError, ValueError, WorkspaceSolveError) as exc:
+        error = redact_safe_error(str(exc))
+    except RuntimeError:
+        error = "Workspace update worker failed"
+    finally:
+        if not worker.shutdown():
+            error = "Workspace update worker could not be stopped"
+    if error:
+        print(f"Update error: {error}", file=sys.stderr)
+        raise SystemExit(1)
+    sys.stdout.buffer.write(result[0].encode("utf-8"))
 
 
 def load_parsed_files(

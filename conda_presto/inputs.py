@@ -31,6 +31,7 @@ from .workspace_lock import (
     WorkspaceLockExport,
     WorkspaceLockInput,
     WorkspaceLockParseResult,
+    WorkspaceLockUpdate,
 )
 
 ALLOWED_EXTENSIONS = {".yml", ".yaml", ".txt", ".lock", ".toml", ".json"}
@@ -59,6 +60,7 @@ class ParsedInputFile:
     workspace_lock: WorkspaceLockInput | None = None
     exported_documents: list[WorkspaceLockExport] = field(default_factory=list)
     lock_check: WorkspaceLockCheckResult | None = None
+    workspace_update: WorkspaceLockUpdate | None = None
 
     @property
     def parse_result(
@@ -91,6 +93,7 @@ class ParsedInputFile:
         manifest_content: str | None = None,
         manifest_filename: str | None = None,
         check_lock: bool = False,
+        update: tuple[str, str, tuple[str, ...]] | None = None,
     ) -> ParsedInputFile:
         """Preserve workspace configuration or parse through conda's registry.
 
@@ -103,7 +106,7 @@ class ParsedInputFile:
         solving. ``lockfile_only`` leaves declaration output empty for the
         compatibility transcode operation.
         """
-        if check_lock:
+        if check_lock or update is not None:
             if manifest_content is None or manifest_filename is None:
                 raise ValueError("Lock consistency requires a companion manifest")
             if (
@@ -127,7 +130,12 @@ class ParsedInputFile:
             raise ValueError("Companion manifest filename is required")
         if manifest_filename is not None and manifest_content is None:
             raise ValueError("Companion manifest content is required")
-        if manifest_content is not None and export_format is None and not check_lock:
+        if (
+            manifest_content is not None
+            and export_format is None
+            and not check_lock
+            and update is None
+        ):
             raise ValueError("Companion manifest requires an output format")
         if Path(path).name in WorkspaceInput.filenames():
             workspace = WorkspaceInput.from_path(
@@ -155,7 +163,7 @@ class ParsedInputFile:
                 environments=target_environments,
                 platforms=target_platforms,
                 select_all=export_format is not None,
-                allow_empty=check_lock,
+                allow_empty=check_lock or update is not None,
             )
             if manifest_content is not None and manifest_filename is not None:
                 workspace_lock = workspace_lock.with_manifest(
@@ -185,6 +193,11 @@ class ParsedInputFile:
                 ),
                 workspace_lock=workspace_lock,
                 lock_check=workspace_lock.check_consistency() if check_lock else None,
+                workspace_update=(
+                    workspace_lock.prepare_update(*update)
+                    if update is not None
+                    else None
+                ),
             )
         if target_environments is not None:
             raise ValueError("Environment selection requires a workspace manifest")
@@ -272,6 +285,7 @@ class ParsedInputFile:
         manifest_content: str | None = None,
         manifest_filename: str | None = None,
         check_lock: bool = False,
+        update: tuple[str, str, tuple[str, ...]] | None = None,
     ) -> ParsedInputFile:
         """Parse content in an isolated process before an absolute deadline."""
         if deadline <= time.monotonic():
@@ -308,6 +322,7 @@ class ParsedInputFile:
                         manifest_content,
                         manifest_filename,
                         check_lock,
+                        update,
                     ),
                 )
                 process.start()
@@ -360,6 +375,7 @@ class ParsedInputFile:
         manifest_content: str | None = None,
         manifest_filename: str | None = None,
         check_lock: bool = False,
+        update: tuple[str, str, tuple[str, ...]] | None = None,
     ) -> None:
         """Send an input parse result from an isolated process."""
         CredentialRedactionFilter.install()
@@ -398,6 +414,7 @@ class ParsedInputFile:
                         manifest_content=manifest_content,
                         manifest_filename=manifest_filename,
                         check_lock=check_lock,
+                        update=update,
                     )
             sender.send(("ok", parsed))
         except TimeoutError:
