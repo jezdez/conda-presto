@@ -741,6 +741,15 @@ async def run_cached_solve(
     repodata_options = workspace.repodata_options() if workspace is not None else {}
     try:
         with anyio.fail_after(SOLVE_TIMEOUT_S):
+            if isinstance(workspace, WorkspaceInput):
+                repodata_options = {
+                    **repodata_options,
+                    "channel_platforms": [
+                        (channel, target.subdir)
+                        for target in workspace.result.selected
+                        for channel in target.channels
+                    ],
+                }
             workspace_args = {}
             if workspace is not None:
                 workspace_args["workspace_identity"] = await anyio.to_thread.run_sync(

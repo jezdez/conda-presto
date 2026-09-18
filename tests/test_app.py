@@ -2663,6 +2663,85 @@ async def test_workspace_solve_retains_exact_output_and_uses_matrix_cache(
 
 
 @pytest.mark.anyio
+@pytest.mark.parametrize("use_shards", [False, True], ids=["json", "shards"])
+async def test_workspace_cache_tracks_only_selected_channel_platform_pairs(
+    client, monkeypatch, tmp_path, use_shards
+):
+    manifest = """\
+[workspace]
+platforms = ["linux-64", "osx-arm64"]
+[dependencies]
+zlib = "*"
+[feature.linux]
+platforms = ["linux-64"]
+channels = ["https://a.example.org/channel"]
+[feature.osx]
+platforms = ["osx-arm64"]
+channels = ["https://b.example.org/channel"]
+[environments.a]
+features = ["linux"]
+[environments.b]
+features = ["osx"]
+"""
+    fresh_urls = {
+        f"https://{host}.example.org/channel/{subdir}"
+        for host, platform in (("a", "linux-64"), ("b", "osx-arm64"))
+        for subdir in (platform, "noarch")
+    }
+    repodata = tmp_path / "repodata.json"
+    repodata.write_text("{}")
+    shards = tmp_path / "repodata.msgpack.zst"
+    shards.write_bytes(b"shards")
+    missing = tmp_path / "missing"
+    calls = []
+
+    def subdir_data(channel, **kwargs):
+        present = channel.url() in fresh_urls
+        return SimpleNamespace(
+            repo_cache=SimpleNamespace(
+                cache_path_json=repodata if present else missing,
+                cache_path_shards=shards if present else missing,
+                state=SimpleNamespace(should_check_format=lambda _: use_shards),
+                load_state=lambda **_: None,
+                stale=lambda: False,
+            )
+        )
+
+    def solve(self, format_name=None):
+        calls.append(self.result.selected)
+        return [
+            WorkspaceSolveResult(t.environment, t.platform, t.subdir, [])
+            for t in self.result.selected
+        ]
+
+    monkeypatch.setattr("conda_presto.resolve.SubdirData", subdir_data)
+    monkeypatch.setattr(app_module, "CHANNEL_ALLOWLIST", ["*"])
+    monkeypatch.setattr(
+        WorkspaceInput,
+        "repodata_options",
+        staticmethod(lambda: {"use_shards": use_shards}),
+    )
+    monkeypatch.setattr(WorkspaceInput, "solve", solve)
+    body = {
+        "file": manifest,
+        "filename": "conda.toml",
+        "environments": ["a", "b"],
+    }
+    first = await client.post("/resolve", json=body)
+    second = await client.post("/resolve", json=body)
+    assert first.status_code == second.status_code == 200, first.text
+    assert len(calls) == 1
+    retained = await client.get(first.headers["location"])
+    assert retained.content == second.content == first.content
+
+    source = shards if use_shards else repodata
+    source.write_bytes(b"updated metadata")
+    third = await client.post("/resolve", json=body)
+    assert third.status_code == 200, third.text
+    assert len(calls) == 2
+
+
+@pytest.mark.anyio
 async def test_workspace_export_failure_identifies_pair_without_retention(
     client, workspace_manifest_text, monkeypatch
 ):

@@ -174,7 +174,7 @@ class ResultCache:
     def capture_state(
         channels: list[str],
         platforms: list[str],
-        **repodata_options: bool,
+        **repodata_options: bool | list[tuple[str, str]],
     ) -> tuple[RepodataSnapshot, ResolveCacheContext]:
         """Capture the blocking state used by public cache lookup."""
         return (

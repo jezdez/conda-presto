@@ -101,28 +101,33 @@ class RepodataSnapshot:
         repodata_fn: str = "repodata.json",
         use_shards: bool = False,
         use_index_cache: bool = False,
+        channel_platforms: list[tuple[str, str]] | None = None,
     ) -> RepodataSnapshot:
-        """Capture cache files and whether conda would refresh any of them."""
+        """Capture freshness for explicit pairs or all channel/platform combinations."""
         records = []
         stale = False
         selected_urls = {}
-        for channel in channels:
+        pairs = (
+            channel_platforms
+            if channel_platforms is not None
+            else [(channel, platform) for channel in channels for platform in platforms]
+        )
+        for channel, platform in pairs:
             channel = Channel(channel)
-            for platform in platforms:
-                public_urls = channel.urls(
-                    subdirs=(platform, "noarch"),
-                )
-                credentialed_urls = channel.urls(
-                    with_credentials=True,
-                    subdirs=(platform, "noarch"),
-                )
-                for public_url, credentialed_url in zip(
-                    public_urls,
-                    credentialed_urls,
-                    strict=True,
-                ):
-                    if public_url not in selected_urls or channel.auth or channel.token:
-                        selected_urls[public_url] = credentialed_url
+            public_urls = channel.urls(
+                subdirs=(platform, "noarch"),
+            )
+            credentialed_urls = channel.urls(
+                with_credentials=True,
+                subdirs=(platform, "noarch"),
+            )
+            for public_url, credentialed_url in zip(
+                public_urls,
+                credentialed_urls,
+                strict=True,
+            ):
+                if public_url not in selected_urls or channel.auth or channel.token:
+                    selected_urls[public_url] = credentialed_url
         repositories = []
         for public_url, credentialed_url in selected_urls.items():
             cache = None

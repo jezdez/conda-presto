@@ -260,6 +260,8 @@ class WorkspaceInput:
                 raise ValueError(
                     "This output format cannot represent targets sharing a conda subdir"
                 )
+            if not output.exporter.multiplatform_export and len(targets) != 1:
+                raise ValueError("Select one target for this output format")
         channels_by_environment = {}
         for target in targets:
             channels = channels_by_environment.setdefault(

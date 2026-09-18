@@ -525,20 +525,28 @@ def test_workspace_failure_restores_target_state_and_never_exports_partial_lock(
 
 
 @pytest.mark.parametrize(
-    "environments,platforms,error",
+    "environments,platforms,format_name,error",
     [
-        (["default", "test"], ["cpu"], "Select one environment"),
-        (["test"], ["cpu", "gpu"], "targets sharing a conda subdir"),
+        (["default", "test"], ["cpu"], "environment-yaml", "Select one environment"),
+        (
+            ["test"],
+            ["cpu", "gpu"],
+            "environment-yaml",
+            "targets sharing a conda subdir",
+        ),
+        (["test"], ["cpu", "osx-arm64"], "environment-yaml", "Select one target"),
+        (["test"], ["cpu", "osx-arm64"], "environment-json", "Select one target"),
     ],
+    ids=["multiple-environments", "shared-subdir", "yaml-targets", "json-targets"],
 )
 def test_workspace_export_rejects_unrepresentable_selections_before_solving(
-    rich_manifest, workspace_solver, environments, platforms, error
+    rich_manifest, workspace_solver, environments, platforms, format_name, error
 ):
     parsed = WorkspaceInput.from_path(
         rich_manifest, environments=environments, platforms=platforms
     )
     with pytest.raises(ValueError, match=error):
-        parsed.solve("environment-yaml")
+        parsed.solve(format_name)
     assert workspace_solver[0] == []
 
 
