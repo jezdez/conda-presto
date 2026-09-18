@@ -1255,7 +1255,9 @@ def test_lockfile_to_lockfile_transcodes_without_solver(
         original = yaml.safe_load(pixi_lock_v6_text)
         assert data["version"] == 6
         assert set(data["environments"]["default"]["packages"]) == {"linux-64"}
-        assert data["packages"] == [
+        assert [
+            {"build_number": 0, **package} for package in data["packages"]
+        ] == [
             {"build_number": 0, **package} for package in original["packages"]
         ]
 

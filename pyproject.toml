@@ -26,8 +26,8 @@ maintainers = [{ name = "Jannis Leidel", email = "jannis@leidel.info" }]
 requires-python = ">=3.13"
 dependencies = [
     # conda and conda-rattler-solver are supplied by the active conda environment.
-    # Use the workspace and lockfile fixes until they are released.
-    "conda-workspaces @ git+https://github.com/conda-incubator/conda-workspaces.git@a2c15999198509bd1b9a5f527928da9ec5d6be27",
+    # Use the merged workspace fixes until they are released.
+    "conda-workspaces @ git+https://github.com/conda-incubator/conda-workspaces.git@0034b9a2397ca7c571528e91b030465b9deb560d",
     "conda-sboms>=0.3.0",
     "conda-sigstore>=0.1.2",
     "msgspec>=0.19",
@@ -94,10 +94,6 @@ fail_under = 95
 [tool.pixi.workspace]
 channels = ["conda-forge"]
 platforms = ["linux-64", "linux-aarch64", "osx-64", "osx-arm64"]
-
-[tool.pixi.workspace.conda-pypi-map]
-# Install the unreleased lockfile dependency declared by conda-workspaces.
-conda-forge = { mapping = { conda-lockfiles = false } }
 
 [tool.pixi.dependencies]
 python = ">=3.13,<3.14"
