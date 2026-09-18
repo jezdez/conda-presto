@@ -38,7 +38,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - Enforce HTTP channel permissions for workspace dependency channels and reject malformed PyPI requirements.
-
+- Use declared workspace target virtual packages for solving and cache identity without inheriting server hardware or `CONDA_OVERRIDE_*` settings.
 - Scan URL-shaped text in linear time during credential checks and error redaction.
 - Parse HTTP `.txt` uploads as requirements files without trying YAML loaders.
 - Check YAML structure in HTTP TOML uploads before parser autodetection.

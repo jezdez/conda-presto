@@ -17,6 +17,7 @@ import conda_presto.cache as cache_module
 from conda_presto.cache import ResolveCacheContext, ResultCache, StoredResult
 from conda_presto.resolve import RepodataSnapshot
 from conda_presto.storage import StoreOperationCoordinator
+from conda_presto.workspace_lock import WorkspaceLockInput
 
 
 @pytest.fixture()
@@ -32,6 +33,28 @@ def resolve_cache_state():
             virtual_packages=(("linux-64", ("__linux=1",)),),
         ),
     }
+
+
+@pytest.fixture
+def workspace_cache_input(
+    workspace_consistent_lock_path, workspace_consistent_manifest_text
+):
+    return WorkspaceLockInput.from_path(workspace_consistent_lock_path).with_manifest(
+        workspace_consistent_manifest_text, "conda.toml"
+    )
+
+
+@pytest.fixture(params=["ordinary", "workspace", "update"])
+def workspace_identity(request, workspace_cache_input):
+    if request.param == "ordinary":
+        return None
+    if request.param == "workspace":
+        operation = workspace_cache_input.manifest.select(["test"], ["cpu"])
+    else:
+        operation = workspace_cache_input.prepare_update(
+            "test", "cpu", ("probe",)
+        ).configured()
+    return operation.cache_identity()
 
 
 @pytest.mark.anyio
@@ -717,7 +740,9 @@ def test_different_dependency_versions_produce_different_cache_keys(
     assert second != first
 
 
-def test_virtual_packages_produce_different_cache_keys(resolve_cache_state):
+def test_cache_keys_use_virtual_packages_from_the_request_type(
+    resolve_cache_state, workspace_identity
+):
     first_context = resolve_cache_state["solve_context"]
     second_context = replace(
         first_context,
@@ -730,14 +755,44 @@ def test_virtual_packages_produce_different_cache_keys(resolve_cache_state):
         *request,
         repodata=repodata,
         solve_context=first_context,
+        workspace_identity=workspace_identity,
     )
     second = ResultCache.key_for(
         *request,
         repodata=repodata,
         solve_context=second_context,
+        workspace_identity=workspace_identity,
     )
 
-    assert second != first
+    assert (second != first) is (workspace_identity is None)
+
+
+@pytest.mark.parametrize("update", [False, True], ids=["workspace", "update"])
+def test_workspace_virtual_requirements_produce_different_cache_keys(
+    workspace_cache_input, resolve_cache_state, update
+):
+    keys = []
+    for version in ("2.28", "2.29"):
+        lock = workspace_cache_input.with_manifest(
+            workspace_cache_input.manifest_content.replace('"2.28"', f'"{version}"'),
+            "conda.toml",
+        )
+        operation = (
+            lock.prepare_update("test", "cpu", ("probe",)).configured()
+            if update
+            else lock.manifest.select(["test"], ["cpu"])
+        )
+        keys.append(
+            ResultCache.key_for(
+                ["probe"],
+                ["conda-forge"],
+                ["linux-64"],
+                None,
+                workspace_identity=operation.cache_identity(),
+                **resolve_cache_state,
+            )
+        )
+    assert keys[0] != keys[1]
 
 
 def test_resolve_cache_context_captures_cuda_override(monkeypatch):
@@ -783,6 +838,7 @@ def test_solve_context_produces_different_cache_keys(
     first_context,
     second_context,
     resolve_cache_state,
+    workspace_identity,
 ):
     request = (["zlib"], ["conda-forge"], ["linux-64"], None)
     base = resolve_cache_state["solve_context"]
@@ -791,11 +847,13 @@ def test_solve_context_produces_different_cache_keys(
         *request,
         repodata=resolve_cache_state["repodata"],
         solve_context=replace(base, **first_context),
+        workspace_identity=workspace_identity,
     )
     second = ResultCache.key_for(
         *request,
         repodata=resolve_cache_state["repodata"],
         solve_context=replace(base, **second_context),
+        workspace_identity=workspace_identity,
     )
 
     assert first != second

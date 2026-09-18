@@ -162,6 +162,8 @@ class ResultCache:
             "solve_context": asdict(solve_context),
         }
         if workspace_identity is not None:
+            # Workspace identities include virtual packages for each declared target.
+            del envelope["solve_context"]["virtual_packages"]
             envelope["workspace"] = workspace_identity
         body = json.dumps(
             envelope,

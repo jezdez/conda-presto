@@ -340,7 +340,10 @@ class WorkspaceInput:
         """Describe selected requirements, virtual packages and their providers."""
         targets = []
         for target in self.result.selected:
-            with target.solver_context():
+            resolved = resolve_environment(
+                self.config, target.environment, target.platform
+            )
+            with target.solver_context(), target.virtual_package_context(resolved):
                 virtual_packages = sorted(
                     json.dumps(record.dump(), sort_keys=True, default=str)
                     for record in Index().system_packages
@@ -405,9 +408,10 @@ class WorkspaceInput:
                         resolved = resolve_environment(
                             workspace.config, target.environment, target.platform
                         )
-                        records = resolved.solve_for_platform(
-                            target.subdir, prefix=Path(directory) / str(index)
-                        )
+                        with target.virtual_package_context(resolved):
+                            records = resolved.solve_for_platform(
+                                target.subdir, prefix=Path(directory) / str(index)
+                            )
                         if output is not None:
                             if output.exporter.name == "conda-workspaces-lock-v1":
                                 environment = Environment(
