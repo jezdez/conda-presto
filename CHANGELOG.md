@@ -21,6 +21,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Require conda-workspaces 0.10.0 or later.
 - Leave omitted GitHub Action channels to the input manifest or service defaults instead of forcing conda-forge.
 - Focus the roadmap on HTTP integration and operation across replicas, with restored topic docs distinguishing upstream opportunities and historical proposals.
 - Preserve requested package roots alongside resolved records for exporter plugins.
@@ -38,6 +39,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - Enforce HTTP channel permissions for workspace dependency channels and reject malformed PyPI requirements.
+- Export explicitly requested workspace platforms when the manifest declares none.
+- Reject multi-target solves for output formats that can only represent one environment.
+- Preserve exact locked records when using companion manifests for normalized exports.
+- Cache workspace solves using only each target's channel and platform combinations.
 - Use declared workspace target virtual packages for solving and cache identity without inheriting server hardware or `CONDA_OVERRIDE_*` settings.
 - Scan URL-shaped text in linear time during credential checks and error redaction.
 - Parse HTTP `.txt` uploads as requirements files without trying YAML loaders.
