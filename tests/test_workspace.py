@@ -656,10 +656,21 @@ def test_workspace_declaration_export_rejects_unrepresentable_selection(
     assert workspace_solver[0] == []
 
 
+@pytest.mark.parametrize(
+    "declare_platforms", [True, False], ids=["declared", "requested"]
+)
 def test_workspace_declaration_export_preserves_multiple_platforms(
-    workspace_manifest_path, workspace_solver, manifest
+    workspace_manifest_text, workspace_solver, manifest, declare_platforms
 ):
-    selected = WorkspaceInput.from_path(workspace_manifest_path, environments=["test"])
+    if not declare_platforms:
+        workspace_manifest_text = workspace_manifest_text.replace(
+            'platforms = ["linux-64", "osx-arm64"]\n', ""
+        )
+    selected = WorkspaceInput.from_path(
+        manifest(workspace_manifest_text),
+        environments=["test"],
+        platforms=None if declare_platforms else ["linux-64", "osx-arm64"],
+    )
     body, _ = selected.export("conda-toml")
     exported = WorkspaceInput.from_path(
         manifest(body, "conda.toml"), platforms=["linux-64", "osx-arm64"]

@@ -337,14 +337,14 @@ class WorkspaceInput:
         output = OutputFormat.named(format_name)
         output.validate_declared_input(len(workspace.result.selected))
         workspace.validate_output(format_name)
-        provider = WorkspaceContext(workspace.config)
-        environments = [
-            environment
-            for target in workspace.result.selected
-            for environment in provider.envs_from_manifest(
-                target.environment, requested_platforms=(target.platform,)
-            )
-        ]
+        environments = []
+        for target in workspace.result.selected:
+            with target.solver_context():
+                environments.extend(
+                    WorkspaceContext(workspace.config).envs_from_manifest(
+                        target.environment, requested_platforms=(target.platform,)
+                    )
+                )
         return output.render(environments)
 
     @staticmethod
