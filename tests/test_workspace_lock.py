@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import tomllib
 
 import msgspec
 import pytest
@@ -253,6 +254,51 @@ def test_companion_roots_use_workspaces_matching_and_affect_cache_identity(
     }
 
 
+@pytest.mark.parametrize("format_name", ["conda-toml", "pixi-toml", "pyproject-toml"])
+@pytest.mark.parametrize("subdir", ["linux-64", "noarch"])
+@pytest.mark.parametrize("export_each", [False, True], ids=["combined", "per-target"])
+def test_companion_manifest_keeps_exact_records_in_normalized_exports(
+    workspace_lock_path,
+    workspace_lock_data,
+    companion_manifest,
+    offline_lock_operations,
+    format_name,
+    subdir,
+    export_each,
+):
+    data = workspace_lock_data
+    data["packages"][0]["depends"] = ["gpu-probe >=1"]
+    data["environments"]["test"]["packages"]["cpu"].append(
+        {"conda": data["packages"][1]["conda"]}
+    )
+    workspace_lock_path.write_text(
+        yaml_dumps(data).replace("/linux-64/", f"/{subdir}/")
+    )
+    parsed = WorkspaceLockInput.from_path(
+        workspace_lock_path, environments=["test"], platforms=["cpu"]
+    ).with_manifest(companion_manifest, "conda.toml")
+    content = (
+        parsed.render_each(format_name)[0].content
+        if export_each
+        else parsed.render(format_name)
+    )
+    manifest = tomllib.loads(content)
+    if format_name == "pyproject-toml":
+        manifest = manifest["tool"]["conda"]
+    assert manifest["workspace"]["platforms"] == ["linux-64"]
+    dependencies = manifest["dependencies"]
+    assert set(dependencies) == {"probe", "gpu-probe"}
+    for name, dependency in dependencies.items():
+        assert dependency["url"] == (
+            f"https://conda.anaconda.org/conda-forge/{subdir}/{name}-1.0-h123_0.conda"
+        )
+        assert dependency["version"] == "1.0"
+        assert dependency["build"] == "h123_0"
+        assert dependency["sha256"] == "a" * 64
+        assert dependency["md5"] == "b" * 32
+
+
+@pytest.mark.parametrize("format_name", ["cyclonedx", "conda-toml"])
 @pytest.mark.parametrize(
     "before,after,message",
     [
@@ -276,6 +322,7 @@ def test_companion_manifest_mismatches_reject_export(
     before,
     after,
     message,
+    format_name,
 ):
     parsed = WorkspaceLockInput.from_path(
         workspace_lock_path, environments=["test"], platforms=["cpu"]
@@ -283,7 +330,7 @@ def test_companion_manifest_mismatches_reject_export(
     with pytest.raises((CondaError, ValueError), match=message):
         parsed.with_manifest(
             companion_manifest.replace(before, after), "conda.toml"
-        ).render("cyclonedx")
+        ).render(format_name)
 
 
 def test_each_export_returns_no_documents_when_a_later_target_fails(

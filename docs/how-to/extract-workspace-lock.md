@@ -38,7 +38,7 @@ conda presto --export --file conda.lock \
 
 The explicit exporter writes the selected package URLs. Its current conda implementation does not append package checksums. Keep workspace lock output when hashes or source metadata must be preserved.
 
-Normalized `conda-toml`, `pixi-toml`, `pyproject-toml` and environment YAML describe the selected packages as requirements. They cannot recover the original manifest's comments, tasks or feature composition. Select one environment and targets with distinct concrete subdirs. Single-document exporters, including environment YAML and explicit lists, require one target.
+Normalized `conda-toml`, `pixi-toml`, `pyproject-toml` and environment YAML describe the selected packages as requirements. A matching companion manifest does not replace the saved package records with its declared requirements. These exports cannot recover the original manifest's comments, tasks or feature composition. Select one environment and targets with distinct concrete subdirs. Single-document exporters, including environment YAML and explicit lists, require one target.
 
 ## Use the HTTP API
 

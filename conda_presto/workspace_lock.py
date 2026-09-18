@@ -172,7 +172,12 @@ class WorkspaceLockInput:
             manifest_digest=hashlib.sha256(content.encode("utf-8")).hexdigest(),
         )
 
-    def environment(self, target: WorkspaceLockTarget) -> Environment:
+    def environment(
+        self,
+        target: WorkspaceLockTarget,
+        *,
+        include_requested_packages: bool = False,
+    ) -> Environment:
         """Load exact records and optionally verify their declared direct roots."""
         subdir = target.subdir
         resolved = None
@@ -213,9 +218,11 @@ class WorkspaceLockInput:
                 )
             ):
                 raise ValueError("Companion manifest channels do not match the lock")
-            env.requested_packages = resolved.requested_packages_for_export(
+            requested_packages = resolved.requested_packages_for_export(
                 env.explicit_packages
             )
+            if include_requested_packages:
+                env.requested_packages = requested_packages
         return env
 
     def render(self, format_name: str) -> str:
@@ -248,7 +255,14 @@ class WorkspaceLockInput:
                 "Select one environment for this output format. "
                 "Use conda-workspaces-lock-v1 for combined environments."
             )
-        envs = [self.environment(target) for target in targets]
+        envs = [
+            self.environment(
+                target,
+                include_requested_packages=output.exporter.name
+                == "cyclonedx-json-v1.7",
+            )
+            for target in targets
+        ]
         if len({env.platform for env in envs}) != len(targets):
             raise ValueError(
                 "This output format cannot represent targets sharing a conda subdir"
@@ -266,7 +280,11 @@ class WorkspaceLockInput:
             raise ValueError("Select at least one lockfile environment and target")
         documents = []
         for target in self.result.selected:
-            env = self.environment(target)
+            env = self.environment(
+                target,
+                include_requested_packages=output.exporter.name
+                == "cyclonedx-json-v1.7",
+            )
             documents.append(
                 WorkspaceLockExport(
                     target.environment,
