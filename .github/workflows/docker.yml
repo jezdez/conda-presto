@@ -89,11 +89,22 @@ jobs:
             sleep 1
           done
           curl --fail --silent http://127.0.0.1:8000/health >/dev/null
+          curl --fail --silent http://127.0.0.1:8000/capabilities \
+            | jq --exit-status 'contains({"sbom": true, "sign": false, "verify": true})'
           curl --fail --silent --max-time 90 \
             --header 'content-type: application/json' \
             --data '{"specs":["zlib"],"platforms":["linux-64"]}' \
             http://127.0.0.1:8000/resolve \
             | jq --exit-status '.[0].platform == "linux-64" and (.[0].packages | length > 0)'
+          curl --fail --silent --max-time 90 \
+            --header 'content-type: application/json' \
+            --data '{"specs":["zlib"],"platforms":["linux-64"]}' \
+            http://127.0.0.1:8000/sbom \
+            | jq --exit-status '
+                .sboms[0].platform == "linux-64" and
+                (.sboms[0].content | fromjson |
+                  .bomFormat == "CycloneDX" and .specVersion == "1.7" and
+                  any(.components[]; .name == "zlib"))'
           worker_pid="$(docker exec conda-presto-smoke sh -c '
             for path in /proc/[0-9]*/cmdline; do
               pid="${path#/proc/}"

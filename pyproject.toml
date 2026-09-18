@@ -28,6 +28,8 @@ dependencies = [
     # conda and conda-rattler-solver are supplied by the active conda environment.
     # Use the workspace and lockfile fixes until they are released.
     "conda-workspaces @ git+https://github.com/conda-incubator/conda-workspaces.git@a2c15999198509bd1b9a5f527928da9ec5d6be27",
+    "conda-sboms>=0.3.0",
+    "conda-sigstore>=0.1.2",
     "msgspec>=0.19",
 ]
 dynamic = ["version"]
@@ -42,8 +44,6 @@ Repository = "https://github.com/jezdez/conda-presto"
 [project.optional-dependencies]
 server = ["litestar>=2.18", "uvicorn>=0.34", "brotli>=1.1"]
 redis = ["redis>=5.0"]
-sbom = ["conda-sboms>=0.3.0"]
-sigstore = ["conda-sigstore>=0.1.2"]
 
 [project.scripts]
 conda-presto = "conda_presto.cli:main"
@@ -135,10 +135,6 @@ uvicorn = ">=0.34"
 brotli-python = ">=1.1"
 redis-py = ">=5.0"
 
-[tool.pixi.feature.artifacts.pypi-dependencies]
-conda-sboms = ">=0.3.0"
-conda-sigstore = ">=0.1.2"
-
 [tool.pixi.feature.release.dependencies]
 hatch-vcs = ">=0.2.0"
 hatchling = ">=1.12.2"
@@ -148,8 +144,7 @@ setuptools = ">=83"
 
 [tool.pixi.environments]
 dev = { features = ["dev", "server"], solve-group = "default" }
-test = { features = ["test", "server", "artifacts"], solve-group = "default" }
-artifacts = { features = ["server", "artifacts"], solve-group = "default" }
+test = { features = ["test", "server"], solve-group = "default" }
 prod = { features = ["server"], solve-group = "default" }
 redis = { features = ["server"], solve-group = "default" }
 cli = { solve-group = "default" }

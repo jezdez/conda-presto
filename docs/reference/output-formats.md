@@ -42,7 +42,7 @@ Workspace solves return one row per selected environment and target:
 | `pyproject-toml` | None | `application/toml` | Yes, one environment |
 | `cyclonedx-json-v1.7` | `cyclonedx-json`, `cyclonedx`, `cdx-json` | `application/json` | No |
 
-CycloneDX requires the optional conda-sboms provider. Other installed plugins can add formats.
+CycloneDX is provided by conda-sboms, which is included in standard installations. Other installed plugins can add formats.
 
 The workspace lock and TOML formats come from the required conda-workspaces provider.
 

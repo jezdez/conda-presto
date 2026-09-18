@@ -20,7 +20,7 @@ Results with detected credentials in requests or package URLs are not retained. 
 
 HTTP logs omit query parameters, headers and bodies. Error handling and propagated logs redact known URL forms. The CLI server launcher disables uvicorn's separate raw access log.
 
-## Optional artifact providers
+## SBOMs, signing and verification
 
 SBOMs describe resolved conda records, not package payload contents or a complete released product. Signing authenticates the exact limited statement constructed for a service-produced artifact. It does not establish the deferred detailed solve-construction claims. Verification checks the supplied bytes and bundle against the recipient's expected signer identity and issuer.
 

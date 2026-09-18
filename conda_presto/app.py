@@ -1534,7 +1534,7 @@ async def sbom_post(request: Request, data: SbomRequest) -> Response:
     format_name = "cyclonedx-json-v1.7"
     if format_name not in OutputFormat.available():
         return Response(
-            ErrorResponse(error="SBOM generation requires conda-sboms"),
+            ErrorResponse(error="CycloneDX exporter is unavailable"),
             status_code=HTTP_503_SERVICE_UNAVAILABLE,
         )
     if Path(data.filename or "").name == LOCKFILE_NAME:
@@ -1684,7 +1684,7 @@ async def verify_post(request: Request, data: VerifyRequest) -> Response:
 
 @get("/capabilities")
 async def capabilities() -> dict[str, bool]:
-    """Report installed optional adapters and deliberate signing configuration."""
+    """Report available operations and signing configuration."""
     available = AttestationService.available()
     return {
         "workspace_parse": True,

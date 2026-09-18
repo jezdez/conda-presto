@@ -15,8 +15,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Render declarations or saved exact records through `POST /export` and CLI `--export` without solving or downloads, including named workspace lock extraction.
 - Add workspace discovery and target selection through `POST /parse` and CLI `--parse`, using conda-workspaces without solving.
 - Solve named workspace environments and targets through HTTP, CLI and the GitHub Action, with combined locks and normalized manifest exports.
-- Add optional SBOM generation through conda-sboms and signing and verification through conda-sigstore.
-- Report installed optional adapters and enabled signing configuration through `/capabilities`.
+- Include conda-sboms and conda-sigstore in standard installations and the default server image for SBOM generation, signing and verification.
+- Keep signing disabled until explicitly enabled with an operator identity and trust configuration.
+- Report available operations and signing configuration through `/capabilities`.
 
 ### Changed
 

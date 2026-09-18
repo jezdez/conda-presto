@@ -41,6 +41,6 @@ docker build --build-arg CONDA_PRESTO_VERSION=0.9.0.dev0 \
   --tag conda-presto:dev .
 ```
 
-`PIXI_ENVIRONMENT` selects the locked environment, defaulting to `prod`. Optional SBOM and signing providers are absent from the default image. Operators can build the same recipe with `--build-arg PIXI_ENVIRONMENT=artifacts` to include both providers. This does not create another published image flavor.
+The image uses the locked `prod` environment and includes conda-sboms and conda-sigstore for SBOM generation, signing and verification. Signing remains disabled until explicitly enabled with an operator identity and trust configuration. See {doc}`configuration` for the requirements.
 
 The default image includes the Redis client. Cache settings are described in {doc}`cache`. See {doc}`/how-to/run-with-docker` for operation.

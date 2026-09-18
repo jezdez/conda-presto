@@ -354,7 +354,7 @@ def test_capability_probe_does_not_discover_credentials(sigstore_provider):
     assert sigstore_provider.public_trust_calls == 0
 
 
-def test_missing_provider_is_optional(monkeypatch):
+def test_missing_provider_reports_unavailable(monkeypatch):
     monkeypatch.setitem(sys.modules, "conda_sigstore.statements", None)
     assert AttestationService.available() is False
     with pytest.raises(AttestationError) as exc:
@@ -365,7 +365,6 @@ def test_missing_provider_is_optional(monkeypatch):
 
 
 def test_installed_provider_rejects_invalid_bundle_without_network():
-    pytest.importorskip("conda_sigstore.verification")
     with pytest.raises(AttestationError) as exc:
         AttestationService(offline=True).verify(
             ARTIFACT,
@@ -390,8 +389,6 @@ def test_installed_provider_rejects_invalid_bundle_without_network():
 def test_real_bundle_verification_binds_bytes_and_expected_signer(
     monkeypatch, change, code
 ):
-    pytest.importorskip("conda_sigstore.verification")
-
     def reject_network(*args, **kwargs):
         pytest.fail("Offline fixture verification attempted a network connection")
 

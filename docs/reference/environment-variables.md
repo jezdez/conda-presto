@@ -62,16 +62,16 @@ Negative entry or memory limits are rejected. File storage without a directory
 and unknown backend names are also rejected. See {doc}`cache` for key and
 retention behavior.
 
-## Optional Sigstore settings
+## Sigstore settings
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `CONDA_PRESTO_SIGSTORE_SIGNING_ENABLED` | `false` | Enable signing service-produced artifacts when a provider and noninteractive credentials are available. |
+| `CONDA_PRESTO_SIGSTORE_SIGNING_ENABLED` | `false` | Enable signing service-produced artifacts with noninteractive credentials and a configured trust choice. |
 | `CONDA_PRESTO_SIGSTORE_ALLOW_PUBLIC_SIGNING` | `false` | Explicitly permit use of the public signing service. |
 | `CONDA_PRESTO_SIGSTORE_TRUST_CONFIG` | unset | Path to an operator-provided Sigstore trust configuration. A path alone does not enable signing. |
 | `CONDA_PRESTO_SIGSTORE_OFFLINE` | `false` | Select offline verification using the configured trust material. |
 
-Install optional providers with `conda-presto[sbom]`, `conda-presto[sigstore]` or both. The source workspace's `artifacts` environment includes both providers. Capability discovery reports configuration and provider availability, not a guarantee that signing credentials are currently usable.
+Standard installations include SBOM generation, signing and verification support. Signing is disabled by default. Capability discovery reports configuration and provider availability, not a guarantee that signing credentials are currently usable. See {doc}`configuration` for the conda-sigstore requirements.
 
 ## Pixi activation settings
 

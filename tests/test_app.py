@@ -3681,11 +3681,11 @@ async def test_sbom_returns_separate_exact_documents(
 
 
 @pytest.mark.anyio
-@pytest.mark.parametrize("case", ["missing-provider", "no-platform", "solve-failed"])
+@pytest.mark.parametrize("case", ["missing-exporter", "no-platform", "solve-failed"])
 async def test_sbom_rejects_unavailable_or_incomplete_generation(
     client, monkeypatch, case
 ):
-    if case == "missing-provider":
+    if case == "missing-exporter":
         monkeypatch.setattr(app_module.OutputFormat, "available", lambda: [])
     if case == "solve-failed":
 
@@ -3702,7 +3702,7 @@ async def test_sbom_rejects_unavailable_or_incomplete_generation(
     )
     assert (
         response.status_code
-        == {"missing-provider": 503, "no-platform": 400, "solve-failed": 500}[case]
+        == {"missing-exporter": 503, "no-platform": 400, "solve-failed": 500}[case]
     )
     assert "sboms" not in response.json()
 
