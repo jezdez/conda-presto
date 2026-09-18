@@ -22,4 +22,4 @@ flowchart LR
 
 `cache.py` retains response bytes and media types. `storage.py` orders and bounds persistent-store operations. A new resolve validates freshness, while a retained URL returns the stored response. See {doc}`/reference/cache`.
 
-Optional artifact adapters use existing SBOM and Sigstore providers. They do not introduce a second solver, SBOM renderer or cryptographic implementation.
+SBOM generation uses the included conda-sboms exporter. Signing and verification use the included Sigstore and conda-sigstore libraries. These adapters do not introduce a second solver, SBOM renderer or cryptographic implementation.

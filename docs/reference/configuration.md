@@ -16,12 +16,14 @@ Request platforms are explicit, or default to the native platform. `CONDA_PRESTO
 
 When no backend is explicit, a Redis URL selects Redis, otherwise a configured directory selects file storage, otherwise memory is used. See {doc}`cache` for limits and freshness.
 
-## Optional providers
+## SBOMs, signing and verification
 
-Install `conda-presto[sbom]` or `conda-presto[sigstore]` into the service environment. The locked Pixi `artifacts` environment includes both and can be selected in the canonical image build. Provider availability and signing configuration are reported through `/capabilities`.
+Standard installations and the server image include conda-sboms for SBOM generation and conda-sigstore for signing and verification. Available operations and signing configuration are reported through `/capabilities`.
 
-Signing requires explicit enablement and a configured trust choice. A trust-file path alone does not enable signing. Verification receives the recipient's expected identity and issuer with the request. See {doc}`environment-variables` for exact settings and {doc}`http-api` for fields.
+Presto uses conda-sigstore's statement and verification APIs, which work with released conda. Conda-sigstore's separate package-install verification requires the unreleased conda hook proposed in [conda #16518](https://github.com/conda/conda/pull/16518). That hook is not needed by Presto's `/sign` or `/verify` endpoints.
+
+Signing is disabled by default. It requires explicit enablement, noninteractive identity credentials and a configured trust choice. A trust-file path alone does not enable signing. Verification receives the recipient's expected identity and issuer with the request. See {doc}`environment-variables` for exact settings and {doc}`http-api` for fields.
 
 ## Source workspace
 
-`prod` runs the base service, `artifacts` adds optional providers, `cli` runs one-shot commands, `test` includes provider checks, `dev` provides lint and server tools, and `docs` builds Sphinx. Changing Pixi metadata requires regenerating `pixi.lock`.
+`prod` runs the service, `cli` runs one-shot commands, `test` includes provider checks, `dev` provides lint and server tools, and `docs` builds Sphinx. All include conda-sboms and conda-sigstore. Changing Pixi metadata requires regenerating `pixi.lock`.

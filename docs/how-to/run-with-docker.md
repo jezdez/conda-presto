@@ -8,7 +8,7 @@ docker build --build-arg CONDA_PRESTO_VERSION=0.9.0.dev0 \
 export CONDA_PRESTO_SERVER_IMAGE=conda-presto:dev
 ```
 
-For a published deployment, set `CONDA_PRESTO_SERVER_IMAGE` to an exact released tag or manifest digest. See {doc}`../reference/docker-images` for tags and optional provider builds.
+For a published deployment, set `CONDA_PRESTO_SERVER_IMAGE` to an exact released tag or manifest digest. See {doc}`../reference/docker-images` for tags and build configuration.
 
 ## Run the HTTP server
 

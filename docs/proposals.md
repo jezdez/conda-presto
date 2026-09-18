@@ -27,7 +27,7 @@ Keep HTTP solving, explicit target platforms, input parsing, registered exporter
 | {doc}`Lockfile transcoding <proposals/capability/transcoder>` | Supported conversions without solving or fetching package archives over HTTP |
 | {doc}`GitHub Action <proposals/integration/github-action>` | A solve client using an explicitly configured HTTP endpoint |
 | {doc}`Retained output URLs <proposals/integration/permalink>` | Exact saved bytes available while their entries are retained |
-| {doc}`SBOM, signing and verification <reference/http-api>` | Optional adapters over conda-sboms and conda-sigstore |
+| {doc}`SBOM, signing and verification <reference/http-api>` | Included through conda-sboms and conda-sigstore, with signing disabled by default |
 
 Conda's environment-specifier and exporter registries own parsing and rendering. Conda-lockfiles owns conversion semantics. Replace Presto's temporary conversion adapter when an upstream API can preserve the required format behavior and avoid package downloads. That maintenance work does not expand format support.
 

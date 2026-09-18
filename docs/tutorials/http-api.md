@@ -37,7 +37,7 @@ The output contains the requested MatchSpecs. This operation does not solve or d
 
 ## Generate an SBOM
 
-Use a server with the optional providers installed, as described in {doc}`../how-to/run-with-docker`. Check `/capabilities` first.
+SBOM generation is included in the standard service. Check `/capabilities` and request a document for the target platform:
 
 ```bash
 curl --fail-with-body "$CONDA_PRESTO_URL/capabilities"
@@ -116,7 +116,7 @@ The baseline must satisfy every manifest target before an update starts. A chang
 
 ## Sign and verify the saved bytes
 
-On a deployment with signing deliberately enabled and noninteractive credentials configured:
+Signing and verification support are included. Enable signing with noninteractive identity credentials and a trust configuration, as described in {doc}`../reference/configuration`. Then sign the retained document:
 
 ```bash
 key=$(jq -r '.sboms[0].location // empty | split("/")[-1]' sboms.json)

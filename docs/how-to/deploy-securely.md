@@ -39,7 +39,7 @@ For Docker, publish only the intended private host address. See {doc}`run-with-d
 
 Use a dedicated service account and cache directory or Redis namespace. Store writers can replace results. File storage needs a hard filesystem quota. Redis needs a memory limit and eviction policy. See {doc}`configure-result-cache`.
 
-Build optional SBOM/signing providers only where needed. Signing requires an explicit operator identity and trust choice. Verify public-signing permission, noninteractive credentials and the recipient's expected identity/issuer independently. See {doc}`../reference/environment-variables`.
+Signing is disabled by default and requires an explicit operator identity and trust choice. Verify public-signing permission, noninteractive credentials and the recipient's expected identity/issuer independently. See {doc}`../reference/environment-variables`.
 
 ## Check the deployment
 
