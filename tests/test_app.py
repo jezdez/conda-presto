@@ -3642,6 +3642,48 @@ async def test_update_checks_channel_allowlist_before_solving(
 
 
 @pytest.mark.anyio
+@pytest.mark.parametrize("allowed", [False, True], ids=["blocked", "allowed"])
+async def test_update_checks_dependency_channels_and_tracks_their_metadata(
+    client, monkeypatch, update_request, update_worker, fresh_repodata_snapshot, allowed
+):
+    dependency_channel = "https://conda.anaconda.org/conda-forge/linux-64/other"
+    update_request["manifest"] = update_request["manifest"].replace(
+        'probe = "==1.0"',
+        f'probe = {{ version = "==1.0", channel = "{dependency_channel}" }}',
+        1,
+    )
+    update_request["file"] = update_request["file"].replace(
+        "https://conda.anaconda.org/conda-forge/linux-64/probe-",
+        f"{dependency_channel}/linux-64/probe-",
+    )
+    channels = [
+        "https://conda.anaconda.org/conda-forge",
+        "https://conda.anaconda.org/conda-forge/other",
+    ]
+    monkeypatch.setattr(
+        app_module, "CHANNEL_ALLOWLIST", channels if allowed else ["conda-forge"]
+    )
+    captured = []
+
+    def capture(channels, platforms, **kwargs):
+        captured.append(channels)
+        return fresh_repodata_snapshot
+
+    monkeypatch.setattr(RepodataSnapshot, "capture", capture)
+    response = await client.post("/update", json=update_request)
+    if allowed:
+        assert response.status_code == 200, response.text
+        assert len(update_worker) == 1
+        assert captured and all(value == channels for value in captured)
+    else:
+        assert response.status_code == 400, response.text
+        assert "Unsupported channel" in response.json()["error"]
+        assert response.headers["cache-control"] == "no-store"
+        assert not update_worker
+        assert not captured
+
+
+@pytest.mark.anyio
 @pytest.mark.parametrize(
     "failure, status",
     [(TimeoutError(), 504), (WorkspaceSolveError("test", "cpu", "update failed"), 500)],

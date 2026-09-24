@@ -1525,13 +1525,14 @@ async def update_post(request: Request, data: UpdateRequest) -> Response:
         return parsed
     update = parsed.workspace_update
     target = update.target
-    if cap_error := validate_caps(target.specs, target.channels, [target.subdir]):
+    channels = update.lock.manifest.solve_channels(target, update.packages)
+    if cap_error := validate_caps(target.specs, channels, [target.subdir]):
         cap_error.headers["Cache-Control"] = "no-store"
         return cap_error
     return await run_cached_solve(
         request,
         target.specs,
-        target.channels,
+        channels,
         [target.subdir],
         format_name="conda-workspaces-lock-v1",
         workspace=update,

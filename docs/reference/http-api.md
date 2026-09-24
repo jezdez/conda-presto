@@ -219,7 +219,7 @@ Checking runs in the bounded parser process without solving, fetching repodata, 
 
 For example, `"environment": "test", "platform": "linux-64", "packages": ["numpy"]` makes the declared `numpy` root eligible for updating in that pair. Names include direct requirements composed from the environment's features and target settings. Version constraints, wildcard names, transitive-only packages, unknown roots and missing or ambiguous targets are rejected. Manifest constraints remain unchanged.
 
-Each request selects exactly one environment and target. Plural `environments` and `platforms` arrays, extra `specs`, channel overrides, alternate `format` values and all query parameters are rejected. The selected target's channels must satisfy the deployment's channel allowlist.
+Each request selects exactly one environment and target. Plural `environments` and `platforms` arrays, extra `specs`, channel overrides, alternate `format` values and all query parameters are rejected. The selected target's declared channels and any dependency-specific channels on the selected update roots must satisfy the deployment's channel allowlist.
 
 Before updating, Presto checks the entire baseline against the submitted manifest through `/validate`'s shared implementation, including unselected targets. Inconsistent, incomplete, malformed or unsupported input returns HTTP 400 before solving. A failed preflight never falls back to a complete relock. The same conda-only and system-requirement restrictions apply as for validation.
 
