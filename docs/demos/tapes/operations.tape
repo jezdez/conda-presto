@@ -1,5 +1,5 @@
 Source docs/demos/tapes/style.tape
-Output docs/_static/demos/operations.mp4
+Output docs/_static/demos/operations.gif
 Hide
 Type "clear"
 Enter

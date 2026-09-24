@@ -115,7 +115,7 @@ $ jq '{consistent, reason: .targets[0].reason}' mismatch.json
 Update tools/cpu while keeping the other three selections
 
 $ conda-presto --update -f conda.lock --manifest conda.toml -e tools -p cpu zstd > updated.lock
-<demo environment>/lib/python3.13/multiprocessing/resource_tracker.py:479: UserWarning: resource_tracker: There appear to be 5 leaked semaphore objects to clean up at shutdown: {'/mp-w3kmvxnw', '/mp-tyjav0wr', '/mp-wrem3lcw', '/mp-gs7ugmjl', '/mp-ee5l_yjg'}
+<demo environment>/lib/python3.13/multiprocessing/resource_tracker.py:479: UserWarning: resource_tracker: There appear to be 5 leaked semaphore objects to clean up at shutdown: {'/mp-tobnxszy', '/mp-otz3elmu', '/mp-zj3odgmo', '/mp-r801awwm', '/mp-mt4bsstf'}
   warnings.warn(
 
 $ python check_update.py conda.lock updated.lock

@@ -1,6 +1,6 @@
 # Demos
 
-These recordings execute the same scripts that CI checks. They cover the major user and operator workflows. Package versions, generated identifiers and timings depend on the recording environment. Each video has controls and a text transcript. Recordings replace machine-specific checkout and Python environment paths with placeholders.
+These GIF recordings show the same scripts that CI checks. They cover the major user and operator workflows. Package versions, generated identifiers and timings depend on the recording environment. Each recording has a static preview and a text transcript. The static preview is shown when your browser requests reduced motion. Recordings replace machine-specific checkout and Python environment paths with placeholders.
 
 The workspace features use the unreleased PR stack. Run these examples from its source checkout, as described in the {doc}`../tutorials/workspaces` tutorial. Public channel access is required for solving. The trust demo verifies a checked-in fixture offline. Docker is required only for the container demo.
 
@@ -24,13 +24,13 @@ VHS tapes live under `docs/demos/tapes/`. The [VHS command reference](https://gi
 Resolve inline requirements with the standalone CLI, solve an environment file through the conda subcommand and render dependency declarations. See {doc}`../how-to/resolve-from-cli`.
 
 ```{raw} html
-<video class="presto-demo" controls preload="none" width="1100" poster="../_static/demos/cli.png" aria-label="CLI and declaration export terminal demo">
-  <source src="../_static/demos/cli.mp4" type="video/mp4">
-  Your browser does not support embedded video. Use the recording download below.
-</video>
+<picture>
+  <source srcset="../_static/demos/cli.png" media="(prefers-reduced-motion: reduce)">
+  <img class="presto-demo" src="../_static/demos/cli.gif" width="1100" loading="lazy" alt="CLI and declaration export terminal demo">
+</picture>
 ```
 
-{download}`Recording <../_static/demos/cli.mp4>` · {download}`Text transcript <../_static/demos/cli.txt>` · {download}`Runnable script <../../examples/demos/cli.sh>` · {download}`VHS tape <tapes/cli.tape>`
+{download}`GIF recording <../_static/demos/cli.gif>` · {download}`Static preview <../_static/demos/cli.png>` · {download}`Text transcript <../_static/demos/cli.txt>` · {download}`Runnable script <../../examples/demos/cli.sh>` · {download}`VHS tape <tapes/cli.tape>`
 
 (demo-workspace)=
 ## Workspace lifecycle
@@ -38,13 +38,13 @@ Resolve inline requirements with the standalone CLI, solve an environment file t
 Discover environments and named targets, solve the complete matrix, validate the lock, reject a changed manifest and update one target. See {doc}`../tutorials/workspaces`.
 
 ```{raw} html
-<video class="presto-demo" controls preload="none" width="1100" poster="../_static/demos/workspace.png" aria-label="Workspace lifecycle terminal demo">
-  <source src="../_static/demos/workspace.mp4" type="video/mp4">
-  Your browser does not support embedded video. Use the recording download below.
-</video>
+<picture>
+  <source srcset="../_static/demos/workspace.png" media="(prefers-reduced-motion: reduce)">
+  <img class="presto-demo" src="../_static/demos/workspace.gif" width="1100" loading="lazy" alt="Workspace lifecycle terminal demo">
+</picture>
 ```
 
-{download}`Recording <../_static/demos/workspace.mp4>` · {download}`Text transcript <../_static/demos/workspace.txt>` · {download}`Runnable script <../../examples/demos/workspace.sh>` · {download}`VHS tape <tapes/workspace.tape>`
+{download}`GIF recording <../_static/demos/workspace.gif>` · {download}`Static preview <../_static/demos/workspace.png>` · {download}`Text transcript <../_static/demos/workspace.txt>` · {download}`Runnable script <../../examples/demos/workspace.sh>` · {download}`VHS tape <tapes/workspace.tape>`
 
 (demo-locks)=
 ## Saved locks and SBOMs
@@ -52,13 +52,13 @@ Discover environments and named targets, solve the complete matrix, validate the
 Extract exact workspace records, render explicit URLs, convert a generic lock and generate an SBOM with declared roots. See {doc}`../how-to/extract-workspace-lock`.
 
 ```{raw} html
-<video class="presto-demo" controls preload="none" width="1100" poster="../_static/demos/locks.png" aria-label="Saved locks and SBOMs terminal demo">
-  <source src="../_static/demos/locks.mp4" type="video/mp4">
-  Your browser does not support embedded video. Use the recording download below.
-</video>
+<picture>
+  <source srcset="../_static/demos/locks.png" media="(prefers-reduced-motion: reduce)">
+  <img class="presto-demo" src="../_static/demos/locks.gif" width="1100" loading="lazy" alt="Saved locks and SBOMs terminal demo">
+</picture>
 ```
 
-{download}`Recording <../_static/demos/locks.mp4>` · {download}`Text transcript <../_static/demos/locks.txt>` · {download}`Runnable script <../../examples/demos/locks.sh>` · {download}`VHS tape <tapes/locks.tape>`
+{download}`GIF recording <../_static/demos/locks.gif>` · {download}`Static preview <../_static/demos/locks.png>` · {download}`Text transcript <../_static/demos/locks.txt>` · {download}`Runnable script <../../examples/demos/locks.sh>` · {download}`VHS tape <tapes/locks.tape>`
 
 (demo-http)=
 ## HTTP solving and retained results
@@ -66,13 +66,13 @@ Extract exact workspace records, render explicit URLs, convert a generic lock an
 Call a local service, export a lock and compare the exact bytes retrieved from its retained URL. See {doc}`../tutorials/http-api`.
 
 ```{raw} html
-<video class="presto-demo" controls preload="none" width="1100" poster="../_static/demos/http.png" aria-label="HTTP solving and retained results terminal demo">
-  <source src="../_static/demos/http.mp4" type="video/mp4">
-  Your browser does not support embedded video. Use the recording download below.
-</video>
+<picture>
+  <source srcset="../_static/demos/http.png" media="(prefers-reduced-motion: reduce)">
+  <img class="presto-demo" src="../_static/demos/http.gif" width="1100" loading="lazy" alt="HTTP solving and retained results terminal demo">
+</picture>
 ```
 
-{download}`Recording <../_static/demos/http.mp4>` · {download}`Text transcript <../_static/demos/http.txt>` · {download}`Runnable script <../../examples/demos/http.sh>` · {download}`VHS tape <tapes/http.tape>`
+{download}`GIF recording <../_static/demos/http.gif>` · {download}`Static preview <../_static/demos/http.png>` · {download}`Text transcript <../_static/demos/http.txt>` · {download}`Runnable script <../../examples/demos/http.sh>` · {download}`VHS tape <tapes/http.tape>`
 
 (demo-cache)=
 ## Persistent cache
@@ -80,13 +80,13 @@ Call a local service, export a lock and compare the exact bytes retrieved from i
 Restart the service and retrieve the same retained bytes from a file-backed cache without another solve. See {doc}`../how-to/configure-result-cache`.
 
 ```{raw} html
-<video class="presto-demo" controls preload="none" width="1100" poster="../_static/demos/cache.png" aria-label="Persistent cache terminal demo">
-  <source src="../_static/demos/cache.mp4" type="video/mp4">
-  Your browser does not support embedded video. Use the recording download below.
-</video>
+<picture>
+  <source srcset="../_static/demos/cache.png" media="(prefers-reduced-motion: reduce)">
+  <img class="presto-demo" src="../_static/demos/cache.gif" width="1100" loading="lazy" alt="Persistent cache terminal demo">
+</picture>
 ```
 
-{download}`Recording <../_static/demos/cache.mp4>` · {download}`Text transcript <../_static/demos/cache.txt>` · {download}`Runnable script <../../examples/demos/cache.sh>` · {download}`VHS tape <tapes/cache.tape>`
+{download}`GIF recording <../_static/demos/cache.gif>` · {download}`Static preview <../_static/demos/cache.png>` · {download}`Text transcript <../_static/demos/cache.txt>` · {download}`Runnable script <../../examples/demos/cache.sh>` · {download}`VHS tape <tapes/cache.tape>`
 
 (demo-trust)=
 ## Artifact verification
@@ -94,13 +94,13 @@ Restart the service and retrieve the same retained bytes from a file-backed cach
 Verify a public signed fixture offline, then reject modified bytes and the wrong expected signer. The fixture uses staging trust and does not establish provenance claims. See {doc}`../how-to/sign-and-verify`.
 
 ```{raw} html
-<video class="presto-demo" controls preload="none" width="1100" poster="../_static/demos/trust.png" aria-label="Artifact verification terminal demo">
-  <source src="../_static/demos/trust.mp4" type="video/mp4">
-  Your browser does not support embedded video. Use the recording download below.
-</video>
+<picture>
+  <source srcset="../_static/demos/trust.png" media="(prefers-reduced-motion: reduce)">
+  <img class="presto-demo" src="../_static/demos/trust.gif" width="1100" loading="lazy" alt="Artifact verification terminal demo">
+</picture>
 ```
 
-{download}`Recording <../_static/demos/trust.mp4>` · {download}`Text transcript <../_static/demos/trust.txt>` · {download}`Runnable script <../../examples/demos/trust.sh>` · {download}`VHS tape <tapes/trust.tape>`
+{download}`GIF recording <../_static/demos/trust.gif>` · {download}`Static preview <../_static/demos/trust.png>` · {download}`Text transcript <../_static/demos/trust.txt>` · {download}`Runnable script <../../examples/demos/trust.sh>` · {download}`VHS tape <tapes/trust.tape>`
 
 (demo-action)=
 ## GitHub Action client
@@ -108,13 +108,13 @@ Verify a public signed fixture offline, then reject modified bytes and the wrong
 Execute the composite Action scripts locally against a real service and inspect a two-platform workspace lock. Hosted runner execution is checked separately by the Action smoke workflow. See {doc}`../how-to/use-github-action`.
 
 ```{raw} html
-<video class="presto-demo" controls preload="none" width="1100" poster="../_static/demos/action.png" aria-label="GitHub Action client terminal demo">
-  <source src="../_static/demos/action.mp4" type="video/mp4">
-  Your browser does not support embedded video. Use the recording download below.
-</video>
+<picture>
+  <source srcset="../_static/demos/action.png" media="(prefers-reduced-motion: reduce)">
+  <img class="presto-demo" src="../_static/demos/action.gif" width="1100" loading="lazy" alt="GitHub Action client terminal demo">
+</picture>
 ```
 
-{download}`Recording <../_static/demos/action.mp4>` · {download}`Text transcript <../_static/demos/action.txt>` · {download}`Runnable script <../../examples/demos/action.sh>` · {download}`VHS tape <tapes/action.tape>`
+{download}`GIF recording <../_static/demos/action.gif>` · {download}`Static preview <../_static/demos/action.png>` · {download}`Text transcript <../_static/demos/action.txt>` · {download}`Runnable script <../../examples/demos/action.sh>` · {download}`VHS tape <tapes/action.tape>`
 
 (demo-docker)=
 ## Docker service
@@ -122,13 +122,13 @@ Execute the composite Action scripts locally against a real service and inspect 
 Build the image from this checkout, launch it on a loopback-only port, check readiness and solve an environment. The image build completes before terminal recording starts. See {doc}`../how-to/run-with-docker`.
 
 ```{raw} html
-<video class="presto-demo" controls preload="none" width="1100" poster="../_static/demos/docker.png" aria-label="Docker service terminal demo">
-  <source src="../_static/demos/docker.mp4" type="video/mp4">
-  Your browser does not support embedded video. Use the recording download below.
-</video>
+<picture>
+  <source srcset="../_static/demos/docker.png" media="(prefers-reduced-motion: reduce)">
+  <img class="presto-demo" src="../_static/demos/docker.gif" width="1100" loading="lazy" alt="Docker service terminal demo">
+</picture>
 ```
 
-{download}`Recording <../_static/demos/docker.mp4>` · {download}`Text transcript <../_static/demos/docker.txt>` · {download}`Runnable script <../../examples/demos/docker.sh>` · {download}`VHS tape <tapes/docker.tape>`
+{download}`GIF recording <../_static/demos/docker.gif>` · {download}`Static preview <../_static/demos/docker.png>` · {download}`Text transcript <../_static/demos/docker.txt>` · {download}`Runnable script <../../examples/demos/docker.sh>` · {download}`VHS tape <tapes/docker.tape>`
 
 (demo-operations)=
 ## Diagnostics and timing
@@ -136,12 +136,12 @@ Build the image from this checkout, launch it on a loopback-only port, check rea
 Inspect readiness, versions and capabilities, read a rejected request, and measure resolve and retained retrieval independently. The observed timings are not a service benchmark. See {doc}`../how-to/monitor-service`.
 
 ```{raw} html
-<video class="presto-demo" controls preload="none" width="1100" poster="../_static/demos/operations.png" aria-label="Diagnostics and timing terminal demo">
-  <source src="../_static/demos/operations.mp4" type="video/mp4">
-  Your browser does not support embedded video. Use the recording download below.
-</video>
+<picture>
+  <source srcset="../_static/demos/operations.png" media="(prefers-reduced-motion: reduce)">
+  <img class="presto-demo" src="../_static/demos/operations.gif" width="1100" loading="lazy" alt="Diagnostics and timing terminal demo">
+</picture>
 ```
 
-{download}`Recording <../_static/demos/operations.mp4>` · {download}`Text transcript <../_static/demos/operations.txt>` · {download}`Runnable script <../../examples/demos/operations.sh>` · {download}`VHS tape <tapes/operations.tape>`
+{download}`GIF recording <../_static/demos/operations.gif>` · {download}`Static preview <../_static/demos/operations.png>` · {download}`Text transcript <../_static/demos/operations.txt>` · {download}`Runnable script <../../examples/demos/operations.sh>` · {download}`VHS tape <tapes/operations.tape>`
 
 The scripts share {download}`common.sh <../../examples/demos/common.sh>`. Run them from a checkout so their fixtures and assertion helpers are available. Live signing requires an operator-provided identity and trust configuration. Follow {doc}`../how-to/sign-and-verify` for that workflow.

@@ -1,9 +1,9 @@
 
 Check readiness, versions and configured capabilities
 
-$ curl --fail --silent --show-error http://127.0.0.1:57038/health
+$ curl --fail --silent --show-error http://127.0.0.1:59229/health
 {"status":"ok"}
-$ curl --fail --silent --show-error http://127.0.0.1:57038/version > version.json
+$ curl --fail --silent --show-error http://127.0.0.1:59229/version > version.json
 
 $ jq . version.json
 {
@@ -16,7 +16,7 @@ $ jq . version.json
   "conda-sigstore": "0.1.2"
 }
 
-$ curl --fail --silent --show-error http://127.0.0.1:57038/capabilities > capabilities.json
+$ curl --fail --silent --show-error http://127.0.0.1:59229/capabilities > capabilities.json
 
 $ jq . capabilities.json
 {
@@ -44,11 +44,11 @@ $ jq '{error, detail}' error.json
 
 Measure a resolve request and exact retained retrieval
 
-$ curl --fail --silent --show-error --output result.json --dump-header headers.txt --write-out 'Resolve: %{time_total}s\n' 'http://127.0.0.1:57038/resolve?spec=zlib&channel=conda-forge&platform=linux-64'
-Resolve: 0.401540s
+$ curl --fail --silent --show-error --output result.json --dump-header headers.txt --write-out 'Resolve: %{time_total}s\n' 'http://127.0.0.1:59229/resolve?spec=zlib&channel=conda-forge&platform=linux-64'
+Resolve: 0.517175s
 
-$ curl --fail --silent --show-error --output retained.json --write-out 'Retained retrieval: %{time_total}s\n' http://127.0.0.1:57038/r/e08b81e283e9479632911eaa015fa8a6b91160559a98cc53910a0e35e1efa37a
-Retained retrieval: 0.001968s
+$ curl --fail --silent --show-error --output retained.json --write-out 'Retained retrieval: %{time_total}s\n' http://127.0.0.1:59229/r/e08b81e283e9479632911eaa015fa8a6b91160559a98cc53910a0e35e1efa37a
+Retained retrieval: 0.001677s
 
 $ cmp result.json retained.json
 

@@ -43,7 +43,7 @@ def main() -> None:
         print(f"Recording {name}", flush=True)
         status = output / f"{name}.status"
         status.unlink(missing_ok=True)
-        media = [output / f"{name}.{suffix}" for suffix in ("mp4", "png", "txt")]
+        media = [output / f"{name}.{suffix}" for suffix in ("gif", "png", "txt")]
         for path in media:
             path.unlink(missing_ok=True)
         try:
