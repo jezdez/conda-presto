@@ -8,7 +8,7 @@ import tempfile
 import time
 import tomllib
 from contextlib import redirect_stderr, redirect_stdout
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import msgspec
@@ -25,7 +25,11 @@ from .exceptions import CredentialRedactionFilter, redact_safe_error
 from .exporter import OutputFormat
 from .lockfile_transcode import CondaLockfilesTranscoder
 from .workspace import WorkspaceInput, WorkspaceParseResult
-from .workspace_lock import WorkspaceLockInput, WorkspaceLockParseResult
+from .workspace_lock import (
+    WorkspaceLockExport,
+    WorkspaceLockInput,
+    WorkspaceLockParseResult,
+)
 
 ALLOWED_EXTENSIONS = {".yml", ".yaml", ".txt", ".lock", ".toml", ".json"}
 HTTP_INPUT_MAX_NODES = 10_000
@@ -51,6 +55,7 @@ class ParsedInputFile:
     exported_content: str | None = None
     workspace: WorkspaceInput | None = None
     workspace_lock: WorkspaceLockInput | None = None
+    exported_documents: list[WorkspaceLockExport] = field(default_factory=list)
 
     @property
     def parse_result(
@@ -79,6 +84,9 @@ class ParsedInputFile:
         export_format: str | None = None,
         target_environments: list[str] | tuple[str, ...] | None = None,
         lockfile_only: bool = False,
+        export_each: bool = False,
+        manifest_content: str | None = None,
+        manifest_filename: str | None = None,
     ) -> ParsedInputFile:
         """Preserve workspace configuration or parse through conda's registry.
 
@@ -91,6 +99,19 @@ class ParsedInputFile:
         solving. ``lockfile_only`` leaves declaration output empty for the
         compatibility transcode operation.
         """
+        if export_each and export_format is None:
+            raise ValueError("Per-target export requires an output format")
+        if export_each or manifest_content is not None or manifest_filename is not None:
+            if Path(path).name != LOCKFILE_NAME:
+                raise ValueError(
+                    "Companion manifests and per-target export require conda.lock"
+                )
+        if manifest_content is not None and manifest_filename is None:
+            raise ValueError("Companion manifest filename is required")
+        if manifest_filename is not None and manifest_content is None:
+            raise ValueError("Companion manifest content is required")
+        if manifest_content is not None and export_format is None:
+            raise ValueError("Companion manifest requires an output format")
         if Path(path).name in WorkspaceInput.filenames():
             workspace = WorkspaceInput.from_path(
                 Path(path),
@@ -118,6 +139,10 @@ class ParsedInputFile:
                 platforms=target_platforms,
                 select_all=export_format is not None,
             )
+            if manifest_content is not None and manifest_filename is not None:
+                workspace_lock = workspace_lock.with_manifest(
+                    manifest_content, manifest_filename
+                )
             return cls(
                 specs=[],
                 channels=workspace_lock.channels,
@@ -132,8 +157,13 @@ class ParsedInputFile:
                 ),
                 exported_content=(
                     workspace_lock.render(export_format)
-                    if export_format is not None
+                    if export_format is not None and not export_each
                     else None
+                ),
+                exported_documents=(
+                    workspace_lock.render_each(export_format)
+                    if export_each and export_format is not None
+                    else []
                 ),
                 workspace_lock=workspace_lock,
             )
@@ -219,22 +249,15 @@ class ParsedInputFile:
         export_format: str | None = None,
         target_environments: list[str] | tuple[str, ...] | None = None,
         lockfile_only: bool = False,
+        export_each: bool = False,
+        manifest_content: str | None = None,
+        manifest_filename: str | None = None,
     ) -> ParsedInputFile:
         """Parse content in an isolated process before an absolute deadline."""
         if deadline <= time.monotonic():
             raise TimeoutError
         with tempfile.TemporaryDirectory() as tmpdir:
-            filename = os.path.basename(filename or "environment.yml")
-            if len(filename.encode()) > 240:
-                raise ValueError("Input filename is too long")
-            if not filename.isprintable():
-                raise ValueError("Input filename contains unsupported characters")
-            ext = os.path.splitext(filename)[1].lower()
-            if ext not in ALLOWED_EXTENSIONS:
-                raise ValueError(
-                    f"Unsupported file extension '{ext}', "
-                    f"allowed: {', '.join(sorted(ALLOWED_EXTENSIONS))}"
-                )
+            filename = cls.input_filename(filename)
             for line in content.splitlines():
                 stripped = line.strip().lstrip("\ufeff")
                 if not stripped or stripped.startswith("#"):
@@ -261,6 +284,9 @@ class ParsedInputFile:
                         export_format,
                         target_environments,
                         lockfile_only,
+                        export_each,
+                        manifest_content,
+                        manifest_filename,
                     ),
                 )
                 process.start()
@@ -309,6 +335,9 @@ class ParsedInputFile:
         export_format: str | None = None,
         target_environments: list[str] | tuple[str, ...] | None = None,
         lockfile_only: bool = False,
+        export_each: bool = False,
+        manifest_content: str | None = None,
+        manifest_filename: str | None = None,
     ) -> None:
         """Send an input parse result from an isolated process."""
         CredentialRedactionFilter.install()
@@ -317,71 +346,22 @@ class ParsedInputFile:
         try:
             with open(os.devnull, "w") as output:
                 with redirect_stdout(output), redirect_stderr(output):
-                    suffix = path.suffix.lower()
-                    if suffix != ".txt":
-                        nodes = 0
-                        try:
-                            with path.open(encoding="utf-8") as source:
-                                for event in YAML(typ="safe", pure=True).parse(source):
-                                    if time.monotonic() >= deadline:
-                                        raise TimeoutError
-                                    if isinstance(event, AliasEvent):
-                                        raise ValueError(
-                                            "YAML aliases are not accepted by the "
-                                            "HTTP parser"
-                                        )
-                                    if isinstance(event, NodeEvent):
-                                        nodes += 1
-                                        if nodes > HTTP_INPUT_MAX_NODES:
-                                            raise ValueError(
-                                                "Input file exceeds the structural "
-                                                "complexity limit"
-                                            )
-                        except YAMLError:
-                            # TOML need not be valid YAML, but content detection
-                            # can load a file that is valid in both formats as YAML.
-                            if suffix != ".toml":
-                                raise
-                    if suffix == ".toml":
-                        with path.open("rb") as source:
-                            pending = [tomllib.load(source)]
-                        nodes = 0
-                        while pending:
-                            if time.monotonic() >= deadline:
-                                raise TimeoutError
-                            value = pending.pop()
-                            nodes += 1
-                            if nodes > HTTP_INPUT_MAX_NODES:
-                                raise ValueError(
-                                    "Input file exceeds the structural complexity limit"
-                                )
-                            children = (
-                                value.values() if isinstance(value, dict) else value
+                    ParsedInputFile.validate_input_path(path, deadline)
+                    if manifest_content is not None:
+                        if manifest_filename is None:
+                            raise ValueError("Companion manifest filename is required")
+                        manifest_filename = ParsedInputFile.input_filename(
+                            manifest_filename
+                        )
+                        if manifest_filename not in WorkspaceInput.filenames():
+                            raise ValueError(
+                                "Companion manifest filename must be conda.toml, "
+                                "pixi.toml or pyproject.toml"
                             )
-                            if isinstance(value, (dict, list)):
-                                if (
-                                    len(pending) + len(value)
-                                    > HTTP_INPUT_MAX_NODES - nodes
-                                ):
-                                    raise ValueError(
-                                        "Input file exceeds the structural "
-                                        "complexity limit"
-                                    )
-                                pending.extend(children)
-                    elif suffix == ".txt":
-                        items = 0
-                        with path.open(encoding="utf-8") as source:
-                            for line in source:
-                                if time.monotonic() >= deadline:
-                                    raise TimeoutError
-                                stripped = line.strip()
-                                if stripped and not stripped.startswith("#"):
-                                    items += 1
-                                    if items > HTTP_INPUT_MAX_NODES:
-                                        raise ValueError(
-                                            "Input file exceeds the structural "
-                                            "complexity limit"
-                                        )
+                        manifest_path = path.with_name(manifest_filename)
+                        manifest_path.write_text(manifest_content, encoding="utf-8")
+                        ParsedInputFile.validate_input_path(manifest_path, deadline)
+                    suffix = path.suffix.lower()
                     parsed = ParsedInputFile.from_path(
                         path,
                         target_platforms,
@@ -392,6 +372,9 @@ class ParsedInputFile:
                         export_format=export_format,
                         target_environments=target_environments,
                         lockfile_only=lockfile_only,
+                        export_each=export_each,
+                        manifest_content=manifest_content,
+                        manifest_filename=manifest_filename,
                     )
             sender.send(("ok", parsed))
         except TimeoutError:
@@ -406,3 +389,79 @@ class ParsedInputFile:
             sender.send(("error", None))
         finally:
             sender.close()
+
+    @staticmethod
+    def input_filename(filename: str | None) -> str:
+        """Normalize an uploaded filename without allowing arbitrary file types."""
+        filename = os.path.basename(filename or "environment.yml")
+        if len(filename.encode()) > 240:
+            raise ValueError("Input filename is too long")
+        if not filename.isprintable():
+            raise ValueError("Input filename contains unsupported characters")
+        ext = os.path.splitext(filename)[1].lower()
+        if ext not in ALLOWED_EXTENSIONS:
+            raise ValueError(
+                f"Unsupported file extension '{ext}', "
+                f"allowed: {', '.join(sorted(ALLOWED_EXTENSIONS))}"
+            )
+        return filename
+
+    @staticmethod
+    def validate_input_path(path: Path, deadline: float) -> None:
+        """Apply the shared document limits before invoking a format provider."""
+        suffix = path.suffix.lower()
+        if suffix != ".txt":
+            nodes = 0
+            try:
+                with path.open(encoding="utf-8") as source:
+                    for event in YAML(typ="safe", pure=True).parse(source):
+                        if time.monotonic() >= deadline:
+                            raise TimeoutError
+                        if isinstance(event, AliasEvent):
+                            raise ValueError(
+                                "YAML aliases are not accepted by the HTTP parser"
+                            )
+                        if isinstance(event, NodeEvent):
+                            nodes += 1
+                            if nodes > HTTP_INPUT_MAX_NODES:
+                                raise ValueError(
+                                    "Input file exceeds the structural complexity limit"
+                                )
+            except YAMLError:
+                # TOML need not be valid YAML, but content detection
+                # can load a file that is valid in both formats as YAML.
+                if suffix != ".toml":
+                    raise
+        if suffix == ".toml":
+            with path.open("rb") as source:
+                pending = [tomllib.load(source)]
+            nodes = 0
+            while pending:
+                if time.monotonic() >= deadline:
+                    raise TimeoutError
+                value = pending.pop()
+                nodes += 1
+                if nodes > HTTP_INPUT_MAX_NODES:
+                    raise ValueError(
+                        "Input file exceeds the structural complexity limit"
+                    )
+                children = value.values() if isinstance(value, dict) else value
+                if isinstance(value, (dict, list)):
+                    if len(pending) + len(value) > HTTP_INPUT_MAX_NODES - nodes:
+                        raise ValueError(
+                            "Input file exceeds the structural complexity limit"
+                        )
+                    pending.extend(children)
+        elif suffix == ".txt":
+            items = 0
+            with path.open(encoding="utf-8") as source:
+                for line in source:
+                    if time.monotonic() >= deadline:
+                        raise TimeoutError
+                    stripped = line.strip()
+                    if stripped and not stripped.startswith("#"):
+                        items += 1
+                        if items > HTTP_INPUT_MAX_NODES:
+                            raise ValueError(
+                                "Input file exceeds the structural complexity limit"
+                            )

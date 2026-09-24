@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import time
 
 import pytest
 from conda.core.package_cache_data import ProgressiveFetchExtract
@@ -99,3 +100,77 @@ def test_lockfile_only_parsing_does_not_render_declarations(
     )
     assert not parsed.is_lockfile
     assert parsed.exported_content is None
+
+
+def test_locked_document_collection_is_complete_before_parser_returns(
+    workspace_lock_path, no_declaration_solve
+):
+    parsed = ParsedInputFile.from_path(
+        workspace_lock_path,
+        target_platforms=["cpu", "gpu"],
+        target_environments=["default", "test"],
+        export_format="cyclonedx",
+        export_each=True,
+    )
+    assert parsed.exported_content is None
+    assert len(parsed.exported_documents) == 4
+    assert all(
+        json.loads(document.content)["components"]
+        for document in parsed.exported_documents
+    )
+
+
+@pytest.mark.parametrize(
+    "options,message",
+    [
+        ({"export_each": True}, "requires an output format"),
+        ({"manifest_content": "[workspace]"}, "filename is required"),
+        ({"manifest_filename": "conda.toml"}, "content is required"),
+        (
+            {"manifest_content": "[workspace]", "manifest_filename": "conda.toml"},
+            "requires an output format",
+        ),
+    ],
+)
+def test_locked_export_rejects_incomplete_options(
+    workspace_lock_path, options, message
+):
+    with pytest.raises(ValueError, match=message):
+        ParsedInputFile.from_path(workspace_lock_path, **options)
+
+
+def test_per_target_export_requires_workspace_lock(environment_yml_path):
+    with pytest.raises(ValueError, match="require conda.lock"):
+        ParsedInputFile.from_path(
+            environment_yml_path, export_format="cyclonedx", export_each=True
+        )
+
+
+@pytest.mark.parametrize(
+    "filename,content,message",
+    [
+        ("manifest.txt", "[workspace]", "Companion manifest filename"),
+        ("conda\n.toml", "[workspace]", "unsupported characters"),
+        ("conda.toml", "items = [" + "0," * 10_001 + "]", "complexity limit"),
+        (
+            "conda.toml",
+            '[workspace]\nchannels = ["https://user:secret@example.test/channel"]\n',
+            "credentials",
+        ),
+    ],
+)
+def test_companion_manifest_uses_bounded_parser_rules(
+    workspace_lock_text, filename, content, message
+):
+    with pytest.raises(ValueError, match=message):
+        ParsedInputFile.from_content_until(
+            workspace_lock_text,
+            "conda.lock",
+            ["cpu"],
+            time.monotonic() + 15,
+            export_format="cyclonedx",
+            target_environments=["test"],
+            export_each=True,
+            manifest_content=content,
+            manifest_filename=filename,
+        )

@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import hashlib
+import json
+import tomllib
 
 import msgspec
 import pytest
 from conda.common.serialize.yaml import dumps as yaml_dumps
 from conda.core.package_cache_data import PackageCacheData, ProgressiveFetchExtract
+from conda.exceptions import CondaError
 from conda_workspaces.lockfile import CondaLockLoader, load_lockfile_data
 from conda_workspaces.resolver import ResolvedEnvironment
 
@@ -185,3 +188,184 @@ def test_lock_conversion_rejects_exporters_that_drop_source_metadata(
     )
     with pytest.raises(ValueError, match="conda-lockfiles"):
         parsed.render(format_name)
+
+
+@pytest.fixture
+def companion_manifest():
+    return (
+        '[workspace]\nchannels = ["conda-forge"]\n'
+        'platforms = [{name = "cpu", platform = "linux-64"}]\n'
+        '[dependencies]\nprobe = ">=1"\n[environments]\ntest = []\n'
+    )
+
+
+def test_each_sbom_preserves_named_targets_and_exact_components(
+    workspace_lock_path, workspace_lock_data, offline_lock_operations
+):
+    parsed = WorkspaceLockInput.from_path(
+        workspace_lock_path, environments=["test", "default"], platforms=["cpu", "gpu"]
+    )
+    documents = parsed.render_each("cyclonedx")
+    assert [(doc.environment, doc.platform, doc.subdir) for doc in documents] == [
+        (name, target, "linux-64")
+        for name in ("test", "default")
+        for target in ("cpu", "gpu")
+    ]
+    for document in documents:
+        sbom = json.loads(document.content)
+        root = sbom["metadata"]["component"]
+        assert root["name"] == document.environment
+        properties = {item["name"]: item["value"] for item in root["properties"]}
+        assert properties["conda:environment:root-dependency-source"] == (
+            "inferred-graph-roots"
+        )
+        component = sbom["components"][0]
+        assert component["version"] == "1.0"
+        assert {item["alg"]: item["content"] for item in component["hashes"]} == {
+            "SHA-256": "a" * 64,
+            "MD5": "b" * 32,
+        }
+        source = workspace_lock_data["environments"][document.environment]["packages"][
+            document.platform
+        ][0]["conda"]
+        assert source in [item["url"] for item in component["externalReferences"]]
+
+
+def test_companion_roots_use_workspaces_matching_and_affect_cache_identity(
+    workspace_lock_path, companion_manifest, offline_lock_operations
+):
+    parsed = WorkspaceLockInput.from_path(
+        workspace_lock_path, environments=["test"], platforms=["cpu"]
+    )
+    enriched = parsed.with_manifest(companion_manifest, "conda.toml")
+    document = json.loads(enriched.render("cyclonedx"))
+    properties = {
+        item["name"]: item["value"]
+        for item in document["metadata"]["component"]["properties"]
+    }
+    assert (
+        properties["conda:environment:root-dependency-source"] == "requested-packages"
+    )
+    assert not parsed.environment(parsed.result.selected[0]).requested_packages
+    assert enriched.cache_identity() != parsed.cache_identity()
+    assert enriched.cache_identity()["manifest"] == {
+        "source": hashlib.sha256(companion_manifest.encode()).hexdigest(),
+        "format": "conda-toml",
+    }
+
+
+@pytest.mark.parametrize("format_name", ["conda-toml", "pixi-toml", "pyproject-toml"])
+@pytest.mark.parametrize("subdir", ["linux-64", "noarch"])
+@pytest.mark.parametrize("export_each", [False, True], ids=["combined", "per-target"])
+def test_companion_manifest_keeps_exact_records_in_normalized_exports(
+    workspace_lock_path,
+    workspace_lock_data,
+    companion_manifest,
+    offline_lock_operations,
+    format_name,
+    subdir,
+    export_each,
+):
+    data = workspace_lock_data
+    data["packages"][0]["depends"] = ["gpu-probe >=1"]
+    data["environments"]["test"]["packages"]["cpu"].append(
+        {"conda": data["packages"][1]["conda"]}
+    )
+    workspace_lock_path.write_text(
+        yaml_dumps(data).replace("/linux-64/", f"/{subdir}/")
+    )
+    parsed = WorkspaceLockInput.from_path(
+        workspace_lock_path, environments=["test"], platforms=["cpu"]
+    ).with_manifest(companion_manifest, "conda.toml")
+    content = (
+        parsed.render_each(format_name)[0].content
+        if export_each
+        else parsed.render(format_name)
+    )
+    manifest = tomllib.loads(content)
+    if format_name == "pyproject-toml":
+        manifest = manifest["tool"]["conda"]
+    assert manifest["workspace"]["platforms"] == ["linux-64"]
+    dependencies = manifest["dependencies"]
+    assert set(dependencies) == {"probe", "gpu-probe"}
+    for name, dependency in dependencies.items():
+        assert dependency["url"] == (
+            f"https://conda.anaconda.org/conda-forge/{subdir}/{name}-1.0-h123_0.conda"
+        )
+        assert dependency["version"] == "1.0"
+        assert dependency["build"] == "h123_0"
+        assert dependency["sha256"] == "a" * 64
+        assert dependency["md5"] == "b" * 32
+
+
+@pytest.mark.parametrize("format_name", ["cyclonedx", "conda-toml"])
+@pytest.mark.parametrize(
+    "before,after,message",
+    [
+        ('probe = ">=1"', 'probe = ">=2"', "do not satisfy"),
+        ('probe = ">=1"', 'missing = "*"', "do not satisfy"),
+        ('"conda-forge"', '"other-channel"', "channels do not match"),
+        ('platform = "linux-64"', 'platform = "osx-arm64"', "platform does not match"),
+        ("test = []", "other = []", "Unknown workspace environment"),
+        ('name = "cpu"', 'name = "other"', "Unknown workspace platform"),
+        (
+            '[dependencies]\nprobe = ">=1"',
+            '[dependencies]\nprobe = ">=1"\n[pypi-dependencies]\nrequests = "*"',
+            "PyPI dependencies",
+        ),
+    ],
+)
+def test_companion_manifest_mismatches_reject_export(
+    workspace_lock_path,
+    companion_manifest,
+    offline_lock_operations,
+    before,
+    after,
+    message,
+    format_name,
+):
+    parsed = WorkspaceLockInput.from_path(
+        workspace_lock_path, environments=["test"], platforms=["cpu"]
+    )
+    with pytest.raises((CondaError, ValueError), match=message):
+        parsed.with_manifest(
+            companion_manifest.replace(before, after), "conda.toml"
+        ).render(format_name)
+
+
+def test_each_export_returns_no_documents_when_a_later_target_fails(
+    workspace_lock_path, companion_manifest, offline_lock_operations
+):
+    parsed = WorkspaceLockInput.from_path(
+        workspace_lock_path, environments=["test"], platforms=["cpu", "gpu"]
+    )
+    manifest = companion_manifest.replace(
+        'platform = "linux-64"}]',
+        'platform = "linux-64"}, {name = "gpu", platform = "linux-64"}]',
+    )
+    with pytest.raises((CondaError, ValueError), match="do not satisfy"):
+        parsed.with_manifest(manifest, "conda.toml").render_each("cyclonedx")
+
+
+def test_companion_context_is_not_silently_ignored_by_source_extraction(
+    workspace_lock_path, companion_manifest
+):
+    parsed = WorkspaceLockInput.from_path(
+        workspace_lock_path, environments=["test"], platforms=["cpu"]
+    ).with_manifest(companion_manifest, "conda.toml")
+    with pytest.raises(ValueError, match="cannot modify source lockfile extraction"):
+        parsed.render("workspace-lock")
+
+
+def test_companion_manifest_supplies_noarch_only_logical_target_subdir(
+    workspace_lock_path, companion_manifest, offline_lock_operations
+):
+    workspace_lock_path.write_text(
+        workspace_lock_path.read_text().replace("/linux-64/", "/noarch/")
+    )
+    parsed = WorkspaceLockInput.from_path(
+        workspace_lock_path, environments=["test"], platforms=["cpu"]
+    ).with_manifest(companion_manifest, "conda.toml")
+    document = parsed.render_each("cyclonedx")[0]
+    assert document.subdir == "linux-64"
+    assert "noarch" in json.loads(document.content)["components"][0]["purl"]

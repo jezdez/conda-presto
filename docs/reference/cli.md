@@ -84,6 +84,18 @@ without installing anything. Use `--parse` to inspect declarations or saved work
   conda presto --export -f conda.lock -e test -p linux-64 --format workspace-lock
   ```
 
+`--manifest`
+: Companion workspace manifest for `--export` of a workspace lock. The file must be named `conda.toml`, `pixi.toml` or `pyproject.toml`. The selected environment, target, concrete platform, ordered channels and direct requirements must agree with the saved records. This supplies declared roots to exporters such as conda-sboms. PyPI declarations are unsupported.
+
+  Without this option, SBOM roots are inferred from the saved dependency graph. Manifest context is rejected for parse, solve and serve modes, ordinary inputs and source workspace-lock extraction.
+
+  ```bash
+  conda presto --export -f conda.lock -e test -p linux-64 \
+    --format cyclonedx-json-v1.7 --manifest conda.toml > test-linux.cdx.json
+  ```
+
+  The CLI exports one selected target per SBOM document. Use HTTP `POST /sbom` for a named environment/target collection. There is no separate CLI SBOM mode.
+
 `-f`, `--file`
 : Path to an environment file. Can be repeated. Each file is selected and
   parsed through conda's installed environment-specifier plugins. The base

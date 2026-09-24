@@ -4,17 +4,22 @@ from __future__ import annotations
 
 import hashlib
 import io
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
 import msgspec
 from conda.common.serialize.yaml import dump as yaml_dump
+from conda.models.channel import Channel
+from conda.models.environment import Environment
 from conda_workspaces.lockfile import FORMAT, CondaLockLoader, load_lockfile_data
+from conda_workspaces.manifests import PARSER_BY_FILENAME
 from conda_workspaces.models import has_url_credentials_in_data
+from conda_workspaces.resolver import resolve_environment
 
 from .config import MAX_CHANNELS, MAX_PLATFORMS
 from .exporter import OutputFormat
+from .workspace import WorkspaceInput
 
 
 class WorkspaceLockEnvironment(msgspec.Struct):
@@ -40,6 +45,15 @@ class WorkspaceLockParseResult(msgspec.Struct):
     selected: list[WorkspaceLockTarget]
 
 
+class WorkspaceLockExport(msgspec.Struct):
+    """One exported document identified by its saved environment and target."""
+
+    environment: str
+    platform: str
+    subdir: str | None
+    content: str
+
+
 @dataclass(frozen=True)
 class WorkspaceLockInput:
     """Adapt Workspaces lock selection to Presto requests and exporters."""
@@ -48,6 +62,8 @@ class WorkspaceLockInput:
     result: WorkspaceLockParseResult
     source_digest: str
     channels: list[str]
+    manifest: WorkspaceInput | None = None
+    manifest_digest: str | None = None
 
     @classmethod
     def from_path(
@@ -138,6 +154,77 @@ class WorkspaceLockInput:
             channels,
         )
 
+    def with_manifest(self, content: str, filename: str) -> WorkspaceLockInput:
+        """Retain validated companion declarations for selected locked records."""
+        parser = PARSER_BY_FILENAME.get(filename)
+        if parser is None:
+            raise ValueError(
+                "Companion manifest filename must be conda.toml, pixi.toml "
+                "or pyproject.toml"
+            )
+        config = parser.parse_text(
+            self.loader.path.with_name(filename), content, reject_url_credentials=True
+        )
+        manifest = WorkspaceInput.from_config(config, parser.exporter_format)
+        return replace(
+            self,
+            manifest=manifest,
+            manifest_digest=hashlib.sha256(content.encode("utf-8")).hexdigest(),
+        )
+
+    def environment(
+        self,
+        target: WorkspaceLockTarget,
+        *,
+        include_requested_packages: bool = False,
+    ) -> Environment:
+        """Load exact records and optionally verify their declared direct roots."""
+        subdir = target.subdir
+        resolved = None
+        if self.manifest is not None:
+            selection = self.manifest.select([target.environment], [target.platform])
+            declared = selection.result.selected[0]
+            if subdir is not None and subdir != declared.subdir:
+                raise ValueError("Companion manifest platform does not match the lock")
+            subdir = declared.subdir
+            resolved = resolve_environment(
+                self.manifest.config, target.environment, declared.platform
+            )
+            if resolved.pypi_dependencies:
+                raise ValueError(
+                    "Companion manifest PyPI dependencies cannot be verified "
+                    "from this conda lockfile"
+                )
+        if subdir is None:
+            raise ValueError(
+                "Cannot infer a concrete conda subdir for this logical target. "
+                "Provide a matching companion manifest or use "
+                "conda-workspaces-lock-v1 to extract its saved entries."
+            )
+        env = self.loader.env_for(
+            target.platform,
+            name=target.environment,
+            package_platform=subdir,
+            metadata_only=True,
+        )
+        # The lock records do not identify which dependencies a user requested.
+        env.requested_packages = []
+        if resolved is not None:
+            if tuple(
+                Channel(channel).canonical_name for channel in resolved.channels
+            ) != (
+                tuple(
+                    Channel(channel).canonical_name for channel in env.config.channels
+                )
+            ):
+                raise ValueError("Companion manifest channels do not match the lock")
+            requested_packages = resolved.requested_packages_for_export(
+                env.explicit_packages
+            )
+            if include_requested_packages:
+                env.requested_packages = requested_packages
+        return env
+
     def render(self, format_name: str) -> str:
         """Extract source entries or export metadata-only conda environments."""
         output = OutputFormat.named(format_name)
@@ -145,6 +232,10 @@ class WorkspaceLockInput:
         if not targets:
             raise ValueError("Select at least one lockfile environment and target")
         if output.exporter.name == FORMAT:
+            if self.manifest is not None:
+                raise ValueError(
+                    "Companion manifests cannot modify source lockfile extraction"
+                )
             selections: dict[str, list[str]] = {}
             for target in targets:
                 selections.setdefault(target.environment, []).append(target.platform)
@@ -164,33 +255,56 @@ class WorkspaceLockInput:
                 "Select one environment for this output format. "
                 "Use conda-workspaces-lock-v1 for combined environments."
             )
-        if any(target.subdir is None for target in targets):
-            raise ValueError(
-                "Cannot infer a concrete conda subdir for this logical target. "
-                "Use conda-workspaces-lock-v1 to extract its saved entries."
+        envs = [
+            self.environment(
+                target,
+                include_requested_packages=output.exporter.name
+                == "cyclonedx-json-v1.7",
             )
-        if len({target.subdir for target in targets}) != len(targets):
+            for target in targets
+        ]
+        if len({env.platform for env in envs}) != len(targets):
             raise ValueError(
                 "This output format cannot represent targets sharing a conda subdir"
             )
         if not output.exporter.multiplatform_export and len(targets) != 1:
             raise ValueError("Select one target for this output format")
-        envs = [
-            self.loader.env_for(
-                target.platform,
-                name=target.environment,
-                package_platform=target.subdir,
-                metadata_only=True,
-            )
-            for target in targets
-        ]
         return output.render(envs)[0]
+
+    def render_each(self, format_name: str) -> list[WorkspaceLockExport]:
+        """Render every selected pair completely before returning documents."""
+        output = OutputFormat.named(format_name)
+        if output.is_lockfile:
+            raise ValueError("Per-target documents require an environment exporter")
+        if not self.result.selected:
+            raise ValueError("Select at least one lockfile environment and target")
+        documents = []
+        for target in self.result.selected:
+            env = self.environment(
+                target,
+                include_requested_packages=output.exporter.name
+                == "cyclonedx-json-v1.7",
+            )
+            documents.append(
+                WorkspaceLockExport(
+                    target.environment,
+                    target.platform,
+                    env.platform,
+                    output.render([env])[0],
+                )
+            )
+        return documents
 
     def cache_identity(self) -> dict[str, Any]:
         """Identify uploaded bytes, saved selections and their parser providers."""
         return {
             "source": self.source_digest,
             "selected": msgspec.to_builtins(self.result.selected),
+            "manifest": (
+                {"source": self.manifest_digest, "format": self.manifest.result.format}
+                if self.manifest is not None
+                else None
+            ),
             "providers": {
                 name: OutputFormat.provider_versions(name)
                 for name in ("conda", "conda_workspaces", "conda_lockfiles")

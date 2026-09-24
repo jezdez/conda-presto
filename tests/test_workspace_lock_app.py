@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -116,6 +118,341 @@ def lock_document():
         assert requests == []
 
 
+@pytest.fixture()
+def sbom_lock_document(lock_document):
+    libraries = []
+    for package, digest in zip(lock_document["packages"], ("c", "d"), strict=True):
+        package["depends"] = ["library >=1.0"]
+        libraries.append(
+            package
+            | {
+                "name": "library",
+                "conda": package["conda"].replace("probe-", "library-"),
+                "depends": [],
+                "sha256": digest * 64,
+                "md5": digest * 32,
+            }
+        )
+    lock_document["packages"].extend(libraries)
+    for environment in lock_document["environments"].values():
+        environment["packages"] = {
+            target: [
+                {"conda": package["conda"]}
+                for package in lock_document["packages"]
+                if package["subdir"] == subdir
+            ]
+            for target, subdir in (
+                ("linux-cuda", "linux-64"),
+                ("osx-arm64", "osx-arm64"),
+            )
+        }
+    return lock_document
+
+
+@pytest.fixture()
+def sbom_manifest(sbom_lock_document):
+    channel = sbom_lock_document["environments"]["default"]["channels"][0]["url"]
+    return (
+        '[workspace]\nname = "saved"\n'
+        f"channels = [{json.dumps(channel)}]\n"
+        'platforms = [{name = "linux-cuda", platform = "linux-64"}, "osx-arm64"]\n'
+        '[dependencies]\nlibrary = ">=1.0"\n'
+        "[environments]\ndefault = []\ntest = []\n"
+    )
+
+
+@pytest.mark.anyio
+async def test_locked_sbom_collection_preserves_records_edges_and_retained_bytes(
+    lock_client, sbom_lock_document
+):
+    response = await lock_client.post(
+        "/sbom",
+        json={
+            "file": yaml.safe_dump(sbom_lock_document),
+            "filename": "conda.lock",
+            "environments": ["default", "test"],
+            "platforms": ["linux-cuda", "osx-arm64"],
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    items = response.json()["sboms"]
+    assert {
+        (item["environment"], item["platform"], item["subdir"]) for item in items
+    } == {
+        (environment, platform, subdir)
+        for environment in ("default", "test")
+        for platform, subdir in (("linux-cuda", "linux-64"), ("osx-arm64", "osx-arm64"))
+    }
+    assert len(items) == 4
+    for item in items:
+        body = item["content"].encode("utf-8")
+        document = json.loads(body)
+        assert document["bomFormat"] == "CycloneDX"
+        assert document["specVersion"] == "1.7"
+        root = document["metadata"]["component"]
+        assert root["name"] == item["environment"]
+        properties = {entry["name"]: entry["value"] for entry in root["properties"]}
+        assert (
+            properties["conda:environment:root-dependency-source"]
+            == "inferred-graph-roots"
+        )
+        assert properties["conda:environment:scope"] == "resolved-conda-packages"
+        assert properties["conda:environment:platform"] == item["subdir"]
+        components = {entry["name"]: entry for entry in document["components"]}
+        assert set(components) == {"probe", "library"}
+        edges = {entry["ref"]: entry["dependsOn"] for entry in document["dependencies"]}
+        assert edges[root["bom-ref"]] == [components["probe"]["bom-ref"]]
+        assert edges[components["probe"]["bom-ref"]] == [
+            components["library"]["bom-ref"]
+        ]
+        for package in sbom_lock_document["packages"]:
+            if package["subdir"] != item["subdir"]:
+                continue
+            component = components[package["name"]]
+            assert component["version"] == package["version"]
+            assert {
+                entry["alg"]: entry["content"] for entry in component["hashes"]
+            } == {
+                "MD5": package["md5"],
+                "SHA-256": package["sha256"],
+            }
+            assert component["externalReferences"] == [
+                {"type": "distribution", "url": package["conda"]}
+            ]
+        assert item["sha256"] == hashlib.sha256(body).hexdigest()
+        retained = await lock_client.get(item["location"])
+        assert retained.status_code == 200
+        assert retained.content == body
+        assert retained.headers["content-type"].startswith("application/json")
+
+
+@pytest.mark.anyio
+async def test_locked_sbom_collection_keeps_logical_targets_with_one_subdir(
+    lock_client, sbom_lock_document
+):
+    targets = sbom_lock_document["environments"]["default"]["packages"]
+    targets["linux-debug"] = [entry.copy() for entry in targets["linux-cuda"]]
+    response = await lock_client.post(
+        "/sbom",
+        json={
+            "file": yaml.safe_dump(sbom_lock_document),
+            "filename": "conda.lock",
+            "environments": ["default"],
+            "platforms": ["linux-cuda", "linux-debug"],
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    assert [
+        (item["platform"], item["subdir"]) for item in response.json()["sboms"]
+    ] == [
+        ("linux-cuda", "linux-64"),
+        ("linux-debug", "linux-64"),
+    ]
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("endpoint", ["sbom", "export?format=cyclonedx-json-v1.7"])
+async def test_manifest_context_changes_sbom_roots_after_matching_saved_records(
+    lock_client, sbom_lock_document, sbom_manifest, endpoint
+):
+    request = {
+        "file": yaml.safe_dump(sbom_lock_document),
+        "filename": "conda.lock",
+        "environments": ["default"],
+        "platforms": ["linux-cuda"],
+    }
+    inferred = await lock_client.post(f"/{endpoint}", json=request)
+    declared = await lock_client.post(
+        f"/{endpoint}",
+        json=request | {"manifest": sbom_manifest, "manifest_filename": "conda.toml"},
+    )
+
+    for response, source, expected_root in (
+        (inferred, "inferred-graph-roots", "probe"),
+        (declared, "requested-packages", "library"),
+    ):
+        assert response.status_code == 200, response.text
+        if endpoint == "sbom":
+            item = response.json()["sboms"][0]
+            document = json.loads(item["content"])
+            location = item["location"]
+            body = item["content"].encode("utf-8")
+        else:
+            document = response.json()
+            location = response.headers["location"]
+            body = response.content
+        root = document["metadata"]["component"]
+        properties = {entry["name"]: entry["value"] for entry in root["properties"]}
+        assert properties["conda:environment:root-dependency-source"] == source
+        components = {entry["name"]: entry for entry in document["components"]}
+        edges = {entry["ref"]: entry["dependsOn"] for entry in document["dependencies"]}
+        assert edges[root["bom-ref"]] == [components[expected_root]["bom-ref"]]
+        retained = await lock_client.get(location)
+        assert retained.content == body
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    "selection",
+    [
+        pytest.param({}, id="missing-selectors"),
+        pytest.param({"platforms": ["linux-cuda"]}, id="missing-environment"),
+        pytest.param({"environments": ["default"]}, id="missing-platform"),
+        pytest.param(
+            {"environments": [], "platforms": ["linux-cuda"]}, id="empty-environments"
+        ),
+        pytest.param(
+            {"environments": ["default"], "platforms": []}, id="empty-platforms"
+        ),
+        pytest.param(
+            {"environments": ["absent"], "platforms": ["linux-cuda"]},
+            id="unknown-environment",
+        ),
+        pytest.param(
+            {"environments": ["default"], "platforms": ["absent"]}, id="unknown-target"
+        ),
+    ],
+)
+async def test_locked_sbom_requires_explicit_valid_selection(
+    lock_client, sbom_lock_document, selection
+):
+    response = await lock_client.post(
+        "/sbom",
+        json={
+            "file": yaml.safe_dump(sbom_lock_document),
+            "filename": "conda.lock",
+            **selection,
+        },
+    )
+
+    assert response.status_code == 400, response.text
+    assert "error" in response.json()
+    assert "sboms" not in response.json()
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("override", [{"specs": ["numpy"]}, {"channels": ["defaults"]}])
+async def test_locked_sbom_rejects_spec_and_channel_overrides(
+    lock_client, sbom_lock_document, override
+):
+    response = await lock_client.post(
+        "/sbom",
+        json={
+            "file": yaml.safe_dump(sbom_lock_document),
+            "filename": "conda.lock",
+            "environments": ["default"],
+            "platforms": ["linux-cuda"],
+            **override,
+        },
+    )
+
+    assert response.status_code == 400, response.text
+    assert "error" in response.json()
+    assert "sboms" not in response.json()
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    "problem", ["bad-hash", "external-reference", "missing-platform-metadata"]
+)
+async def test_locked_sbom_rejects_invalid_later_target_without_partial_collection(
+    lock_client, sbom_lock_document, monkeypatch, problem
+):
+    stored = []
+    remember = ResultCache.remember
+
+    async def record_store(self, *args, **kwargs):
+        stored.append(args)
+        return await remember(self, *args, **kwargs)
+
+    monkeypatch.setattr(ResultCache, "remember", record_store)
+    if problem == "bad-hash":
+        sbom_lock_document["packages"][1]["sha256"] = "invalid"
+    elif problem == "external-reference":
+        sbom_lock_document["environments"]["default"]["packages"]["osx-arm64"].append(
+            {"pypi": "https://example.invalid/example.whl"}
+        )
+    else:
+        targets = sbom_lock_document["environments"]["default"]["packages"]
+        targets["unknown"] = []
+        del targets["osx-arm64"]
+    response = await lock_client.post(
+        "/sbom",
+        json={
+            "file": yaml.safe_dump(sbom_lock_document),
+            "filename": "conda.lock",
+            "environments": ["default"],
+            "platforms": [
+                "linux-cuda",
+                "unknown" if problem == "missing-platform-metadata" else "osx-arm64",
+            ],
+        },
+    )
+
+    assert response.status_code == 400, response.text
+    assert "error" in response.json()
+    assert "sboms" not in response.json()
+    assert stored == []
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("endpoint", ["sbom", "export?format=cyclonedx-json-v1.7"])
+@pytest.mark.parametrize("mismatch", ["requirement", "channel", "platform", "filename"])
+async def test_locked_sbom_rejects_mismatched_companion_manifest(
+    lock_client, sbom_lock_document, sbom_manifest, endpoint, mismatch
+):
+    if mismatch == "requirement":
+        manifest = sbom_manifest.replace('library = ">=1.0"', 'library = ">=2.0"')
+    elif mismatch == "channel":
+        channel = sbom_lock_document["environments"]["default"]["channels"][0]["url"]
+        manifest = sbom_manifest.replace(channel, "https://example.invalid/other")
+    elif mismatch == "platform":
+        manifest = sbom_manifest.replace('platform = "linux-64"', 'platform = "win-64"')
+    else:
+        manifest = sbom_manifest
+    response = await lock_client.post(
+        f"/{endpoint}",
+        json={
+            "file": yaml.safe_dump(sbom_lock_document),
+            "filename": "conda.lock",
+            "environments": ["default"],
+            "platforms": ["linux-cuda"],
+            "manifest": manifest,
+            "manifest_filename": "requirements.txt"
+            if mismatch == "filename"
+            else "conda.toml",
+        },
+    )
+
+    assert response.status_code == 400, response.text
+    assert "error" in response.json()
+    assert "sboms" not in response.json()
+    assert "location" not in response.headers
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("context_fields", ["manifest", "manifest_filename", "both"])
+async def test_transcode_rejects_companion_manifest_context(
+    lock_client, sbom_lock_document, sbom_manifest, context_fields
+):
+    context = {"manifest": sbom_manifest, "manifest_filename": "conda.toml"}
+    if context_fields != "both":
+        context = {context_fields: context[context_fields]}
+    response = await lock_client.post(
+        "/transcode?format=workspace-lock",
+        json={
+            "file": yaml.safe_dump(sbom_lock_document),
+            "filename": "conda.lock",
+            **context,
+        },
+    )
+
+    assert response.status_code == 400, response.text
+    assert "manifest" in response.text.lower()
+
+
 @pytest.mark.anyio
 async def test_parse_discovers_named_lock_targets(lock_client, lock_document):
     response = await lock_client.post(
@@ -181,31 +518,6 @@ async def test_resolve_rejects_workspace_locks_before_solver(
         )
     }
     assert "location" not in response.headers
-
-
-@pytest.mark.anyio
-async def test_sbom_preserves_unsupported_locked_input_error(
-    lock_client, lock_document, monkeypatch
-):
-    monkeypatch.setattr(
-        app_module.OutputFormat, "available", lambda: ["cyclonedx-json-v1.7"]
-    )
-    response = await lock_client.post(
-        "/sbom",
-        json={
-            "file": yaml.safe_dump(lock_document),
-            "filename": "conda.lock",
-            "platforms": ["linux-64"],
-        },
-    )
-
-    assert response.status_code == 400, response.text
-    assert response.json() == {
-        "error": (
-            "SBOM requests solve requirements. "
-            "Resolved lockfile inspection is not supported."
-        )
-    }
 
 
 @pytest.mark.anyio
@@ -467,6 +779,7 @@ async def test_capabilities_report_named_lock_operations(lock_client):
 
     assert response.json()["workspace_lock_parse"] is True
     assert response.json()["workspace_lock_export"] is True
+    assert response.json()["workspace_lock_sbom"] is True
 
 
 @pytest.mark.anyio

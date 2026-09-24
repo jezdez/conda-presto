@@ -38,7 +38,7 @@ conda presto --export --file conda.lock \
 
 The explicit exporter writes the selected package URLs. Its current conda implementation does not append package checksums. Keep workspace lock output when hashes or source metadata must be preserved.
 
-Normalized `conda-toml`, `pixi-toml`, `pyproject-toml` and environment YAML describe the selected packages as requirements. They cannot recover the original manifest's comments, tasks or feature composition. Select one environment and targets with distinct concrete subdirs. Single-document exporters, including environment YAML and explicit lists, require one target.
+Normalized `conda-toml`, `pixi-toml`, `pyproject-toml` and environment YAML describe the selected packages as requirements. A matching companion manifest does not replace the saved package records with its declared requirements. These exports cannot recover the original manifest's comments, tasks or feature composition. Select one environment and targets with distinct concrete subdirs. Single-document exporters, including environment YAML and explicit lists, require one target.
 
 ## Use the HTTP API
 
@@ -62,14 +62,46 @@ Successful eligible outputs include a `Location: /r/...` response header for ret
 
 These operations do not solve, fetch repodata, download archives, install packages or execute tasks. Extra requirements and channel overrides fail because they request a different solution. Missing selections, external package references and malformed records also fail explicitly.
 
+## Generate SBOMs from saved records
+
+Use an installation with conda-sboms available. The CLI renders one selected environment and target through the existing export mode:
+
+```bash
+conda presto --export --file conda.lock \
+  --environment test --platform linux-64 \
+  --format cyclonedx-json-v1.7 > test-linux.cdx.json
+```
+
+The document describes the exact saved records and their dependency graph. Conda-sboms infers graph roots when the original requested requirements are unavailable. To use declared roots instead, add `--manifest conda.toml` with the matching workspace manifest. Presto checks the selected environment and target, concrete platform, ordered channels and direct requirements against the lock. The provider reports `inferred-graph-roots` or `requested-packages` in the environment's properties. Its coverage markers remain intact.
+
+The HTTP API can return one complete document for each explicitly selected environment and target:
+
+```bash
+jq -n --rawfile file conda.lock \
+  '{file: $file, filename: "conda.lock", environments: ["default", "test"], platforms: ["linux-64", "osx-arm64"]}' |
+  curl --fail-with-body --silent --show-error \
+    --header 'Content-Type: application/json' --data-binary @- \
+    "$CONDA_PRESTO_URL/sbom" --output sboms.json
+
+jq -j '.sboms[] | select(.environment == "test" and .platform == "linux-64") | .content' \
+  sboms.json > test-linux.cdx.json
+```
+
+Each item includes `environment`, logical `platform`, concrete `subdir`, the document's `content` and `sha256`, and `location` when its bytes were retained. Save `content` unchanged. The collection keeps distinct logical targets even when they share a concrete conda platform. Empty or missing selectors, unsupported records and failed rendering reject the request without returning a successful partial collection.
+
+For declared roots, add `--rawfile manifest conda.toml` to the `jq` command and add `manifest: $manifest, manifest_filename: "conda.toml"` to its JSON object. The same optional fields work with `/export?format=cyclonedx-json-v1.7` for one selected target. A companion manifest with unmet requirements, different channels or mismatched platforms is rejected. This validates the supplied context rather than checking every aspect of manifest–lock freshness.
+
+SBOM generation from a lock does not solve or download packages. The documents describe conda records, not inspected package payloads or the complete contents of a downstream product. Ordinary requirement requests to `/sbom` retain their existing solve-based behavior. Direct manifest SBOM requests and ordinary conda-lock or rattler-lock uploads remain unsupported.
+
 ## Upstream providers
 
 | Provider | Reused functionality |
 |---|---|
-| conda-workspaces | `load_lockfile_data()`, `CondaLockLoader.available_environments`, `platforms_for()`, `package_platform_for()`, `select()` and `env_for(..., metadata_only=True)` own lock parsing, selection, integrity checks and exact record reconstruction. Its exporter plugins supply normalized TOML. |
+| conda-workspaces | `load_lockfile_data()`, `CondaLockLoader.available_environments`, `platforms_for()`, `package_platform_for()`, `select()` and `env_for(..., metadata_only=True)` own lock parsing, selection, integrity checks and exact record reconstruction. `resolve_environment()` and `requested_packages_for_export(records)` supply matching declared roots. Its exporter plugins supply normalized TOML. |
 | conda | `Environment` and `PackageRecord` represent selected packages. The exporter registry selects output plugins, and the YAML serializer writes selected source data. Built-in exporters supply environment YAML, JSON and explicit package lists. |
 | conda-lockfiles | Existing conda-lock and rattler-lock parsers, models and exporters support the ordinary lock conversion workflow. |
+| conda-sboms | Its registered CycloneDX exporter renders saved records, package hashes, dependency edges, graph or requested roots, and coverage markers. |
 
-The conda-workspaces selection APIs are available in version 0.10.0 and later, required by Presto. No additional runtime provider is needed for workspace lock extraction.
+The conda-workspaces selection APIs are available in version 0.10.0 and later, required by Presto. Lock extraction needs no additional runtime provider. SBOM rendering uses the already-supported conda-sboms provider.
 
 Workspace conversion to `conda-lock-v1` or `rattler-lock-v6` remains unavailable because the current conda-lockfiles exporters discard some saved metadata, including explicit build numbers. Those conversions need upstream preservation or representability checks. The separate [conda-lockfiles no-download transcoding API](https://github.com/conda/conda-lockfiles/pull/161) is also unreleased, so ordinary lock conversion continues to use Presto's existing compatibility adapter. These limitations do not affect source workspace-lock extraction.
