@@ -256,6 +256,48 @@ def test_workspace_effective_channels_preserve_sources_and_declared_order(
     assert target.channels == ["conda-forge"]
 
 
+@pytest.mark.anyio
+@pytest.mark.parametrize("endpoint", ["/resolve", "/parse"])
+@pytest.mark.parametrize(
+    "declaration",
+    [
+        'other = "1[channel=blocked]"',
+        '"other[channel=blocked]" = "1"',
+        'other = "1[channel=https://elsewhere.example.test/blocked]"',
+    ],
+    ids=["version", "name", "url"],
+)
+async def test_workspace_system_requirement_channels_are_checked_before_cache(
+    workspace_client, channel_manifest, monkeypatch, endpoint, declaration
+):
+    async def forbidden(*_args, **_kwargs):
+        pytest.fail("Disallowed system requirement reached the cache")
+
+    monkeypatch.setattr(app_module, "CHANNEL_ALLOWLIST", ["conda-forge"])
+    monkeypatch.setattr(app_module, "run_cached_solve", forbidden)
+    path = channel_manifest("conda-forge")
+    response = await workspace_client.post(
+        endpoint,
+        json={
+            "file": path.read_text() + f"[system-requirements]\n{declaration}\n",
+            "filename": "conda.toml",
+            "environments": ["default"],
+        },
+    )
+    assert response.status_code == 400, response.text
+    assert response.json() == {"error": "Unsupported channel(s)"}
+
+
+def test_workspace_rejects_system_requirement_package_urls(channel_manifest):
+    path = channel_manifest("conda-forge")
+    path.write_text(
+        path.read_text()
+        + '[system-requirements]\nother = "1[url=https://example.test/probe-1-0.conda]"\n'
+    )
+    with pytest.raises(ValueError, match="unsupported conda URL dependency"):
+        WorkspaceInput.from_path(path, environments=["default"])
+
+
 def test_workspace_cache_identity_distinguishes_dependency_channel_hosts(
     channel_manifest,
 ):
@@ -279,6 +321,8 @@ def test_workspace_cache_identity_distinguishes_dependency_channel_hosts(
         'requests = " @ https://example.test/requests.whl"',
         'requests = "===abc[channel=other]"',
         'requests = "===x::probe"',
+        'requests = { extras = ["foo,bar"] }',
+        "requests = \">=2; python_version>='3'\"",
     ],
     ids=[
         "version-channel",
@@ -287,6 +331,8 @@ def test_workspace_cache_identity_distinguishes_dependency_channel_hosts(
         "version-url",
         "arbitrary-equality-channel",
         "arbitrary-equality-channel-prefix",
+        "combined-extras",
+        "marker",
     ],
 )
 def test_workspace_rejects_pypi_fields_that_introduce_matchspec_sources(

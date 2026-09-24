@@ -23,8 +23,7 @@ from conda_workspaces.context import WorkspaceContext
 from conda_workspaces.manifests import PARSER_BY_FILENAME
 from conda_workspaces.models import redact_channel_name
 from conda_workspaces.resolver import resolve_environment
-from packaging.specifiers import SpecifierSet
-from packaging.utils import canonicalize_name
+from packaging.requirements import Requirement
 
 from .config import MAX_CHANNELS, MAX_PLATFORMS, MAX_SPECS
 from .exceptions import (
@@ -283,9 +282,13 @@ class WorkspaceInput:
         """Include channels requested by dependencies without changing declarations."""
         resolved = resolve_environment(self.config, target.environment, target.platform)
         channels = list(resolved.channels)
-        for name, dependency in resolved.conda_dependencies.items():
-            if packages is not None and name not in packages:
-                continue
+        specs = (
+            list(resolved.conda_dependencies.values())
+            if packages is None
+            else [resolved.conda_dependencies[name] for name in sorted(packages)]
+        )
+        specs.extend(resolved.system_requirement_specs())
+        for dependency in specs:
             if channel := dependency.get_exact_value("channel"):
                 # Match rattler's recovery of file channels from original specs.
                 original = dependency.original_spec_str
@@ -405,7 +408,10 @@ class WorkspaceInput:
     def target(self, name: str, platform: str, subdir: str) -> WorkspaceTarget:
         """Compose and validate one selected environment using the provider."""
         resolved = resolve_environment(self.config, name, platform)
-        for dependency in resolved.conda_dependencies.values():
+        for dependency in (
+            *resolved.conda_dependencies.values(),
+            *resolved.system_requirement_specs(),
+        ):
             if dependency.get_raw_value("url"):
                 raise ValueError(
                     f"Environment {name!r} has an unsupported conda URL dependency:"
@@ -419,13 +425,17 @@ class WorkspaceInput:
                     " Local paths, Git and URLs are not supported."
                 )
             try:
-                canonicalize_name(dependency.name, validate=True)
-                for extra in dependency.extras:
-                    canonicalize_name(extra, validate=True)
-                specifiers = SpecifierSet(
-                    "" if dependency.spec == "*" else dependency.spec or ""
-                )
-                for specifier in specifiers:
+                extras = f"[{','.join(dependency.extras)}]" if dependency.extras else ""
+                version_spec = "" if dependency.spec == "*" else dependency.spec or ""
+                requirement = Requirement(f"{dependency.name}{extras}{version_spec}")
+                if (
+                    requirement.name != dependency.name
+                    or requirement.extras != set(dependency.extras)
+                    or requirement.url
+                    or requirement.marker
+                ):
+                    raise ValueError("Expected a PyPI name, extras and version")
+                for specifier in requirement.specifier:
                     if specifier.operator == "===":
                         # Arbitrary PyPI versions must not become MatchSpec selectors.
                         VersionOrder(specifier.version)
