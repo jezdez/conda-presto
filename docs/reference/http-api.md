@@ -4,7 +4,7 @@ Start the service with `conda presto --serve`. `/openapi.json` and `/` return th
 
 | Method | Path | Operation |
 |---|---|---|
-| GET, POST | `/resolve` | Solve requirements for selected platforms |
+| GET, POST | `/resolve` | Solve requirements or selected workspace environments |
 | POST | `/parse` | Read requirements or discover and select workspace environments |
 | POST | `/transcode` | Convert supported lockfiles without solving or downloading packages |
 | POST | `/sbom` | Solve requirements and export separate platform SBOMs |
@@ -29,13 +29,16 @@ Start the service with `conda presto --serve`. `/openapi.json` and `/` return th
 |---|---|---|
 | `specs` | Array of MatchSpec strings | Empty |
 | `channels` | Array of channel names or URLs | Server defaults |
-| `platforms` | Array of platform names | Server host platform |
+| `platforms` | Array of conda subdirectories or workspace target names | Host for ordinary inputs, declared targets for workspaces |
+| `environments` | Array of workspace environment names | All workspace environments |
 | `file` | Environment file content as a string | Absent |
 | `filename` | Parser hint such as `environment.yml` | Inferred |
 
-Provide specs or file content. File requirements are combined with `specs`. Explicit channels override file channels. Body fields override the equivalent query parameters, including explicit empty arrays.
+Provide specs or file content. Ordinary file requirements are combined with `specs`, and explicit channels override their file channels. Workspace requests use the manifest's requirements and channels and reject inline specs and channel overrides. The server checks dependency-specific channels against its channel allowlist as well. Body fields override equivalent query parameters by presence.
 
 Both resolve methods accept repeated `spec`, `channel` and `platform` query parameters. `format` selects an installed exporter and is query-only. Without it, the response is a native JSON array with an `error` field per platform. Exporter output requires every platform to succeed. See {doc}`output-formats`.
+
+`POST /resolve` also accepts repeated `environment` query parameters for workspace input. JSON uses the plural `environments` field. Workspace selectors are rejected for ordinary inputs.
 
 Raw files can be uploaded with `application/yaml`, `application/toml`, `text/plain`, or their `text/*` and `application/x-*` YAML/TOML equivalents. An installed parser must recognize the file. Use `?filename=pixi.lock` when a parser hint is needed. HTTP inputs reject `@EXPLICIT` files, YAML aliases and structures exceeding 10,000 nodes.
 
@@ -50,7 +53,13 @@ curl --fail-with-body --data-binary @environment.yml \
 
 HTTP lockfile parsing reads format and platform metadata. `/resolve` rejects requests that would need it to load package records. Use `/transcode` for supported conversion.
 
-Workspace manifests must use `/parse`. `/resolve` and `/sbom` reject them until workspace solving is supported.
+For workspace manifests, omitted environments select all environments and omitted platforms select each environment's declared targets. Omitting both solves the whole declared selection. This differs from `/parse`, where omitting both selectors performs discovery. An environment without declared platforms requires an explicit platform selection. Empty selectors, unknown names and ambiguous platform selections are rejected.
+
+Use `?format=conda-workspaces-lock-v1` for one combined `conda.lock` containing every selected environment and target. Any failed pair prevents a successful incomplete lock response. Native JSON returns one entry per pair, adding `environment` and `subdir`, with `platform` preserving the logical target name.
+
+The `conda-toml`, `pixi-toml` and `pyproject-toml` formats produce normalized dependency declarations for one selected environment. Selected targets must have distinct concrete subdirectories and the same ordered channels. See {doc}`output-formats` for what these exports preserve.
+
+Workspace solves use the selection limits and dependency restrictions described under Parse. Successful eligible outputs use the existing `/r/` retention mechanism. See {doc}`../how-to/parse-workspace` for a complete workflow.
 
 ## Parse
 
@@ -106,7 +115,7 @@ A new `/resolve` request checks freshness before reusing a solve. Missing or evi
 
 ## Optional SBOM generation
 
-`POST /sbom` accepts the resolve JSON fields, with at least one explicit platform. It solves new requirements and delegates to conda-sboms' `cyclonedx-json-v1.7` exporter. Supplied resolved lockfiles are rejected. It does not inspect installed files or scan for vulnerabilities.
+`POST /sbom` accepts the ordinary resolve JSON fields, with at least one explicit platform. It solves new requirements and delegates to conda-sboms' `cyclonedx-json-v1.7` exporter. Workspace manifests and supplied resolved lockfiles are rejected. It does not inspect installed files or scan for vulnerabilities.
 
 ```json
 {"sboms":[{"platform":"linux-64","content":"...exact CycloneDX JSON text...","sha256":"...","location":"/r/..."}]}
@@ -146,7 +155,7 @@ Success returns `signature_verified`, `artifact_verified` and `signer_verified` 
 
 ## Availability, limits and errors
 
-`GET /capabilities` returns booleans named `sbom`, `sign`, `verify`, `workspace_parse` and `workspace_solve`. `workspace_parse` reports workspace discovery and selection support. `workspace_solve` remains false. `sign` reports installed support and enabled configuration, not a guarantee that credentials or remote signing services are currently available. Provider versions, including conda-workspaces, appear in `/version` when installed.
+`GET /capabilities` returns booleans named `sbom`, `sign`, `verify`, `workspace_parse` and `workspace_solve`. `workspace_parse` and `workspace_solve` are true and report workspace discovery, selection and solving support. `sign` reports installed support and enabled configuration, not a guarantee that credentials or remote signing services are currently available. Provider versions, including conda-workspaces, appear in `/version` when installed.
 
 `GET /health` returns HTTP 200 with `{"status":"ok"}` when the configured persistent worker is ready. A stopped worker produces HTTP 503 with `{"status":"unavailable"}` while recovery begins. Without persistent-worker mode, the probe reports HTTP 200.
 

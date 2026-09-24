@@ -75,7 +75,11 @@ from .config import (
     SIGSTORE_TRUST_CONFIG,
     SOLVE_TIMEOUT_S,
 )
-from .exceptions import CredentialRedactionFilter, UnknownFormatError
+from .exceptions import (
+    CredentialRedactionFilter,
+    UnknownFormatError,
+    WorkspaceSolveError,
+)
 from .exporter import ExporterCacheIdentity, OutputFormat
 from .inputs import ParsedInputFile, ParseResult, WorkspaceParseResult
 from .resolve import (
@@ -88,6 +92,7 @@ from .resolve import (
 )
 from .storage import StoreOperationCoordinator
 from .worker import PersistentSolveWorker
+from .workspace import WorkspaceInput
 
 log = logging.getLogger(__name__)
 
@@ -132,6 +137,7 @@ class ResolveRequest:
     filename: str | None = None
     channels: list[str] | None = None
     platforms: list[str] | None = None
+    environments: list[str] | None = None
 
     @classmethod
     async def from_http(
@@ -141,6 +147,7 @@ class ResolveRequest:
         channel: list[str] | None = None,
         platform: list[str] | None = None,
         filename: str | None = None,
+        environment: list[str] | None = None,
     ) -> ResolveRequest | Response:
         """Decode the JSON or raw-file request shape shared by resolve surfaces."""
         content_type, _ = request.content_type
@@ -162,8 +169,9 @@ class ResolveRequest:
                 channels=(
                     data.channels if data.channels is not None else (channel or [])
                 ),
-                platforms=(
-                    data.platforms if data.platforms is not None else (platform or [])
+                platforms=(data.platforms if data.platforms is not None else platform),
+                environments=(
+                    data.environments if data.environments is not None else environment
                 ),
                 file=data.file,
                 filename=data.filename or filename,
@@ -181,7 +189,8 @@ class ResolveRequest:
             return cls(
                 specs=spec or [],
                 channels=channel or [],
-                platforms=platform or [],
+                platforms=platform,
+                environments=environment,
                 file=content,
                 filename=filename
                 or f"environment{RAW_CONTENT_TYPE_EXTENSIONS[content_type]}",
@@ -202,7 +211,7 @@ class ResolveRequest:
 
     async def inputs(
         self, request: Request, *, allow_lockfile: bool = True
-    ) -> ResolveRequest | Response:
+    ) -> ResolveRequest | WorkspaceInput | Response:
         """Parse the uploaded file and apply shared solve defaults and limits."""
         file_content = self.file
         file_name = self.filename
@@ -213,17 +222,41 @@ class ResolveRequest:
 
         if file_content is not None:
             parsed = await parse_input_for_request(
-                request, file_content, file_name, platforms or None
+                request,
+                file_content,
+                file_name,
+                self.platforms,
+                target_environments=self.environments,
             )
             if isinstance(parsed, Response):
                 return parsed
             parsed_file = parsed
             if parsed_file.workspace is not None:
+                if allow_lockfile and not specs and not channels:
+                    try:
+                        workspace = parsed_file.workspace.select(
+                            self.environments, self.platforms
+                        )
+                    except ValueError as exc:
+                        return Response(
+                            ErrorResponse(error=str(exc)),
+                            status_code=HTTP_400_BAD_REQUEST,
+                        )
+                    for target in workspace.result.selected:
+                        if cap_error := validate_caps(
+                            target.specs,
+                            workspace.solve_channels(target),
+                            [target.subdir],
+                        ):
+                            return cap_error
+                    return workspace
                 return Response(
                     ErrorResponse(
                         error=(
-                            "Workspace solving is not supported yet. "
-                            "Use /parse to inspect workspace inputs."
+                            "Workspace solves do not accept extra specs "
+                            "or channel overrides."
+                            if allow_lockfile
+                            else "Workspace SBOM requests are not supported yet."
                         )
                     ),
                     status_code=HTTP_400_BAD_REQUEST,
@@ -242,6 +275,14 @@ class ResolveRequest:
             specs = list(specs) + parsed_file.specs
             if not channels:
                 channels = parsed_file.channels
+
+        if self.environments is not None:
+            return Response(
+                ErrorResponse(
+                    error="Environment selection requires a workspace manifest"
+                ),
+                status_code=HTTP_400_BAD_REQUEST,
+            )
 
         if not specs:
             if parsed_file and parsed_file.is_lockfile:
@@ -467,6 +508,7 @@ async def run_solve(
     platforms: list[str] | None,
     format_name: str | None = None,
     timeout_s: float | None = None,
+    workspace: WorkspaceInput | None = None,
 ) -> Response | tuple[bytes, str]:
     """Shared solve runner: threadpool + timeout + error sanitization.
 
@@ -478,6 +520,7 @@ async def run_solve(
 
     timeout_s = SOLVE_TIMEOUT_S if timeout_s is None else timeout_s
     deadline = time.monotonic() + timeout_s
+    workspace_args = {"workspace": workspace} if workspace is not None else {}
     try:
         capacity = request.app.state.solver_limiter
         limiter = capacity
@@ -485,7 +528,7 @@ async def run_solve(
         if worker is not None:
             with anyio.fail_after(timeout_s):
                 result = await anyio.to_thread.run_sync(
-                    worker.solve,
+                    partial(worker.solve, **workspace_args),
                     channels,
                     specs,
                     platforms,
@@ -497,7 +540,7 @@ async def run_solve(
         elif limiter is None:
             with anyio.fail_after(timeout_s):
                 result = await anyio.to_thread.run_sync(
-                    run_solve_work,
+                    partial(run_solve_work, **workspace_args),
                     channels,
                     specs,
                     platforms,
@@ -507,7 +550,7 @@ async def run_solve(
         else:
             with anyio.fail_after(timeout_s):
                 result = await anyio.to_thread.run_sync(
-                    run_solve_in_process,
+                    partial(run_solve_in_process, **workspace_args),
                     channels,
                     specs,
                     platforms,
@@ -533,6 +576,15 @@ async def run_solve(
             {"error": str(exc), "available_formats": exc.available},
             status_code=HTTP_400_BAD_REQUEST,
         )
+    except WorkspaceSolveError as exc:
+        return Response(
+            {
+                "error": exc.error,
+                "environment": exc.environment,
+                "platform": exc.platform,
+            },
+            status_code=HTTP_500_INTERNAL_SERVER_ERROR,
+        )
     except Exception:
         log.exception("Solve failed")
         return Response(
@@ -553,8 +605,11 @@ def run_solve_work(
     specs: list[str],
     platforms: list[str] | None,
     format_name: str | None,
+    workspace: WorkspaceInput | None = None,
 ) -> list | tuple[str, str]:
     """Run the blocking solve/export path in a worker."""
+    if workspace is not None:
+        return workspace.solve(format_name)
     if format_name is None:
         return solve(
             channels,
@@ -571,6 +626,7 @@ def run_solve_in_process(
     platforms: list[str] | None,
     format_name: str | None,
     deadline: float,
+    workspace: WorkspaceInput | None = None,
 ) -> list | tuple[str, str]:
     """Run solve work in a child process until the request deadline."""
     if deadline <= time.monotonic():
@@ -585,7 +641,8 @@ def run_solve_in_process(
             specs,
             platforms,
             format_name,
-        ),
+        )
+        + ((workspace,) if workspace is not None else ()),
     )
     process.start()
     sender.close()
@@ -611,6 +668,8 @@ def run_solve_in_process(
         return payload
     if status == "unknown-format":
         raise UnknownFormatError(payload["format_name"], payload["available"])
+    if status == "workspace-error":
+        raise WorkspaceSolveError(*payload)
     raise RuntimeError("Solve worker failed")
 
 
@@ -620,6 +679,7 @@ def solve_process_entrypoint(
     specs: list[str],
     platforms: list[str] | None,
     format_name: str | None,
+    workspace: WorkspaceInput | None = None,
 ) -> None:
     """Send a solve result from an isolated process."""
     CredentialRedactionFilter.install()
@@ -632,6 +692,7 @@ def solve_process_entrypoint(
                     specs,
                     platforms,
                     format_name,
+                    **({"workspace": workspace} if workspace is not None else {}),
                 ),
             )
         )
@@ -642,6 +703,8 @@ def solve_process_entrypoint(
                 {"format_name": exc.format_name, "available": exc.available},
             )
         )
+    except WorkspaceSolveError as exc:
+        sender.send(("workspace-error", (exc.environment, exc.platform, exc.error)))
     except Exception:
         log.exception("Isolated solve failed")
         sender.send(("error", None))
@@ -655,6 +718,7 @@ async def run_cached_solve(
     channels: list[str],
     platforms: list[str] | None,
     format_name: str | None = None,
+    workspace: WorkspaceInput | None = None,
 ) -> Response:
     """Run a solve through the retained result cache."""
     cache: ResultCache = request.app.state.result_cache
@@ -676,10 +740,27 @@ async def run_cached_solve(
     resolved_platforms = list(platforms or [NATIVE_SUBDIR])
     capacity = request.app.state.solver_limiter
     deadline = time.monotonic() + SOLVE_TIMEOUT_S
+    repodata_options = workspace.repodata_options() if workspace is not None else {}
     try:
         with anyio.fail_after(SOLVE_TIMEOUT_S):
+            if isinstance(workspace, WorkspaceInput):
+                repodata_options = {
+                    **repodata_options,
+                    "channel_platforms": [
+                        (channel, target.subdir)
+                        for target in workspace.result.selected
+                        for channel in workspace.solve_channels(target)
+                    ],
+                }
+            workspace_args = {}
+            if workspace is not None:
+                workspace_args["workspace_identity"] = await anyio.to_thread.run_sync(
+                    workspace.cache_identity,
+                    limiter=capacity,
+                    abandon_on_cancel=False,
+                )
             initial_repodata, solve_context = await anyio.to_thread.run_sync(
-                cache.capture_state,
+                partial(cache.capture_state, **repodata_options),
                 channels,
                 resolved_platforms,
                 limiter=capacity,
@@ -695,13 +776,14 @@ async def run_cached_solve(
                 initial_repodata,
                 solve_context=solve_context,
                 exporter_identity=exporter_identity,
+                **workspace_args,
             )
             key = cache.request_key(digest)
             if retain_result and not initial_repodata.stale:
                 cached_response = await cache.get_response(key)
                 if cached_response is not None:
                     current_repodata = await anyio.to_thread.run_sync(
-                        RepodataSnapshot.capture,
+                        partial(RepodataSnapshot.capture, **repodata_options),
                         channels,
                         resolved_platforms,
                         limiter=capacity,
@@ -726,13 +808,14 @@ async def run_cached_solve(
                 platforms,
                 format_name=format_name,
                 timeout_s=remaining_s,
+                **({"workspace": workspace} if workspace is not None else {}),
             )
             if isinstance(payload, Response):
                 return payload
 
             # Recompute so refreshed repodata and the worker's index agree.
             repodata = await anyio.to_thread.run_sync(
-                RepodataSnapshot.capture,
+                partial(RepodataSnapshot.capture, **repodata_options),
                 channels,
                 resolved_platforms,
                 limiter=capacity,
@@ -748,6 +831,7 @@ async def run_cached_solve(
                 repodata,
                 solve_context=solve_context,
                 exporter_identity=exporter_identity,
+                **workspace_args,
             )
             key = cache.request_key(digest)
             body, media_type = payload
@@ -870,6 +954,7 @@ async def resolve_post(
     platform: FromQuery[list[str] | None] = None,
     format: FromQuery[str | None] = None,
     filename: FromQuery[str | None] = None,
+    environment: FromQuery[list[str] | None] = None,
 ) -> Response:
     """Resolve package specs and/or an input file via POST body.
 
@@ -891,13 +976,36 @@ async def resolve_post(
     through conda's exporter plugin registry.  ``format`` is
     query-only; it is not read from the JSON body.
     """
-    data = await ResolveRequest.from_http(request, spec, channel, platform, filename)
+    data = await ResolveRequest.from_http(
+        request, spec, channel, platform, filename, environment
+    )
     if isinstance(data, Response):
         return data
 
     inputs = await data.inputs(request)
     if isinstance(inputs, Response):
         return inputs
+    if isinstance(inputs, WorkspaceInput):
+        try:
+            inputs.validate_output(format)
+        except ValueError as exc:
+            return Response(
+                ErrorResponse(error=str(exc)), status_code=HTTP_400_BAD_REQUEST
+            )
+        return await run_cached_solve(
+            request,
+            [spec for target in inputs.result.selected for spec in target.specs],
+            list(
+                dict.fromkeys(
+                    channel
+                    for target in inputs.result.selected
+                    for channel in inputs.solve_channels(target)
+                )
+            ),
+            list(dict.fromkeys(target.subdir for target in inputs.result.selected)),
+            format_name=format,
+            workspace=inputs,
+        )
     return await run_cached_solve(
         request,
         inputs.specs,
@@ -1211,7 +1319,7 @@ async def capabilities() -> dict[str, bool]:
     available = AttestationService.available()
     return {
         "workspace_parse": True,
-        "workspace_solve": False,
+        "workspace_solve": True,
         "sbom": "cyclonedx-json-v1.7" in OutputFormat.available(),
         "verify": available,
         "sign": available
@@ -1292,7 +1400,9 @@ async def parse(request: Request, data: ParseRequest) -> Response:
     if parsed_file.workspace is not None:
         for target in parsed_file.workspace.result.selected:
             if cap_error := validate_caps(
-                target.specs, target.channels, [target.subdir]
+                target.specs,
+                parsed_file.workspace.solve_channels(target),
+                [target.subdir],
             ):
                 return cap_error
         return Response(parsed_file.parse_result)

@@ -34,7 +34,29 @@ jobs:
           path: pixi.lock
 ```
 
-For inline input, replace `file` with `specs: python=3.13,numpy`. Values in `specs`, `channels` and `platforms` are comma-separated without surrounding spaces.
+For inline input, replace `file` with `specs: python=3.13,numpy`. Values in `specs`, `channels`, `environments` and `platforms` are comma-separated without surrounding spaces. Omitted channels use the input file or service defaults.
+
+For the workspace manifest in {doc}`parse-workspace`, select named environments and request a combined lock:
+
+```yaml
+- uses: jezdez/conda-presto@main
+  id: workspace
+  with:
+    endpoint: ${{ vars.CONDA_PRESTO_URL }}
+    file: conda.toml
+    environments: default,test
+    platforms: linux-64,osx-arm64
+    format: conda-workspaces-lock-v1
+    output: conda.lock
+
+- uses: actions/upload-artifact@v4
+  if: steps.workspace.outputs.solved == 'true'
+  with:
+    name: conda-lock
+    path: conda.lock
+```
+
+The lock contains all four selected solutions. Omit `environments` and `platforms` to solve every declared environment and target. Workspace requests use manifest channels and do not accept additional `specs` or `channels`.
 
 GitHub-hosted Ubuntu runners provide the required `curl` and `jq` tools. Plain HTTP is accepted only for loopback servers. The Action validates HTTP success and native platform errors, and leaves response bodies out of logs. Use the `output` file for large results and the bounded `result` output for small responses.
 

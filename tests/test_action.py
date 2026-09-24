@@ -20,6 +20,8 @@ def test_action_yaml_loads():
     assert data["name"] == "conda-presto"
     assert data["runs"]["using"] == "composite"
     assert "command" not in data["inputs"]
+    assert data["inputs"]["environments"]["required"] is False
+    assert "default" not in data["inputs"]["channels"]
 
 
 def test_action_requires_an_endpoint_without_bootstrapping_a_local_solver():
@@ -76,7 +78,8 @@ def test_action_streams_request_body_and_restricts_plain_http():
     assert "--data-binary @-" in text
     assert '--data "${body}"' not in text
     assert '--rawfile file "${INPUT_FILE}"' in text
-    assert text.count('$value | split(",")') == 3
+    assert text.count('$value | split(",")') == 4
+    assert '. + {environments: ($value | split(","))}' in text
     assert "^http://(127[.]0[.]0[.]1|localhost)" in text
     assert "^http://\\[::1\\]" in text
     assert "must use HTTPS unless it is a loopback URL" in text

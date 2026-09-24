@@ -126,6 +126,7 @@ class ResultCache:
         *,
         solve_context: ResolveCacheContext | None = None,
         exporter_identity: ExporterCacheIdentity | None = None,
+        workspace_identity: dict | None = None,
     ) -> str:
         """Return the SHA-256 key for a canonical resolve request."""
         resolved_platforms = list(platforms or [NATIVE_SUBDIR])
@@ -160,6 +161,8 @@ class ResultCache:
             "repodata": repodata.records,
             "solve_context": asdict(solve_context),
         }
+        if workspace_identity is not None:
+            envelope["workspace"] = workspace_identity
         body = json.dumps(
             envelope,
             sort_keys=True,
@@ -171,10 +174,11 @@ class ResultCache:
     def capture_state(
         channels: list[str],
         platforms: list[str],
+        **repodata_options: bool | list[tuple[str, str]],
     ) -> tuple[RepodataSnapshot, ResolveCacheContext]:
         """Capture the blocking state used by public cache lookup."""
         return (
-            RepodataSnapshot.capture(channels, platforms),
+            RepodataSnapshot.capture(channels, platforms, **repodata_options),
             ResolveCacheContext.capture(platforms),
         )
 

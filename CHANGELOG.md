@@ -10,11 +10,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - Add workspace discovery and target selection through `POST /parse` and CLI `--parse`, using conda-workspaces without solving.
+- Solve named workspace environments and targets through HTTP, CLI and the GitHub Action, with combined locks and normalized manifest exports.
 - Add optional SBOM generation through conda-sboms and signing and verification through conda-sigstore.
 - Report installed optional adapters and enabled signing configuration through `/capabilities`.
 
 ### Changed
 
+- Leave omitted GitHub Action channels to the input manifest or service defaults instead of forcing conda-forge.
 - Focus the roadmap on HTTP integration and operation across replicas, with restored topic docs distinguishing upstream opportunities and historical proposals.
 - Preserve requested package roots alongside resolved records for exporter plugins.
 - Focus the supported workflows on HTTP solving, parsing, export, transcoding and retained-result retrieval.
@@ -29,6 +31,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Remove the Action's local mode and the separate CLI container.
 
 ### Fixed
+
+- Enforce HTTP channel permissions for workspace dependency channels and reject malformed PyPI requirements.
 
 - Scan URL-shaped text in linear time during credential checks and error redaction.
 - Parse HTTP `.txt` uploads as requirements files without trying YAML loaders.
