@@ -1,14 +1,6 @@
-(demo-operations)=
 # Monitor the service
 
-```{raw} html
-<picture>
-  <source srcset="../../operations.png" media="(prefers-reduced-motion: reduce)">
-  <img class="presto-demo" src="../../operations.gif" width="1200" loading="lazy" alt="Inspect readiness and capabilities and compare local request timings">
-</picture>
-```
-
-{download}`Example transcript <../../demos/operations.txt>` · {download}`Static preview <../../demos/operations.png>` · {download}`Runnable example <../../demos/operations.sh>` · {download}`VHS tape <../../demos/operations.tape>`
+{download}`Runnable example <../../demos/operations.sh>`
 
 Check readiness before sending solves:
 

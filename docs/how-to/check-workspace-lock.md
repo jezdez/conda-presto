@@ -30,7 +30,7 @@ Save the report while preserving the command's result:
 
 ```bash
 status=0
-conda-presto --validate --file conda.lock --manifest conda.toml \
+conda presto --validate --file conda.lock --manifest conda.toml \
   > lock-check.json || status=$?
 cat lock-check.json
 exit "$status"

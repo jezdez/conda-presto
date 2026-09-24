@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import argparse
-import os
 import subprocess
 import sys
 from pathlib import Path
@@ -14,11 +13,8 @@ NAMES = (
     "workspace",
     "locks",
     "http",
-    "cache",
-    "trust",
-    "action",
-    "docker",
-    "operations",
+    "http-workspace",
+    "http-update",
 )
 
 
@@ -32,14 +28,6 @@ def main() -> None:
             parser.error(f"Unknown demo: {name}")
     output = ROOT / "demos"
     output.mkdir(parents=True, exist_ok=True)
-    env = {**os.environ, "DEMO_DOCKER_BUILT": "1"}
-    if "docker" in names:
-        print("Building the Docker demo image", flush=True)
-        subprocess.run(
-            ["docker", "build", "--tag", "conda-presto:docs-demo", "."],
-            cwd=ROOT,
-            check=True,
-        )
     for name in names:
         print(f"Recording {name}", flush=True)
         status = output / f"{name}.status"
@@ -51,22 +39,21 @@ def main() -> None:
             example = subprocess.run(
                 ["bash", f"demos/{name}.sh"],
                 cwd=ROOT,
-                env=env,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 text=True,
                 timeout=600,
             )
+            transcript = example.stdout.replace(
+                sys.prefix, "<demo environment>"
+            ).replace(str(ROOT), "<checkout>")
             (output / f"{name}.txt").write_text(
-                example.stdout.replace(sys.prefix, "<demo environment>").replace(
-                    str(ROOT), "<checkout>"
-                )
+                "\n".join(line.rstrip() for line in transcript.splitlines()) + "\n"
             )
             example.check_returncode()
             subprocess.run(
                 ["vhs", f"demos/{name}.tape"],
                 cwd=ROOT,
-                env=env,
                 check=True,
                 timeout=600,
             )

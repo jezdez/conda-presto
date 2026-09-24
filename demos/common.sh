@@ -71,7 +71,7 @@ start_server() {
     CONDA_PRESTO_PERSISTENT_WORKER=true \
     CONDA_PRESTO_SOLVE_TIMEOUT_S=120 \
     CONDA_NO_LOCK=false \
-        command conda-presto --serve --host 127.0.0.1 --port "$DEMO_PORT" > server.log 2>&1 &
+        command conda presto --serve --host 127.0.0.1 --port "$DEMO_PORT" > server.log 2>&1 &
     DEMO_SERVER_PID=$!
     local attempt
     for attempt in {1..180}; do

@@ -1,14 +1,6 @@
-(demo-action)=
 # Use conda-presto in GitHub Actions
 
-```{raw} html
-<picture>
-  <source srcset="../../action.png" media="(prefers-reduced-motion: reduce)">
-  <img class="presto-demo" src="../../action.gif" width="1200" loading="lazy" alt="Run the GitHub Action client locally and save a workspace lock">
-</picture>
-```
-
-{download}`Example transcript <../../demos/action.txt>` · {download}`Static preview <../../demos/action.png>` · {download}`Runnable example <../../demos/action.sh>` · {download}`VHS tape <../../demos/action.tape>`
+{download}`Runnable example <../../demos/action.sh>`
 
 Configure the repository variable `CONDA_PRESTO_URL` with your service's HTTPS base URL. The Action sends environment files and channel settings to that service.
 

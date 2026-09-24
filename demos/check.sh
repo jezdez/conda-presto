@@ -3,11 +3,11 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 if test "$#" = 0; then
-    set -- cli workspace locks http cache trust action operations
+    set -- cli workspace locks http http-workspace http-update cache trust action operations
 fi
 for demo in "$@"; do
     case "$demo" in
-        cli|workspace|locks|http|cache|trust|action|docker|operations) ;;
+        cli|workspace|locks|http|http-workspace|http-update|cache|trust|action|docker|operations) ;;
         *) printf 'Unknown demo: %s\n' "$demo" >&2; exit 2 ;;
     esac
     bash "demos/$demo.sh"

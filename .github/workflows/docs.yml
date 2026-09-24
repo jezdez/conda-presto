@@ -54,7 +54,7 @@ jobs:
           environments: docs examples
           cache: true
       - name: Check documentation examples
-        run: pixi run --locked -e examples bash demos/check.sh cli workspace locks http cache trust action docker operations
+        run: pixi run --locked -e examples bash demos/check.sh cli workspace locks http http-workspace http-update cache trust action docker operations
       - name: Build docs
         run: pixi run --locked -e docs docs
       - name: Upload artifact

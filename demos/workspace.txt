@@ -21,7 +21,7 @@ zstd = ">=1.5,<2"
 default = []
 tools = ["tools"]
 
-$ conda-presto --parse -f conda.toml > discovery.json
+$ conda presto --parse -f conda.toml > discovery.json
 
 $ jq '{environments, selected}' discovery.json
 {
@@ -52,7 +52,7 @@ $ jq '{environments, selected}' discovery.json
 
 Select tools/gpu with declared glibc and CUDA versions
 
-$ conda-presto --parse -f conda.toml -e tools -p gpu > selected.json
+$ conda presto --parse -f conda.toml -e tools -p gpu > selected.json
 
 $ jq '.selected[] | {environment, platform, subdir, specs, system_requirements}' selected.json
 {
@@ -71,9 +71,9 @@ $ jq '.selected[] | {environment, platform, subdir, specs, system_requirements}'
 
 Solve and validate all four environment/target combinations
 
-$ conda-presto -f conda.toml --format conda-workspaces-lock-v1 > conda.lock
+$ conda presto -f conda.toml --format conda-workspaces-lock-v1 > conda.lock
 
-$ conda-presto --validate -f conda.lock --manifest conda.toml > consistency.json
+$ conda presto --validate -f conda.lock --manifest conda.toml > consistency.json
 
 $ jq '{consistent, targets: [.targets[] | {environment, platform, consistent}]}' consistency.json
 {
@@ -104,7 +104,7 @@ $ jq '{consistent, targets: [.targets[] | {environment, platform, consistent}]}'
 
 Reject a manifest that no longer matches the saved lock
 
-$ conda-presto --validate -f conda.lock --manifest changed/conda.toml > mismatch.json
+$ conda presto --validate -f conda.lock --manifest changed/conda.toml > mismatch.json
 
 $ jq '{consistent, reason: .targets[0].reason}' mismatch.json
 {
@@ -114,14 +114,14 @@ $ jq '{consistent, reason: .targets[0].reason}' mismatch.json
 
 Update tools/cpu while keeping the other three selections
 
-$ conda-presto --update -f conda.lock --manifest conda.toml -e tools -p cpu zstd > updated.lock
-<demo environment>/lib/python3.13/multiprocessing/resource_tracker.py:479: UserWarning: resource_tracker: There appear to be 5 leaked semaphore objects to clean up at shutdown: {'/mp-jql7tr7w', '/mp-5lcwbdxm', '/mp-7q5auy6d', '/mp-xqt1nc_x', '/mp-_59l3sba'}
+$ conda presto --update -f conda.lock --manifest conda.toml -e tools -p cpu zstd > updated.lock
+<demo environment>/lib/python3.13/multiprocessing/resource_tracker.py:479: UserWarning: resource_tracker: There appear to be 5 leaked semaphore objects to clean up at shutdown: {'/mp-z4y4ocx8', '/mp-8yvfulpm', '/mp-qyrqq6ig', '/mp-k39tqewu', '/mp-ciehdws3'}
   warnings.warn(
 
 $ python check_update.py conda.lock updated.lock
 Unchanged package references: default/cpu, default/gpu, tools/gpu
 
-$ conda-presto --validate -f updated/conda.lock --manifest conda.toml > updated-check.json
+$ conda presto --validate -f updated/conda.lock --manifest conda.toml > updated-check.json
 
 $ jq '{consistent, targets: (.targets | length)}' updated-check.json
 {

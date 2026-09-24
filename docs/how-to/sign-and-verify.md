@@ -1,18 +1,10 @@
-(demo-trust)=
 # Sign and verify a retained output
 
-```{raw} html
-<picture>
-  <source srcset="../../trust.png" media="(prefers-reduced-motion: reduce)">
-  <img class="presto-demo" src="../../trust.gif" width="1200" loading="lazy" alt="Verify a public signed fixture offline and reject changed bytes or the wrong signer">
-</picture>
-```
-
-{download}`Example transcript <../../demos/trust.txt>` · {download}`Static preview <../../demos/trust.png>` · {download}`Runnable example <../../demos/trust.sh>` · {download}`VHS tape <../../demos/trust.tape>`
+{download}`Runnable example <../../demos/trust.sh>`
 
 Sign an artifact already retained by this deployment, then verify its exact bytes against an identity approved by the recipient. The signature describes a later output-signing step. It does not record the original solve inputs.
 
-The recording verifies a public signed fixture offline without signing credentials. The live signing recipe below makes OIDC, certificate-authority and transparency-log requests.
+The runnable example verifies a public signed fixture offline without signing credentials. The live signing recipe below makes OIDC, certificate-authority and transparency-log requests.
 
 ## Supply an unattended identity
 
@@ -60,7 +52,7 @@ export CONDA_PRESTO_CHANNELS=conda-forge
 export CONDA_PRESTO_ALLOWED_CHANNELS=conda-forge
 export CONDA_PRESTO_PLATFORMS=linux-64
 export CONDA_PRESTO_SOLVE_TIMEOUT_S=180
-conda-presto --serve --host 127.0.0.1 --port 8000 >presto.log 2>&1 &
+conda presto --serve --host 127.0.0.1 --port 8000 >presto.log 2>&1 &
 presto_pid=$!
 trap 'kill "$presto_pid"' EXIT
 base=http://127.0.0.1:8000

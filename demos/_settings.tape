@@ -1,6 +1,6 @@
 Require bash
 Require bat
-Require conda-presto
+Require conda
 Require curl
 Require jq
 Set Shell "bash"

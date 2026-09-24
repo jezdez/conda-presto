@@ -7,9 +7,9 @@ DEMO_NAME=$1
 export PS1="$DEMO_PS1"
 unset NO_COLOR
 # Bash writes prompts to stderr, so normalize only the CLI's diagnostics.
-conda-presto() {
+conda() {
     local status=0
-    command conda-presto "$@" 2> "$DEMO_WORKDIR/command.stderr" || status=$?
+    command conda "$@" 2> "$DEMO_WORKDIR/command.stderr" || status=$?
     python "$DEMO_REPO/demos/normalize.py" < "$DEMO_WORKDIR/command.stderr" >&2
     return "$status"
 }
@@ -17,34 +17,28 @@ conda-presto() {
 case "$DEMO_NAME" in
     cli)
         cp "$DEMO_REPO/demos/workspace/environment.yml" environment.yml
+        cp "$DEMO_REPO/demos/workspace/extra-deps.yml" extra-deps.yml
         ;;
     workspace|locks)
         cp "$DEMO_REPO/demos/workspace/conda.toml" conda.toml
         cp "$DEMO_REPO/demos/workspace/check_update.py" check_update.py
         cp "$DEMO_REPO/demos/workspace/check_locks.py" check_locks.py
         if test "$DEMO_NAME" = locks; then
-            conda-presto -f conda.toml --format conda-workspaces-lock-v1 > conda.lock
-            conda-presto -c conda-forge -p linux-64 zlib --format conda-lock-v1 > conda-lock.yml
+            conda presto -f conda.toml --format conda-workspaces-lock-v1 > conda.lock
+            conda presto -c conda-forge -p linux-64 zlib --format conda-lock-v1 > conda-lock.yml
         fi
         ;;
-    http|operations)
+    http)
+        cp "$DEMO_REPO/demos/workspace/environment.yml" environment.yml
         start_server
         ;;
-    cache|docker)
-        ;;
-    action)
-        cp "$DEMO_REPO/demos/action/conda.toml" conda.toml
-        cp "$DEMO_REPO/demos/action/client.py" action-client.py
-        cp "$DEMO_REPO/demos/action/workflow.yml" workflow.yml
-        cp "$DEMO_REPO/action.yml" action.yml
+    http-workspace|http-update)
+        cp "$DEMO_REPO/demos/workspace/conda.toml" conda.toml
+        if test "$DEMO_NAME" = http-update; then
+            cp "$DEMO_REPO/demos/workspace/check_update.py" check_update.py
+            conda presto -f conda.toml --format conda-workspaces-lock-v1 > conda.lock
+        fi
         start_server
-        ;;
-    trust)
-        cp "$DEMO_REPO/tests/fixtures/sigstore/artifact.txt" artifact.txt
-        cp "$DEMO_REPO/demos/trust/verify.py" verify.py
-        cp "$DEMO_REPO/demos/trust/policy.json" policy.json
-        cp "$DEMO_REPO/tests/fixtures/sigstore/bundle.sigstore.json" bundle.sigstore.json
-        cp "$DEMO_REPO/tests/fixtures/sigstore/trust.json" trust.json
         ;;
     *) return 2 ;;
 esac

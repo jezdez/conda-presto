@@ -1,7 +1,7 @@
 
 Inspect and extract saved tools/cpu records
 
-$ conda-presto --parse -f conda.lock > saved.json
+$ conda presto --parse -f conda.lock > saved.json
 
 $ jq '{environments, selected}' saved.json
 {
@@ -24,9 +24,9 @@ $ jq '{environments, selected}' saved.json
   "selected": []
 }
 
-$ conda-presto --export -f conda.lock -e tools -p cpu --format conda-workspaces-lock-v1 > extracted/conda.lock
+$ conda presto --export -f conda.lock -e tools -p cpu --format conda-workspaces-lock-v1 > extracted/conda.lock
 
-$ conda-presto --parse -f extracted/conda.lock > extracted.json
+$ conda presto --parse -f extracted/conda.lock > extracted.json
 
 $ jq .environments extracted.json
 [
@@ -40,7 +40,7 @@ $ jq .environments extracted.json
 
 Render exact URLs and a normalized declaration
 
-$ conda-presto --export -f conda.lock -e tools -p cpu --format explicit > explicit.txt
+$ conda presto --export -f conda.lock -e tools -p cpu --format explicit > explicit.txt
 
 $ cat explicit.txt
 # This file may be used to create an environment using:
@@ -51,7 +51,7 @@ $ cat explicit.txt
 https://conda.anaconda.org/conda-forge/linux-64/libzlib-1.3.2-h25fd6f3_3.conda
 https://conda.anaconda.org/conda-forge/linux-64/zlib-1.3.2-h25fd6f3_3.conda
 https://conda.anaconda.org/conda-forge/linux-64/zstd-1.5.7-hb78ec9c_7.conda
-$ conda-presto --export -f conda.lock -e tools -p cpu --format conda-toml > normalized.toml
+$ conda presto --export -f conda.lock -e tools -p cpu --format conda-toml > normalized.toml
 
 $ head -n 6 normalized.toml
 [workspace]
@@ -63,9 +63,9 @@ platforms = ["linux-64"]
 
 Convert a generic lock and generate an SBOM from saved records
 
-$ conda-presto --export -f conda-lock.yml -p linux-64 --format pixi-lock-v6 > pixi.lock
+$ conda presto --export -f conda-lock.yml -p linux-64 --format pixi-lock-v6 > pixi.lock
 
-$ conda-presto --export -f conda.lock -e tools -p cpu --manifest conda.toml --format cyclonedx-json-v1.7 > sbom.json
+$ conda presto --export -f conda.lock -e tools -p cpu --manifest conda.toml --format cyclonedx-json-v1.7 > sbom.json
 
 $ jq '{bomFormat, specVersion, packages: [.components[] | {name, version}], roots: [.metadata.component.properties[] | select(.name == "conda:environment:root-dependency-source")]}' sbom.json
 {

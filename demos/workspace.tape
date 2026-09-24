@@ -27,7 +27,7 @@ Show
 Type@60ms `# Discover without selecting the host platform`
 Enter
 Wait+Line /\$$/
-Type@60ms `conda-presto --parse -f conda.toml > discovery.json`
+Type@60ms `conda presto --parse -f conda.toml > discovery.json`
 Enter
 Wait+Line /\$$/
 Type@60ms `jq -c '.environments[] | {name, platforms}' discovery.json`
@@ -50,7 +50,7 @@ Show
 Type@60ms `# Select tools/gpu with declared glibc and CUDA`
 Enter
 Wait+Line /\$$/
-Type@60ms `conda-presto --parse -f conda.toml -e tools -p gpu > selected.json`
+Type@60ms `conda presto --parse -f conda.toml -e tools -p gpu > selected.json`
 Enter
 Wait+Line /\$$/
 Type@60ms `jq '.selected[0] | {environment, platform, subdir, system_requirements}' selected.json`
@@ -70,10 +70,10 @@ Show
 Type@60ms `# Solve and validate the complete four-target matrix`
 Enter
 Wait+Line /\$$/
-Type@60ms `conda-presto -f conda.toml --format conda-workspaces-lock-v1 > conda.lock`
+Type@60ms `conda presto -f conda.toml --format conda-workspaces-lock-v1 > conda.lock`
 Enter
 Wait+Line /\$$/
-Type@60ms `conda-presto --validate -f conda.lock --manifest conda.toml > consistency.json`
+Type@60ms `conda presto --validate -f conda.lock --manifest conda.toml > consistency.json`
 Enter
 Wait+Line /\$$/
 Type@60ms `jq -c '.targets[] | {environment, platform, consistent}' consistency.json`
@@ -102,7 +102,7 @@ Wait+Line /\$$/
 Type@60ms `sed 's/zlib = ">=1.3,<2"/zlib = ">=99"/' conda.toml > changed/conda.toml`
 Enter
 Wait+Line /\$$/
-Type@60ms `conda-presto --validate -f conda.lock --manifest changed/conda.toml > mismatch.json || check_status=$?`
+Type@60ms `conda presto --validate -f conda.lock --manifest changed/conda.toml > mismatch.json || check_status=$?`
 Enter
 Wait+Line /\$$/
 Type@60ms `jq '{consistent, reason: .targets[0].reason}' mismatch.json`
@@ -128,7 +128,7 @@ Show
 Type@60ms `# Update tools/cpu and preserve the other three selections`
 Enter
 Wait+Line /\$$/
-Type@60ms `conda-presto --update -f conda.lock --manifest conda.toml -e tools -p cpu zstd > updated.lock`
+Type@60ms `conda presto --update -f conda.lock --manifest conda.toml -e tools -p cpu zstd > updated.lock`
 Enter
 Wait+Line /\$$/
 Type@60ms `python check_update.py conda.lock updated.lock`
@@ -148,7 +148,7 @@ Show
 Type@60ms `# Validate the complete updated lock`
 Enter
 Wait+Line /\$$/
-Type@60ms `conda-presto --validate -f updated/conda.lock --manifest conda.toml > updated-check.json`
+Type@60ms `conda presto --validate -f updated/conda.lock --manifest conda.toml > updated-check.json`
 Enter
 Wait+Line /\$$/
 Type@60ms `jq '{consistent, targets: (.targets | length)}' updated-check.json`

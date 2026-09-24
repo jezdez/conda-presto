@@ -45,7 +45,7 @@ Both `cpu` and `gpu` contain `linux-64` packages. Their names identify different
 Parse the manifest before choosing a target:
 
 ```bash
-conda-presto --parse -f conda.toml > discovery.json
+conda presto --parse -f conda.toml > discovery.json
 jq '{environments, selected}' discovery.json
 ```
 
@@ -54,7 +54,7 @@ The result lists `default` and `tools`, each with `cpu` and `gpu`. Its `selected
 Select the `tools` environment and the logical `gpu` target:
 
 ```bash
-conda-presto --parse -f conda.toml -e tools -p gpu > selected.json
+conda presto --parse -f conda.toml -e tools -p gpu > selected.json
 jq '.selected[] | {environment, platform, subdir, specs, system_requirements}' selected.json
 ```
 
@@ -65,8 +65,8 @@ Expect `environment: "tools"`, `platform: "gpu"` and `subdir: "linux-64"`, with 
 Omit selectors to solve both environments across both logical targets:
 
 ```bash
-conda-presto -f conda.toml --format conda-workspaces-lock-v1 > conda.lock
-conda-presto --parse -f conda.lock > saved.json
+conda presto -f conda.toml --format conda-workspaces-lock-v1 > conda.lock
+conda presto --parse -f conda.lock > saved.json
 jq '.environments' saved.json
 ```
 
@@ -80,9 +80,9 @@ Extract only `tools/cpu` into another workspace lock:
 
 ```bash
 mkdir extracted
-conda-presto --export -f conda.lock -e tools -p cpu \
+conda presto --export -f conda.lock -e tools -p cpu \
   --format conda-workspaces-lock-v1 > extracted/conda.lock
-conda-presto --parse -f extracted/conda.lock
+conda presto --parse -f extracted/conda.lock
 ```
 
 The result contains only `tools/cpu` and its referenced source records. Their URLs, hashes and supported metadata remain unchanged. Exporting saved records does not solve again.
@@ -90,9 +90,9 @@ The result contains only `tools/cpu` and its referenced source records. Their UR
 Produce an explicit package list and a normalized TOML declaration from those same records:
 
 ```bash
-conda-presto --export -f conda.lock -e tools -p cpu \
+conda presto --export -f conda.lock -e tools -p cpu \
   --format explicit > explicit.txt
-conda-presto --export -f conda.lock -e tools -p cpu \
+conda presto --export -f conda.lock -e tools -p cpu \
   --format conda-toml > normalized.toml
 cat normalized.toml
 ```
@@ -106,7 +106,7 @@ Workspace lock export to `conda-lock-v1` or `rattler-lock-v6` is currently unsup
 Supply the original manifest as context for the selected saved target:
 
 ```bash
-conda-presto --export -f conda.lock -e tools -p cpu \
+conda presto --export -f conda.lock -e tools -p cpu \
   --manifest conda.toml --format cyclonedx-json-v1.7 > sbom.json
 jq '{bomFormat, specVersion, packages: [.components[] | {name, version}],
      roots: [.metadata.component.properties[] |
@@ -122,7 +122,7 @@ This operation checks that the supplied manifest context matches the selected ta
 Compare the complete lock with its manifest:
 
 ```bash
-conda-presto --validate -f conda.lock --manifest conda.toml > consistency.json
+conda presto --validate -f conda.lock --manifest conda.toml > consistency.json
 jq '{consistent, targets}' consistency.json
 jq -e '.consistent and (.targets | length == 4)' consistency.json
 ```
@@ -135,7 +135,7 @@ Create a manifest copy that requires a nonexistent `zlib` major version and vali
 mkdir changed
 sed 's/zlib = ">=1.3,<2"/zlib = ">=99"/' conda.toml > changed/conda.toml
 check_status=0
-conda-presto --validate -f conda.lock --manifest changed/conda.toml \
+conda presto --validate -f conda.lock --manifest changed/conda.toml \
   > mismatch.json || check_status=$?
 test "$check_status" -eq 1
 jq '{consistent, targets: [.targets[] | {environment, platform, reason}]}' mismatch.json
@@ -148,7 +148,7 @@ The command exits with status 1 and returns `consistent: false`, with a reason f
 Ask for a selective update of `zstd` in `tools/cpu`:
 
 ```bash
-conda-presto --update -f conda.lock --manifest conda.toml \
+conda presto --update -f conda.lock --manifest conda.toml \
   -e tools -p cpu zstd > updated.lock
 python "$demo_repo/demos/workspace/check_update.py" conda.lock updated.lock
 ```
@@ -160,7 +160,7 @@ The baseline must satisfy the complete manifest before the update starts. Presto
 ```bash
 mkdir updated
 cp updated.lock updated/conda.lock
-conda-presto --validate -f updated/conda.lock --manifest conda.toml
+conda presto --validate -f updated/conda.lock --manifest conda.toml
 ```
 
 Expect another consistent report covering all four targets. Review and adopt the returned lock when you are ready. Presto leaves adoption to the caller.
@@ -177,7 +177,7 @@ pixi run -e demos bash demos/locks.sh
 
 Each script runs in a fresh temporary directory, prints the commands and selected output, checks the results and removes its generated files on exit. The scripts share {download}`common.sh <../../demos/common.sh>`. The workspace and saved-lock scripts use the same {download}`manifest <../../demos/workspace/conda.toml>` as this tutorial.
 
-- {download}`cli.sh <../../demos/cli.sh>` resolves inline specs and an environment YAML file, then exports normalized declarations without solving.
+- {download}`cli.sh <../../demos/cli.sh>` solves multiple platforms, merges environment files with inline requirements, writes an explicit package list and exports declarations without solving.
 - {download}`workspace.sh <../../demos/workspace.sh>` checks discovery, target selection, the matrix lock, validation, mismatch reporting and selective update.
 - {download}`locks.sh <../../demos/locks.sh>` checks extraction, generic lock conversion, normalized output and SBOM package identities, hashes and declared roots.
 
