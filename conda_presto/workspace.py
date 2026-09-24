@@ -16,11 +16,15 @@ from conda.base.constants import KNOWN_SUBDIRS
 from conda.base.context import context
 from conda.core.index import Index
 from conda.exceptions import CondaError
+from conda.models.channel import Channel
 from conda.models.environment import Environment, EnvironmentConfig
+from conda.models.version import VersionOrder
 from conda_workspaces.context import WorkspaceContext
 from conda_workspaces.manifests import PARSER_BY_FILENAME
-from conda_workspaces.models import redact_channel_name
+from conda_workspaces.models import redact_channel_name, redact_channel_url
 from conda_workspaces.resolver import resolve_environment
+from packaging.specifiers import SpecifierSet
+from packaging.utils import canonicalize_name
 
 from .config import MAX_CHANNELS, MAX_PLATFORMS, MAX_SPECS
 from .exceptions import (
@@ -273,6 +277,23 @@ class WorkspaceInput:
                     "for every target of an environment"
                 )
 
+    def solve_channels(
+        self, target: WorkspaceTarget, packages: tuple[str, ...] | None = None
+    ) -> list[str]:
+        """Include channels requested by dependencies without changing declarations."""
+        resolved = resolve_environment(self.config, target.environment, target.platform)
+        channels = list(target.channels)
+        for name, dependency in resolved.conda_dependencies.items():
+            if packages is not None and name not in packages:
+                continue
+            if channel := dependency.get_exact_value("channel"):
+                # Match rattler's recovery of file channels from original specs.
+                original = dependency.original_spec_str
+                if original and original.startswith("file://"):
+                    channel = Channel(original.split("::")[0])
+                channels.append(redact_channel_url(channel))
+        return list(dict.fromkeys(channels))
+
     def cache_identity(self) -> dict[str, Any]:
         """Describe selected requirements, virtual packages and their providers."""
         targets = []
@@ -282,7 +303,13 @@ class WorkspaceInput:
                     json.dumps(record.dump(), sort_keys=True, default=str)
                     for record in Index().system_packages
                 )
-            targets.append((msgspec.to_builtins(target), virtual_packages))
+            targets.append(
+                (
+                    msgspec.to_builtins(target),
+                    virtual_packages,
+                    self.solve_channels(target),
+                )
+            )
         providers = {}
         for name in ("conda-workspaces", "conda-lockfiles", "conda-pypi"):
             try:
@@ -385,6 +412,22 @@ class WorkspaceInput:
                     f" {dependency.name!r}."
                     " Local paths, Git and URLs are not supported."
                 )
+            try:
+                canonicalize_name(dependency.name, validate=True)
+                for extra in dependency.extras:
+                    canonicalize_name(extra, validate=True)
+                specifiers = SpecifierSet(
+                    "" if dependency.spec == "*" else dependency.spec or ""
+                )
+                for specifier in specifiers:
+                    if specifier.operator == "===":
+                        # Arbitrary PyPI versions must not become MatchSpec selectors.
+                        VersionOrder(specifier.version)
+            except (ValueError, CondaError) as exc:
+                raise ValueError(
+                    f"Environment {name!r} has an invalid PyPI requirement:"
+                    f" {dependency.name!r}"
+                ) from exc
         if resolved.pypi_dependencies and find_spec("conda_pypi") is None:
             raise ValueError(
                 f"Environment {name!r} requires conda-pypi for its PyPI dependencies"

@@ -34,7 +34,7 @@ Start the service with `conda presto --serve`. `/openapi.json` and `/` return th
 | `file` | Environment file content as a string | Absent |
 | `filename` | Parser hint such as `environment.yml` | Inferred |
 
-Provide specs or file content. Ordinary file requirements are combined with `specs`, and explicit channels override their file channels. Workspace requests use the manifest's requirements and channels and reject inline specs and channel overrides. Body fields override equivalent query parameters by presence.
+Provide specs or file content. Ordinary file requirements are combined with `specs`, and explicit channels override their file channels. Workspace requests use the manifest's requirements and channels and reject inline specs and channel overrides. The server checks dependency-specific channels against its channel allowlist as well. Body fields override equivalent query parameters by presence.
 
 Both resolve methods accept repeated `spec`, `channel` and `platform` query parameters. `format` selects an installed exporter and is query-only. Without it, the response is a native JSON array with an `error` field per platform. Exporter output requires every platform to succeed. See {doc}`output-formats`.
 

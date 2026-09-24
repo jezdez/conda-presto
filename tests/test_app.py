@@ -2678,6 +2678,8 @@ channels = ["https://a.example.org/channel"]
 [feature.osx]
 platforms = ["osx-arm64"]
 channels = ["https://b.example.org/channel"]
+[feature.osx.dependencies]
+zlib = { version = "*", channel = "https://c.example.org/channel" }
 [environments.a]
 features = ["linux"]
 [environments.b]
@@ -2685,22 +2687,33 @@ features = ["osx"]
 """
     fresh_urls = {
         f"https://{host}.example.org/channel/{subdir}"
-        for host, platform in (("a", "linux-64"), ("b", "osx-arm64"))
+        for host, platform in (
+            ("a", "linux-64"),
+            ("b", "osx-arm64"),
+            ("c", "osx-arm64"),
+        )
         for subdir in (platform, "noarch")
     }
     repodata = tmp_path / "repodata.json"
     repodata.write_text("{}")
     shards = tmp_path / "repodata.msgpack.zst"
     shards.write_bytes(b"shards")
+    declared = tmp_path / "declared.json"
+    declared.write_text("{}")
     missing = tmp_path / "missing"
     calls = []
 
     def subdir_data(channel, **kwargs):
         present = channel.url() in fresh_urls
+        dependency_channel = channel.location == "c.example.org"
         return SimpleNamespace(
             repo_cache=SimpleNamespace(
-                cache_path_json=repodata if present else missing,
-                cache_path_shards=shards if present else missing,
+                cache_path_json=(repodata if dependency_channel else declared)
+                if present
+                else missing,
+                cache_path_shards=(shards if dependency_channel else declared)
+                if present
+                else missing,
                 state=SimpleNamespace(should_check_format=lambda _: use_shards),
                 load_state=lambda **_: None,
                 stale=lambda: False,

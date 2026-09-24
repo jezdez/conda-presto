@@ -244,7 +244,9 @@ class ResolveRequest:
                         )
                     for target in workspace.result.selected:
                         if cap_error := validate_caps(
-                            target.specs, target.channels, [target.subdir]
+                            target.specs,
+                            workspace.solve_channels(target),
+                            [target.subdir],
                         ):
                             return cap_error
                     return workspace
@@ -747,7 +749,7 @@ async def run_cached_solve(
                     "channel_platforms": [
                         (channel, target.subdir)
                         for target in workspace.result.selected
-                        for channel in target.channels
+                        for channel in workspace.solve_channels(target)
                     ],
                 }
             workspace_args = {}
@@ -997,7 +999,7 @@ async def resolve_post(
                 dict.fromkeys(
                     channel
                     for target in inputs.result.selected
-                    for channel in target.channels
+                    for channel in inputs.solve_channels(target)
                 )
             ),
             list(dict.fromkeys(target.subdir for target in inputs.result.selected)),
@@ -1398,7 +1400,9 @@ async def parse(request: Request, data: ParseRequest) -> Response:
     if parsed_file.workspace is not None:
         for target in parsed_file.workspace.result.selected:
             if cap_error := validate_caps(
-                target.specs, target.channels, [target.subdir]
+                target.specs,
+                parsed_file.workspace.solve_channels(target),
+                [target.subdir],
             ):
                 return cap_error
         return Response(parsed_file.parse_result)
