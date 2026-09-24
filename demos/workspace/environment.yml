@@ -1,0 +1,6 @@
+name: presto-demo
+channels:
+  - conda-forge
+dependencies:
+  - zlib>=1.3,<2
+  - zstd>=1.5,<2

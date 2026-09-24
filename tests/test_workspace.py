@@ -19,6 +19,7 @@ from conda_workspaces.resolver import ResolvedEnvironment
 from conda_presto import workspace
 from conda_presto.exceptions import WorkspaceSolveError
 from conda_presto.workspace import WorkspaceInput
+from conda_presto.workspace_lock import WorkspaceLockInput
 
 
 @pytest.fixture
@@ -442,6 +443,40 @@ def test_workspace_registry_rejects_unknown_filename(manifest):
     path = manifest("[workspace]", "unknown.toml")
     with pytest.raises(ValueError, match="Unsupported workspace manifest filename"):
         WorkspaceInput.from_path(path)
+
+
+@pytest.mark.parametrize(
+    "channel",
+    [
+        pytest.param("conda-forge", id="channel-alias"),
+        pytest.param("https://conda.anaconda.org/conda-forge", id="channel-url"),
+    ],
+)
+def test_workspace_solved_lock_satisfies_source_manifest(
+    manifest, workspace_solver, channel
+):
+    path = manifest(f"""
+        [workspace]
+        channels = ["{channel}"]
+        platforms = [
+            {{ name = "cpu", platform = "linux-64", libc = "2.28" }},
+            {{ name = "gpu", platform = "linux-64", cuda = "12" }},
+        ]
+        [dependencies]
+        python = ">=3.11"
+        [environments]
+        test = []
+    """)
+    body, _ = WorkspaceInput.from_path(path).solve("conda-workspaces-lock-v1")
+    lock_path = path.with_name("conda.lock")
+    lock_path.write_text(body)
+    result = (
+        WorkspaceLockInput.from_path(lock_path)
+        .with_manifest(path.read_text(), path.name)
+        .check_consistency()
+    )
+    assert result.consistent, [target.reason for target in result.targets]
+    assert len(result.targets) == 4
 
 
 def test_workspace_combined_lock_preserves_named_targets_and_package_metadata(

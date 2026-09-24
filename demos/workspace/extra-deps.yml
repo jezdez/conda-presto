@@ -1,0 +1,4 @@
+channels:
+  - conda-forge
+dependencies:
+  - xz>=5,<6

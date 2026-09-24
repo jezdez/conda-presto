@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Add a workspace tutorial and executable VHS demos for CLI, HTTP, locks, cache persistence, artifact verification, the GitHub Action, Docker and service diagnostics.
+
 - Update selected direct conda dependencies in one workspace lock target through `POST /update` and CLI `--update`, preserving unselected package selections and checking the complete baseline and result.
 - Check every declared workspace environment and target against a saved lock through `POST /validate` and CLI `--validate`, without solving or downloads.
 - Generate separate SBOM documents from selected workspace lock environments and targets, with optional validated manifest context for declared dependency roots.
@@ -39,6 +41,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - Enforce HTTP channel permissions for workspace dependency channels and reject malformed PyPI requirements.
+- Serialize resolved workspace channel URLs so generated locks pass consistency checks against their source manifest.
+
 - Export explicitly requested workspace platforms when the manifest declares none.
 - Reject multi-target solves for output formats that can only represent one environment.
 - Preserve exact locked records when using companion manifests for normalized exports.

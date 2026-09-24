@@ -1,5 +1,7 @@
 # Troubleshoot the service
 
+See {doc}`monitor-service` for readiness and capability checks.
+
 ## The command is missing
 
 Run `conda presto --help` in the environment where conda-presto is installed. Conda and conda-rattler-solver must be available in that same environment. See {doc}`../quickstart` for installation.
@@ -28,3 +30,7 @@ The solve deadline includes waiting for foreground capacity. Metadata inspection
 A valid solve may be returned without retention when credentials are detected, metadata cannot be represented safely, cache capacity is unavailable or a required store write fails. A previously retained URL can expire or be evicted. It is not permanent archival storage.
 
 Use {doc}`configure-result-cache` to check storage configuration and {doc}`../reference/cache` to understand freshness and retention.
+
+## macOS semaphore cleanup warnings
+
+Python may report leaked semaphore objects at process shutdown after a CLI workspace update on macOS. Check the command's exit status and validate the returned lock before using it. The workspace demo checks both and compares all unselected package references. A cleanup warning is separate from the consistency report.

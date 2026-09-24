@@ -56,6 +56,8 @@ For the workspace manifest in {doc}`parse-workspace`, select named environments 
     path: conda.lock
 ```
 
+A complete {download}`workspace workflow <../../demos/action/workflow.yml>` and its {download}`manifest <../../demos/action/conda.toml>` are available in the repository. The hosted Action smoke test uses that same manifest.
+
 The lock contains all four selected solutions. Omit `environments` and `platforms` to solve every declared environment and target. Workspace requests use manifest channels and do not accept additional `specs` or `channels`.
 
 GitHub-hosted Ubuntu runners provide the required `curl` and `jq` tools. Plain HTTP is accepted only for loopback servers. The Action validates HTTP success and native platform errors, and leaves response bodies out of logs. Use the `output` file for large results and the bounded `result` output for small responses.

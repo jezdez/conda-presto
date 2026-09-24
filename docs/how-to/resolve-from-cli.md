@@ -1,14 +1,41 @@
+(demo-cli)=
 # Resolve from the CLI
 
-Use the one-shot command when conda-presto is installed locally:
+```{raw} html
+<picture>
+  <source srcset="../../cli.png" media="(prefers-reduced-motion: reduce)">
+  <img class="presto-demo" src="../../cli.gif" width="1200" loading="lazy" alt="Resolve package requirements and export declarations in the terminal">
+</picture>
+```
+
+{download}`Static preview <../../demos/cli.png>` · {download}`VHS tape <../../demos/cli.tape>`
+
+Use the one-shot command when conda-presto is installed locally. Save the shared {download}`environment.yml <../../demos/workspace/environment.yml>` and {download}`extra-deps.yml <../../demos/workspace/extra-deps.yml>` fixtures in the current directory:
 
 ```bash
-conda presto -c conda-forge -p linux-64 python=3.13 numpy
+conda presto -c conda-forge -p linux-64 zlib
 conda presto -f environment.yml -p linux-64 -p osx-arm64 \
-  --format rattler-lock-v6 > pixi.lock
+  > environment.json
 ```
 
 The default output is native JSON with a result or error for each platform. Exporter output requires successful solves for every selected platform. The command selects packages without creating or changing a prefix.
+
+To merge both files and an inline requirement into one solve:
+
+```bash
+conda presto -f environment.yml -f extra-deps.yml -p linux-64 bzip2 \
+  > merged.json
+```
+
+The result includes `zlib` and `zstd` from the first file, `xz` from the second, and the inline `bzip2` requirement.
+
+To save exact package URLs for a later `conda create --file` invocation:
+
+```bash
+conda presto -f environment.yml -p linux-64 --format explicit > explicit.txt
+```
+
+The output starts with `@EXPLICIT` after any comment headers. Presto writes the package selection without installing it.
 
 To render declared dependencies without solving:
 
@@ -21,6 +48,7 @@ This preserves supported declarations without producing a pinned lock. Workspace
 To convert a covered lockfile without solving or downloading packages:
 
 ```bash
+conda presto -f environment.yml -p linux-64 --format pixi-lock-v6 > pixi.lock
 conda presto --export -f pixi.lock -p linux-64 --format conda-lock-v1 > conda-lock.yml
 ```
 

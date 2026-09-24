@@ -1,26 +1,51 @@
-# Resolve and save an output
+(demo-http)=
+# Resolve and maintain environments over HTTP
 
-Follow {doc}`../quickstart` to install and start the server. This example resolves zlib for Linux, saves a lockfile and retrieves the same bytes from the cache.
+```{raw} html
+<picture>
+  <source srcset="../../http.png" media="(prefers-reduced-motion: reduce)">
+  <img class="presto-demo" src="../../http.gif" width="1200" loading="lazy" alt="Resolve inline requirements and uploaded YAML, then retrieve identical retained bytes">
+</picture>
+```
+
+{download}`Static preview <../../demos/http.png>` · {download}`VHS tape <../../demos/http.tape>`
+
+Follow {doc}`../quickstart` to install and start the server. The HTTP examples use `curl` and `jq`. Workspace steps require the current source described in {doc}`workspaces`.
+
+Resolve inline requirements as native JSON:
 
 ```bash
 export CONDA_PRESTO_URL=http://127.0.0.1:8000
 curl --fail-with-body "$CONDA_PRESTO_URL/health"
-curl --fail-with-body -D headers.txt \
-  "$CONDA_PRESTO_URL/resolve?format=pixi-lock-v6" \
-  --json '{"specs":["zlib"],"platforms":["linux-64"]}' \
-  -o pixi.lock
+curl --fail-with-body "$CONDA_PRESTO_URL/formats" |
+  jq '.formats | map(select(startswith("pixi")))'
+curl --fail-with-body "$CONDA_PRESTO_URL/resolve" \
+  --json '{"specs":["zlib"],"channels":["conda-forge"],"platforms":["linux-64"]}' \
+  --output result.json
+jq '[.[] | {platform, error, packages: [.packages[].name]}]' result.json
 ```
 
-When the response has a `Location`, retrieve it while the entry is retained:
+Expect one Linux result containing `zlib` with `error: null`. HTTP success alone does not rule out a per-platform solver error in native JSON.
+
+Save the shared {download}`environment.yml <../../demos/workspace/environment.yml>` in your working directory. Upload its raw YAML to solve the declared requirements and render a Pixi lock:
+
+```bash
+curl --fail-with-body --dump-header headers.txt \
+  "$CONDA_PRESTO_URL/resolve?filename=environment.yml&platform=linux-64&format=pixi-lock-v6" \
+  --header 'Content-Type: application/yaml' --data-binary @environment.yml \
+  --output pixi.lock
+```
+
+The YAML declares `zlib` and `zstd` from conda-forge. When the response has a `Location`, retrieve the saved bytes while the entry is retained:
 
 ```bash
 location=$(awk 'tolower($1) == "location:" {print $2}' headers.txt | tr -d '\r')
 test -n "$location"
-curl --fail-with-body "$CONDA_PRESTO_URL$location" -o saved.lock
+curl --fail-with-body "$CONDA_PRESTO_URL$location" --output saved.lock
 cmp pixi.lock saved.lock
 ```
 
-A new solve checks channel freshness. Retrieval returns the saved bytes until eviction. An absent `Location` means the solve succeeded without retaining its output.
+A new solve checks channel freshness. Retrieval returns the same bytes until eviction. An absent `Location` means the solve succeeded without retaining its output.
 
 ## Export declarations without solving
 
@@ -29,7 +54,7 @@ To change the representation of declared requirements, send the file to `/export
 ```bash
 curl --fail-with-body "$CONDA_PRESTO_URL/export?filename=environment.yml&format=requirements" \
   --header 'Content-Type: application/yaml' \
-  --data-binary $'channels:\n  - conda-forge\ndependencies:\n  - python=3.13\n  - zlib\n' \
+  --data-binary @environment.yml \
   --output requirements.txt
 ```
 
@@ -48,56 +73,116 @@ jq -j '.sboms[0].content' sboms.json > environment.cdx.json
 
 The document describes selected package records. It does not establish which files a downstream product ships. Multiple requested platforms produce separate documents. This request solves the supplied requirements and reuses the registered SBOM exporter. To render selected workspace `conda.lock` records without solving, follow the {doc}`saved-lock SBOM workflow <../how-to/extract-workspace-lock>`.
 
-## Check a lock after changing its manifest
+(demo-http-workspace)=
+## Discover and solve a workspace
 
-Start with the matching `conda.toml` and workspace `conda.lock` from {doc}`../how-to/parse-workspace`. Upload both files:
+```{raw} html
+<picture>
+  <source srcset="../../http-workspace.png" media="(prefers-reduced-motion: reduce)">
+  <img class="presto-demo" src="../../http-workspace.gif" width="1200" loading="lazy" alt="Discover workspace targets, export declarations and solve the complete matrix over HTTP">
+</picture>
+```
+
+{download}`Static preview <../../demos/http-workspace.png>` · {download}`VHS tape <../../demos/http-workspace.tape>`
+
+Save the shared {download}`workspace manifest <../../demos/workspace/conda.toml>` as `conda.toml`. It declares `default` and `tools`, each with `cpu` and `gpu` targets backed by `linux-64`. Both targets declare glibc 2.28, and `gpu` also declares CUDA 12. These are target requirements, independent of the server's hardware.
+
+Submit the manifest as a JSON envelope for discovery:
+
+```bash
+jq -n --rawfile file conda.toml \
+  '{file: $file, filename: "conda.toml"}' > workspace.json
+curl --fail-with-body "$CONDA_PRESTO_URL/parse" \
+  --json @workspace.json --output discovery.json
+jq '{environments, selected}' discovery.json
+```
+
+Discovery lists both environments and returns `selected: []`. Select `tools/gpu` to inspect its composed requirements:
+
+```bash
+jq '. + {environments: ["tools"], platforms: ["gpu"]}' workspace.json > selected.json
+curl --fail-with-body "$CONDA_PRESTO_URL/parse" \
+  --json @selected.json --output selected-result.json
+jq '.selected[] | {environment, platform, subdir, specs, system_requirements}' selected-result.json
+```
+
+Expect `platform: "gpu"`, `subdir: "linux-64"`, the declared virtual-package versions, and requirements for `zlib` and `zstd`. Select logical target names here because `linux-64` identifies both `cpu` and `gpu`.
+
+Export the selected declarations without solving:
+
+```bash
+curl --fail-with-body "$CONDA_PRESTO_URL/export?format=requirements" \
+  --json @selected.json --output requirements.txt
+cat requirements.txt
+```
+
+The output describes the requested dependencies. To obtain exact package records, solve the complete matrix by omitting selectors:
+
+```bash
+curl --fail-with-body "$CONDA_PRESTO_URL/resolve?format=conda-workspaces-lock-v1" \
+  --json @workspace.json --output conda.lock
+```
+
+The returned workspace lock contains all four environment/target selections. Keep this original manifest and lock for validation and selective update.
+
+(demo-http-update)=
+## Validate a saved workspace lock
+
+```{raw} html
+<picture>
+  <source srcset="../../http-update.png" media="(prefers-reduced-motion: reduce)">
+  <img class="presto-demo" src="../../http-update.gif" width="1200" loading="lazy" alt="Validate a saved workspace lock, reject changed requirements and update one target over HTTP">
+</picture>
+```
+
+{download}`Static preview <../../demos/http-update.png>` · {download}`VHS tape <../../demos/http-update.tape>`
+
+Upload the matching `conda.toml` and `conda.lock` from the previous section:
 
 ```bash
 jq -n --rawfile file conda.lock --rawfile manifest conda.toml \
-  '{file: $file, filename: "conda.lock", manifest: $manifest, manifest_filename: "conda.toml"}' |
-  curl --fail-with-body "$CONDA_PRESTO_URL/validate" \
-    --header 'Content-Type: application/json' --data-binary @- \
-    --output consistency.json
-jq '.consistent' consistency.json
+  '{file: $file, filename: "conda.lock", manifest: $manifest, manifest_filename: "conda.toml"}' \
+  > baseline.json
+curl --fail-with-body "$CONDA_PRESTO_URL/validate" \
+  --json @baseline.json --output consistency.json
+jq '{consistent, targets: (.targets | length)}' consistency.json
+jq -e '.consistent and (.targets | length == 4)' consistency.json
 ```
 
-The result is `true` when every declared environment and target passes. Checking uses saved metadata without solving or downloading packages. It includes named variants on the same conda platform, independently of the server host.
+Expect `consistent: true` for all four targets. Validation uses saved metadata and each target's declared virtual packages without solving or downloading packages.
 
-The example manifest requires Python 3.13. Create a changed copy that instead requires Python 3.12 and check it against the same lock:
+### Reject a changed manifest
+
+Change the uploaded manifest to require `zlib >=99` and check it against the same lock:
 
 ```bash
-sed 's/3\.13\.\*/3.12.*/' conda.toml > changed-conda.toml
-jq -n --rawfile file conda.lock --rawfile manifest changed-conda.toml \
-  '{file: $file, filename: "conda.lock", manifest: $manifest, manifest_filename: "conda.toml"}' |
-  curl --fail-with-body "$CONDA_PRESTO_URL/validate" \
-    --header 'Content-Type: application/json' --data-binary @- \
-    --output mismatch.json
-jq '.targets[] | select(.consistent == false)' mismatch.json
+jq '.manifest |= sub(">=1.3,<2"; ">=99")' baseline.json > changed.json
+curl --fail-with-body "$CONDA_PRESTO_URL/validate" --json @changed.json \
+  --write-out 'HTTP %{http_code}\n' --output mismatch.json
+jq '{consistent, reason: .targets[0].reason}' mismatch.json
 ```
 
-The response reports `consistent: false` and a reason for each affected target. HTTP 200 means the check completed, so automation should inspect `.consistent` rather than rely only on the HTTP status. For example, `jq -e '.consistent' consistency.json` succeeds only for a consistent result. Malformed or unsupported files produce HTTP 400, and a parser timeout produces HTTP 504.
+The report contains `consistent: false` and a reason for each affected target. HTTP 200 means the check completed, so inspect `.consistent`. Malformed or unsupported files produce HTTP 400, and a parser timeout produces HTTP 504.
 
-This operation checks the complete workspace and does not accept environment or platform selectors. It does not check repository freshness, download or verify archives, or evaluate vulnerability policy. The response is not retained in the artifact cache.
+Validation always checks the complete workspace and rejects environment or platform selectors. It does not check for newer packages or vulnerabilities. Its response is not retained in the artifact cache.
 
-## Update one target from a saved lock
+### Update one target
 
-Use the original matching `conda.toml` and `conda.lock` from {doc}`../how-to/parse-workspace`. Update the direct `pytest` dependency in `test/linux-64`:
+Use the original matching manifest and lock to update `zstd` in `tools/cpu`:
 
 ```bash
-jq -n --rawfile file conda.lock --rawfile manifest conda.toml \
-  '{file: $file, filename: "conda.lock", manifest: $manifest, manifest_filename: "conda.toml",
-    environment: "test", platform: "linux-64", packages: ["pytest"]}' |
-  curl --fail-with-body "$CONDA_PRESTO_URL/update" \
-    --header 'Content-Type: application/json' --data-binary @- \
-    --output updated.lock
+jq '. + {environment: "tools", platform: "cpu", packages: ["zstd"]}' \
+  baseline.json > update.json
+curl --fail-with-body "$CONDA_PRESTO_URL/update" \
+  --json @update.json --output updated.lock
 ```
 
-The response is a complete workspace lock. The manifest's `pytest >=8` constraint still applies. Dependencies inside the selected target may also change, while the saved selections for `default` and `test/osx-arm64` remain unchanged. The provider can keep the current version when no suitable update is selected.
+The response is a complete workspace lock. The `zstd >=1.5,<2` constraint still applies. Transitive dependencies in `tools/cpu` may change, while `default/cpu`, `default/gpu` and `tools/gpu` keep their package selections. The provider can retain the current version when no suitable update is selected.
 
-In the conda environment containing Presto, compare the unselected package references:
+In the source environment containing Presto, compare the unselected package references:
 
 ```bash
-python - <<'PY'
+python - <<'PYTHON'
 from pathlib import Path
 from ruamel.yaml import YAML
 
@@ -106,13 +191,22 @@ before = reader.load(Path("conda.lock").read_text())
 after = reader.load(Path("updated.lock").read_text())
 for environment, data in before["environments"].items():
     for target, packages in data["packages"].items():
-        if (environment, target) != ("test", "linux-64"):
+        if (environment, target) != ("tools", "cpu"):
             assert after["environments"][environment]["packages"][target] == packages
 print("Unselected package references are unchanged")
-PY
+PYTHON
 ```
 
-The baseline must satisfy every manifest target before an update starts. A changed manifest, missing target or unsupported input fails instead of triggering a full relock. Leave `conda.lock` in place while inspecting `updated.lock`. If updating fails, no partial lock is returned and previously retained outputs remain available.
+Check all four targets in the returned lock:
+
+```bash
+jq --rawfile file updated.lock '.file = $file' baseline.json > updated.json
+curl --fail-with-body "$CONDA_PRESTO_URL/validate" \
+  --json @updated.json --output updated-check.json
+jq -e '.consistent and (.targets | length == 4)' updated-check.json
+```
+
+The baseline must satisfy every manifest target before updating, and Presto checks the complete result before returning it. A changed manifest, missing target or unsupported input fails instead of triggering a full relock. Keep `conda.lock` while reviewing `updated.lock`. A failed update returns no partial lock.
 
 ## Sign and verify the saved bytes
 

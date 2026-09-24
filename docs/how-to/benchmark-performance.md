@@ -1,5 +1,7 @@
 # Benchmark the service
 
+See {doc}`monitor-service` for readiness and capability checks.
+
 Compare the same specs, channels and platforms against the same metadata. Separate cold startup, uncached solves, persistent index reuse and full-result retrieval.
 
 From a source checkout, `pixi run -e test bench` runs the existing solve and serialization benchmarks. They may access channel metadata. For HTTP measurements, choose one profile and restart the server after changing it:

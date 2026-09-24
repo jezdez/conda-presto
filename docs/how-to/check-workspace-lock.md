@@ -1,5 +1,7 @@
 # Validate a workspace lock against its manifest
 
+Watch the {ref}`demo-workspace` demo and follow the commands below.
+
 Use a saved workspace `conda.lock` to check whether every declared environment and target still satisfies its manifest. This is useful after changing dependencies or channels and before accepting a lock in CI. Start with the `conda.toml` and combined lock from {doc}`parse-workspace`.
 
 ## Check the saved lock
@@ -28,7 +30,7 @@ Save the report while preserving the command's result:
 
 ```bash
 status=0
-conda-presto --validate --file conda.lock --manifest conda.toml \
+conda presto --validate --file conda.lock --manifest conda.toml \
   > lock-check.json || status=$?
 cat lock-check.json
 exit "$status"
