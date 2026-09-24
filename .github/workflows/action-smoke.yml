@@ -9,8 +9,8 @@ on:
       - pyproject.toml
       - pixi.lock
       - tests/test_action.py
-      - examples/demos/action/**
-      - examples/demos/workspace/environment.yml
+      - demos/action/**
+      - demos/workspace/environment.yml
   workflow_dispatch:
 
 permissions:
@@ -57,8 +57,8 @@ jobs:
 
       - name: Use the documented environment and workspace examples
         run: |
-          cp examples/demos/workspace/environment.yml environment.yml
-          cp examples/demos/action/conda.toml conda.toml
+          cp demos/workspace/environment.yml environment.yml
+          cp demos/action/conda.toml conda.toml
 
       - name: Resolve two platforms
         id: native

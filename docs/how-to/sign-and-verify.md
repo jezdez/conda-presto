@@ -1,8 +1,18 @@
+(demo-trust)=
 # Sign and verify a retained output
+
+```{raw} html
+<picture>
+  <source srcset="../../trust.png" media="(prefers-reduced-motion: reduce)">
+  <img class="presto-demo" src="../../trust.gif" width="1200" loading="lazy" alt="Verify a public signed fixture offline and reject changed bytes or the wrong signer">
+</picture>
+```
+
+{download}`Example transcript <../../demos/trust.txt>` · {download}`Static preview <../../demos/trust.png>` · {download}`Runnable example <../../demos/trust.sh>` · {download}`VHS tape <../../demos/trust.tape>`
 
 Sign an artifact already retained by this deployment, then verify its exact bytes against an identity approved by the recipient. The signature describes a later output-signing step. It does not record the original solve inputs.
 
-This recipe makes live OIDC, certificate-authority and transparency-log requests. For verification without signing credentials, use the {doc}`offline demonstration </demos/index>`.
+The recording verifies a public signed fixture offline without signing credentials. The live signing recipe below makes OIDC, certificate-authority and transparency-log requests.
 
 ## Supply an unattended identity
 

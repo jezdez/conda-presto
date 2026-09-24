@@ -1,0 +1,30 @@
+
+Start a local HTTP service
+
+$ curl --fail --silent --show-error http://127.0.0.1:62631/health
+{"status":"ok"}
+Solve zlib for Linux and inspect the result
+
+$ curl --fail --silent --show-error -H 'Content-Type: application/json' --data '{"specs":["zlib"],"channels":["conda-forge"],"platforms":["linux-64"]}' http://127.0.0.1:62631/resolve > result.json
+
+$ jq '[.[] | {platform, error, packages: [.packages[].name]}]' result.json
+[
+  {
+    "platform": "linux-64",
+    "error": null,
+    "packages": [
+      "libzlib",
+      "zlib"
+    ]
+  }
+]
+
+Export a lock and retrieve its exact retained bytes
+
+$ curl --fail --silent --show-error --dump-header headers.txt 'http://127.0.0.1:62631/resolve?spec=zlib&channel=conda-forge&platform=linux-64&format=pixi-lock-v6' > pixi.lock
+
+$ curl --fail --silent --show-error http://127.0.0.1:62631/r/fabbd7314fc9bc0d89e9f167b9a17ec130f2d7edeb2cb20bfba7ff519e03ae60 > retained.lock
+
+$ cmp pixi.lock retained.lock
+
+The retrieved lock is byte-for-byte identical

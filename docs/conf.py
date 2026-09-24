@@ -44,6 +44,7 @@ html_context = {
 }
 
 html_static_path = ["_static"]
+html_extra_path = ["../demos"]
 html_css_files = ["css/custom.css"]
 
 exclude_patterns = ["_build"]

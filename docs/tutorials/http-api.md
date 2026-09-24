@@ -1,6 +1,14 @@
+(demo-http)=
 # Resolve and save an output
 
-Watch the {ref}`demo-http` demo or run its checked-in script.
+```{raw} html
+<picture>
+  <source srcset="../../http.png" media="(prefers-reduced-motion: reduce)">
+  <img class="presto-demo" src="../../http.gif" width="1200" loading="lazy" alt="Resolve through HTTP and retrieve identical retained bytes">
+</picture>
+```
+
+{download}`Example transcript <../../demos/http.txt>` · {download}`Static preview <../../demos/http.png>` · {download}`Runnable example <../../demos/http.sh>` · {download}`VHS tape <../../demos/http.tape>`
 
 Follow {doc}`../quickstart` to install and start the server. This example resolves zlib for Linux, saves a lockfile and retrieves the same bytes from the cache.
 

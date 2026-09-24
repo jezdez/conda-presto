@@ -78,6 +78,8 @@ pixi run -e dev serve
 pixi run -e docs docs
 ```
 
+See [demos/README.md](demos/README.md) to run the workflow examples or regenerate their recordings.
+
 ## License
 
 BSD-3-Clause

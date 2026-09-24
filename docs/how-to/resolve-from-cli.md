@@ -1,6 +1,14 @@
+(demo-cli)=
 # Resolve from the CLI
 
-Watch the {ref}`demo-cli` demo or run its checked-in script.
+```{raw} html
+<picture>
+  <source srcset="../../cli.png" media="(prefers-reduced-motion: reduce)">
+  <img class="presto-demo" src="../../cli.gif" width="1200" loading="lazy" alt="Resolve package requirements and export declarations in the terminal">
+</picture>
+```
+
+{download}`Example transcript <../../demos/cli.txt>` · {download}`Static preview <../../demos/cli.png>` · {download}`Runnable example <../../demos/cli.sh>` · {download}`VHS tape <../../demos/cli.tape>`
 
 Use the one-shot command when conda-presto is installed locally:
 

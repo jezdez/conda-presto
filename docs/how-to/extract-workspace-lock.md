@@ -1,6 +1,14 @@
+(demo-locks)=
 # Extract a named environment from a saved lock
 
-Watch the {ref}`demo-locks` demo or run its checked-in script.
+```{raw} html
+<picture>
+  <source srcset="../../locks.png" media="(prefers-reduced-motion: reduce)">
+  <img class="presto-demo" src="../../locks.gif" width="1200" loading="lazy" alt="Extract saved package records and generate an SBOM without solving again">
+</picture>
+```
+
+{download}`Example transcript <../../demos/locks.txt>` · {download}`Static preview <../../demos/locks.png>` · {download}`Runnable example <../../demos/locks.sh>` · {download}`VHS tape <../../demos/locks.tape>`
 
 Use a workspace `conda.lock` to recover exact saved package selections without solving again. Start with the combined lock produced by {doc}`parse-workspace`, containing `default` and `test` for `linux-64` and `osx-arm64`.
 

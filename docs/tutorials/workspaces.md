@@ -1,12 +1,20 @@
+(demo-workspace)=
 # Discover, solve and maintain a workspace
+
+```{raw} html
+<picture>
+  <source srcset="../../workspace.png" media="(prefers-reduced-motion: reduce)">
+  <img class="presto-demo" src="../../workspace.gif" width="1200" loading="lazy" alt="Discover named targets, solve and validate a workspace lock, and update one dependency">
+</picture>
+```
+
+{download}`Example transcript <../../demos/workspace.txt>` · {download}`Static preview <../../demos/workspace.png>` · {download}`Runnable example <../../demos/workspace.sh>` · {download}`VHS tape <../../demos/workspace.tape>`
 
 Build a small workspace lock, extract one saved target, generate an SBOM and update one dependency. The examples use `zlib` and `zstd` from conda-forge. Presto resolves their metadata and writes output files. It does not install the resolved packages or execute workspace tasks.
 
-Watch the {ref}`demo-workspace` and {ref}`demo-locks` recordings for the same commands.
-
 ## Start from the source checkout
 
-This tutorial uses workspace features from the unreleased source stack. Run it from a source checkout containing `examples/demos/workspace.sh`, rather than a released PyPI installation. Install the repository's locked demo environment and enter its shell:
+This tutorial uses workspace features from the unreleased source stack. Run it from a source checkout containing `demos/workspace.sh`, rather than a released PyPI installation. Install the repository's locked demo environment and enter its shell:
 
 ```bash
 pixi install --locked -e demos
@@ -20,13 +28,13 @@ Create a working directory and copy the shared fixture before leaving the reposi
 ```bash
 demo_repo=$PWD
 demo_dir=$(mktemp -d)
-cp examples/demos/workspace/conda.toml "$demo_dir/conda.toml"
+cp demos/workspace/conda.toml "$demo_dir/conda.toml"
 cd "$demo_dir"
 ```
 
 The fixture declares two environments and two logical targets:
 
-```{literalinclude} ../../examples/demos/workspace/conda.toml
+```{literalinclude} ../../demos/workspace/conda.toml
 :language: toml
 ```
 
@@ -91,7 +99,7 @@ cat normalized.toml
 
 The explicit file contains exact saved package URLs. The normalized manifest describes all selected packages as requirements, including transitive dependencies. It does not recover the original comments or feature composition. Use workspace lock output when the saved hashes and source metadata must survive.
 
-Workspace lock export to `conda-lock-v1` or `rattler-lock-v6` is currently unsupported because those exporters cannot preserve all workspace record metadata. Ordinary conda-lockfiles formats have a separate conversion workflow, demonstrated by {download}`locks.sh <../../examples/demos/locks.sh>`, which solves a small `conda-lock.yml` and converts it to `pixi.lock` without solving again. Conversion rejects inputs whose metadata cannot be represented in the requested format.
+Workspace lock export to `conda-lock-v1` or `rattler-lock-v6` is currently unsupported because those exporters cannot preserve all workspace record metadata. Ordinary conda-lockfiles formats have a separate conversion workflow, demonstrated by {download}`locks.sh <../../demos/locks.sh>`, which solves a small `conda-lock.yml` and converts it to `pixi.lock` without solving again. Conversion rejects inputs whose metadata cannot be represented in the requested format.
 
 ## Render an SBOM with declared roots
 
@@ -142,7 +150,7 @@ Ask for a selective update of `zstd` in `tools/cpu`:
 ```bash
 conda-presto --update -f conda.lock --manifest conda.toml \
   -e tools -p cpu zstd > updated.lock
-python "$demo_repo/examples/demos/workspace/check_update.py" conda.lock updated.lock
+python "$demo_repo/demos/workspace/check_update.py" conda.lock updated.lock
 ```
 
 The helper compares package references before and after the update. It should report unchanged references for `default/cpu`, `default/gpu` and `tools/gpu`. The selected target may retain its current versions if no suitable update is available. Its transitive dependencies can change, and the unchanged `zstd >=1.5,<2` constraint still applies.
@@ -162,15 +170,15 @@ Expect another consistent report covering all four targets. Review and adopt the
 The repository provides complete scripts for this workflow. From a new terminal in the repository, run:
 
 ```bash
-pixi run -e demos bash examples/demos/cli.sh
-pixi run -e demos bash examples/demos/workspace.sh
-pixi run -e demos bash examples/demos/locks.sh
+pixi run -e demos bash demos/cli.sh
+pixi run -e demos bash demos/workspace.sh
+pixi run -e demos bash demos/locks.sh
 ```
 
-Each script runs in a fresh temporary directory, prints the commands and selected output, checks the results and removes its generated files on exit. The scripts share {download}`common.sh <../../examples/demos/common.sh>`. The workspace and saved-lock scripts use the same {download}`manifest <../../examples/demos/workspace/conda.toml>` as this tutorial.
+Each script runs in a fresh temporary directory, prints the commands and selected output, checks the results and removes its generated files on exit. The scripts share {download}`common.sh <../../demos/common.sh>`. The workspace and saved-lock scripts use the same {download}`manifest <../../demos/workspace/conda.toml>` as this tutorial.
 
-- {download}`cli.sh <../../examples/demos/cli.sh>` resolves inline specs and an environment YAML file, then exports normalized declarations without solving.
-- {download}`workspace.sh <../../examples/demos/workspace.sh>` checks discovery, target selection, the matrix lock, validation, mismatch reporting and selective update.
-- {download}`locks.sh <../../examples/demos/locks.sh>` checks extraction, generic lock conversion, normalized output and SBOM package identities, hashes and declared roots.
+- {download}`cli.sh <../../demos/cli.sh>` resolves inline specs and an environment YAML file, then exports normalized declarations without solving.
+- {download}`workspace.sh <../../demos/workspace.sh>` checks discovery, target selection, the matrix lock, validation, mismatch reporting and selective update.
+- {download}`locks.sh <../../demos/locks.sh>` checks extraction, generic lock conversion, normalized output and SBOM package identities, hashes and declared roots.
 
 Continue with {doc}`http-api` to perform these operations through the service, or {doc}`../reference/cli` for exact command options and exit statuses.

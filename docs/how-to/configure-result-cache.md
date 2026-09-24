@@ -1,6 +1,14 @@
+(demo-cache)=
 # Configure result caching
 
-Watch the {ref}`demo-cache` demo or run its checked-in script.
+```{raw} html
+<picture>
+  <source srcset="../../cache.png" media="(prefers-reduced-motion: reduce)">
+  <img class="presto-demo" src="../../cache.gif" width="1200" loading="lazy" alt="Retrieve retained bytes after restarting a service with a file cache">
+</picture>
+```
+
+{download}`Example transcript <../../demos/cache.txt>` · {download}`Static preview <../../demos/cache.png>` · {download}`Runnable example <../../demos/cache.sh>` · {download}`VHS tape <../../demos/cache.tape>`
 
 conda-presto caches successful `/resolve` responses in a bounded in-process cache. A file or Redis store can retain entries across service restarts. Retained entries are available through `/r/<hash>`.
 

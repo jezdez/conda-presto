@@ -1,6 +1,14 @@
+(demo-docker)=
 # Run conda-presto with Docker
 
-Watch the {ref}`demo-docker` demo or run its checked-in script.
+```{raw} html
+<picture>
+  <source srcset="../../docker.png" media="(prefers-reduced-motion: reduce)">
+  <img class="presto-demo" src="../../docker.gif" width="1200" loading="lazy" alt="Build and run the Presto container and resolve a Linux environment">
+</picture>
+```
+
+{download}`Example transcript <../../demos/docker.txt>` · {download}`Static preview <../../demos/docker.png>` · {download}`Runnable example <../../demos/docker.sh>` · {download}`VHS tape <../../demos/docker.tape>`
 
 Build current source with the canonical server recipe:
 
