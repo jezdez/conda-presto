@@ -1,6 +1,6 @@
 # Parse and solve a workspace manifest
 
-Watch the {ref}`demo-workspace` demo or run its checked-in script.
+Watch the {ref}`demo-workspace` demo and follow the commands below.
 
 Discover the environments in a workspace, inspect their requirements and
 solve selected targets into a combined lock. Parse mode reads declarations

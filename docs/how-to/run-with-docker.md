@@ -1,7 +1,5 @@
 # Run conda-presto with Docker
 
-{download}`Runnable example <../../demos/docker.sh>`
-
 Build current source with the canonical server recipe:
 
 ```bash

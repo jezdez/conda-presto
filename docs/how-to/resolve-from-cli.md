@@ -8,7 +8,7 @@
 </picture>
 ```
 
-{download}`Example transcript <../../demos/cli.txt>` · {download}`Static preview <../../demos/cli.png>` · {download}`Runnable example <../../demos/cli.sh>` · {download}`VHS tape <../../demos/cli.tape>`
+{download}`Static preview <../../demos/cli.png>` · {download}`VHS tape <../../demos/cli.tape>`
 
 Use the one-shot command when conda-presto is installed locally. Save the shared {download}`environment.yml <../../demos/workspace/environment.yml>` and {download}`extra-deps.yml <../../demos/workspace/extra-deps.yml>` fixtures in the current directory:
 

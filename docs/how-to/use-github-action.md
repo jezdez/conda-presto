@@ -1,7 +1,5 @@
 # Use conda-presto in GitHub Actions
 
-{download}`Runnable example <../../demos/action.sh>`
-
 Configure the repository variable `CONDA_PRESTO_URL` with your service's HTTPS base URL. The Action sends environment files and channel settings to that service.
 
 The example targets current main. Pin a reviewed commit for a production workflow.
@@ -58,7 +56,7 @@ For the workspace manifest in {doc}`parse-workspace`, select named environments 
     path: conda.lock
 ```
 
-A complete {download}`workspace workflow <../../demos/action/workflow.yml>` and its {download}`manifest <../../demos/action/conda.toml>` are checked in with the demo. The hosted Action smoke test uses that same manifest.
+A complete {download}`workspace workflow <../../demos/action/workflow.yml>` and its {download}`manifest <../../demos/action/conda.toml>` are available in the repository. The hosted Action smoke test uses that same manifest.
 
 The lock contains all four selected solutions. Omit `environments` and `platforms` to solve every declared environment and target. Workspace requests use manifest channels and do not accept additional `specs` or `channels`.
 

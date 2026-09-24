@@ -1,7 +1,5 @@
 # Monitor the service
 
-{download}`Runnable example <../../demos/operations.sh>`
-
 Check readiness before sending solves:
 
 ```bash

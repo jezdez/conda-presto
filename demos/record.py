@@ -1,10 +1,9 @@
-"""Record the executable documentation examples with VHS."""
+"""Record the documentation demos with VHS."""
 
 from __future__ import annotations
 
 import argparse
 import subprocess
-import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -32,25 +31,10 @@ def main() -> None:
         print(f"Recording {name}", flush=True)
         status = output / f"{name}.status"
         status.unlink(missing_ok=True)
-        media = [output / f"{name}.{suffix}" for suffix in ("gif", "png", "txt")]
+        media = [output / f"{name}.{suffix}" for suffix in ("gif", "png")]
         for path in media:
             path.unlink(missing_ok=True)
         try:
-            example = subprocess.run(
-                ["bash", f"demos/{name}.sh"],
-                cwd=ROOT,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                text=True,
-                timeout=600,
-            )
-            transcript = example.stdout.replace(
-                sys.prefix, "<demo environment>"
-            ).replace(str(ROOT), "<checkout>")
-            (output / f"{name}.txt").write_text(
-                "\n".join(line.rstrip() for line in transcript.splitlines()) + "\n"
-            )
-            example.check_returncode()
             subprocess.run(
                 ["vhs", f"demos/{name}.tape"],
                 cwd=ROOT,

@@ -8,7 +8,7 @@
 </picture>
 ```
 
-{download}`Example transcript <../../demos/http.txt>` · {download}`Static preview <../../demos/http.png>` · {download}`Runnable example <../../demos/http.sh>` · {download}`VHS tape <../../demos/http.tape>`
+{download}`Static preview <../../demos/http.png>` · {download}`VHS tape <../../demos/http.tape>`
 
 Follow {doc}`../quickstart` to install and start the server. The HTTP examples use `curl` and `jq`. Workspace steps require the current source described in {doc}`workspaces`.
 
@@ -83,7 +83,7 @@ The document describes selected package records. It does not establish which fil
 </picture>
 ```
 
-{download}`Example transcript <../../demos/http-workspace.txt>` · {download}`Static preview <../../demos/http-workspace.png>` · {download}`Runnable example <../../demos/http-workspace.sh>` · {download}`VHS tape <../../demos/http-workspace.tape>`
+{download}`Static preview <../../demos/http-workspace.png>` · {download}`VHS tape <../../demos/http-workspace.tape>`
 
 Save the shared {download}`workspace manifest <../../demos/workspace/conda.toml>` as `conda.toml`. It declares `default` and `tools`, each with `cpu` and `gpu` targets backed by `linux-64`. Both targets declare glibc 2.28, and `gpu` also declares CUDA 12. These are target requirements, independent of the server's hardware.
 
@@ -135,7 +135,7 @@ The returned workspace lock contains all four environment/target selections. Kee
 </picture>
 ```
 
-{download}`Example transcript <../../demos/http-update.txt>` · {download}`Static preview <../../demos/http-update.png>` · {download}`Runnable example <../../demos/http-update.sh>` · {download}`VHS tape <../../demos/http-update.tape>`
+{download}`Static preview <../../demos/http-update.png>` · {download}`VHS tape <../../demos/http-update.tape>`
 
 Upload the matching `conda.toml` and `conda.lock` from the previous section:
 

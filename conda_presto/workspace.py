@@ -22,7 +22,7 @@ from conda.models.environment import Environment, EnvironmentConfig
 from conda.models.version import VersionOrder
 from conda_workspaces.context import WorkspaceContext
 from conda_workspaces.manifests import PARSER_BY_FILENAME
-from conda_workspaces.models import redact_channel_name
+from conda_workspaces.models import redact_channel_name, redact_channel_url
 from conda_workspaces.resolver import resolve_environment
 from packaging.requirements import Requirement
 

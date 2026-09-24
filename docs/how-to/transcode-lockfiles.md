@@ -1,6 +1,6 @@
 # Export lockfiles without solving
 
-Watch the {ref}`demo-locks` demo or run its checked-in script.
+Watch the {ref}`demo-locks` demo and follow the commands below.
 
 For named environment extraction from workspace `conda.lock` files, use {doc}`extract-workspace-lock`. That workflow uses explicit selection and preserves source lock metadata.
 

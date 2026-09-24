@@ -8,7 +8,7 @@
 </picture>
 ```
 
-{download}`Example transcript <../../demos/locks.txt>` · {download}`Static preview <../../demos/locks.png>` · {download}`Runnable example <../../demos/locks.sh>` · {download}`VHS tape <../../demos/locks.tape>`
+{download}`Static preview <../../demos/locks.png>` · {download}`VHS tape <../../demos/locks.tape>`
 
 Use a workspace `conda.lock` to recover exact saved package selections without solving again. Start with the combined lock produced by {doc}`parse-workspace`, containing `default` and `test` for `linux-64` and `osx-arm64`.
 

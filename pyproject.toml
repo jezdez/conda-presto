@@ -127,12 +127,10 @@ uvicorn = ">=0.34"
 brotli-python = ">=1.1"
 redis-py = ">=5.0"
 
-[tool.pixi.feature.examples.dependencies]
+[tool.pixi.feature.demos.dependencies]
 bash = ">=5.2"
 curl = ">=8"
 jq = ">=1.7"
-
-[tool.pixi.feature.demos.dependencies]
 bat = ">=0.25"
 # VHS 0.12 cancels the rendering context before writing videos and screenshots.
 vhs = ">=0.11,<0.12"
@@ -151,8 +149,7 @@ prod = { features = ["server"], solve-group = "default" }
 redis = { features = ["server"], solve-group = "default" }
 cli = { solve-group = "default" }
 docs = { features = ["docs"], solve-group = "default" }
-examples = { features = ["server", "examples"], solve-group = "default" }
-demos = { features = ["server", "examples", "demos"], solve-group = "default" }
+demos = { features = ["server", "demos"], solve-group = "default" }
 release = { features = ["release"], no-default-feature = true }
 
 [tool.pixi.activation.env]
@@ -167,9 +164,6 @@ CONDA_SOLVER = "rattler"
 
 [tool.pixi.feature.docs.tasks]
 docs = "sphinx-build -n -W --keep-going -b dirhtml docs docs/_build/dirhtml"
-
-[tool.pixi.feature.examples.tasks]
-examples-check = "bash demos/check.sh"
 
 [tool.pixi.feature.demos.tasks]
 demos = "python demos/record.py"

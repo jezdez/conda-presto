@@ -51,10 +51,8 @@ jobs:
       - uses: prefix-dev/setup-pixi@d3f436a425481402e6a95a1d1fc10331c708cd9e # v0.10.2
         with:
           pixi-version: v0.80.0
-          environments: docs examples
+          environments: docs
           cache: true
-      - name: Check documentation examples
-        run: pixi run --locked -e examples bash demos/check.sh cli workspace locks http http-workspace http-update cache trust action docker operations
       - name: Build docs
         run: pixi run --locked -e docs docs
       - name: Upload artifact

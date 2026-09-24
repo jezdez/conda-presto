@@ -1,6 +1,6 @@
 # Demos
 
-Six recordings show the public CLI and HTTP workflows. Each appears beside its instructions, with a static preview for reduced motion and a transcript from a complete checked example run. Package versions, identifiers and timings depend on the recording environment.
+Six recordings show the public CLI and HTTP workflows. Each appears beside its written instructions, with a static preview for reduced motion. Package versions, identifiers and timings depend on the recording environment.
 
 ## CLI
 
@@ -20,18 +20,17 @@ Six recordings show the public CLI and HTTP workflows. Each appears beside its i
 
 The workspace features require the source checkout described in {doc}`../tutorials/workspaces`. Solving requires public channel access.
 
-## Run or record an example
+## Record a demo
 
 From the repository root:
 
 ```bash
-pixi run --locked -e examples examples-check
 pixi run --locked -e demos demos workspace
 pixi run --locked -e demos demos http http-workspace http-update
 ```
 
-The first command checks all runnable examples except Docker. The other commands record selected workflows. Omit the names to record all six.
+These commands record selected workflows. Omit the names to record all six. Each VHS tape contains its workflow commands and checks, with temporary directories, fixtures and local services prepared by shared setup.
 
 The locked recording environment supplies VHS, ttyd, FFmpeg and `bat`. VHS locates or downloads a Chromium browser. The HTTP examples start local services and clean them up on exit. Recording does not require Docker.
 
-Shared settings, tapes, fixtures, recordings and transcripts live in `demos/`. See its {download}`recording guide <../../demos/README.md>` for prerequisites and the additional runnable operator examples. CI checks the examples and builds documentation from committed media.
+Shared settings, tapes, fixtures and recordings live in `demos/`. See its {download}`recording guide <../../demos/README.md>` for prerequisites. Documentation CI builds committed media. Product and GitHub Action tests run in their existing CI workflows.

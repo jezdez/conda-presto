@@ -1,5 +1,0 @@
-{
-  "artifact_name": "a.txt",
-  "expected_identity": "https://github.com/sigstore-conformance/extremely-dangerous-public-oidc-beacon/.github/workflows/extremely-dangerous-oidc-beacon.yml@refs/heads/main",
-  "expected_issuer": "https://token.actions.githubusercontent.com"
-}

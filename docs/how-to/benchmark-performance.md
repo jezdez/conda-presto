@@ -1,6 +1,6 @@
 # Benchmark the service
 
-Run the {download}`diagnostics example <../../demos/operations.sh>` to check readiness, rejected requests and retained-result timing.
+See {doc}`monitor-service` for readiness and capability checks.
 
 Compare the same specs, channels and platforms against the same metadata. Separate cold startup, uncached solves, persistent index reuse and full-result retrieval.
 

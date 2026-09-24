@@ -1,6 +1,6 @@
 # Troubleshoot the service
 
-Run the {download}`diagnostics example <../../demos/operations.sh>` to check readiness, rejected requests and retained-result timing.
+See {doc}`monitor-service` for readiness and capability checks.
 
 ## The command is missing
 

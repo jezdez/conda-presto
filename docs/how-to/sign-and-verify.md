@@ -1,10 +1,8 @@
 # Sign and verify a retained output
 
-{download}`Runnable example <../../demos/trust.sh>`
-
 Sign an artifact already retained by this deployment, then verify its exact bytes against an identity approved by the recipient. The signature describes a later output-signing step. It does not record the original solve inputs.
 
-The runnable example verifies a public signed fixture offline without signing credentials. The live signing recipe below makes OIDC, certificate-authority and transparency-log requests.
+The signing recipe below makes OIDC, certificate-authority and transparency-log requests.
 
 ## Supply an unattended identity
 
