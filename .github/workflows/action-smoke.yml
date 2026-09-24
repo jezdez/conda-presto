@@ -9,6 +9,8 @@ on:
       - pyproject.toml
       - pixi.lock
       - tests/test_action.py
+      - examples/demos/action/**
+      - examples/demos/workspace/environment.yml
   workflow_dispatch:
 
 permissions:
@@ -53,28 +55,10 @@ jobs:
           done
           exit 1
 
-      - name: Write environment and workspace files
+      - name: Use the documented environment and workspace examples
         run: |
-          cat > environment.yml <<'YAML'
-          channels:
-            - conda-forge
-          dependencies:
-            - zlib
-          YAML
-
-          cat > conda.toml <<'TOML'
-          [workspace]
-          name = "action-smoke"
-          channels = ["conda-forge"]
-          platforms = ["linux-64", "osx-arm64"]
-
-          [dependencies]
-          zlib = "*"
-
-          [environments]
-          default = []
-          test = []
-          TOML
+          cp examples/demos/workspace/environment.yml environment.yml
+          cp examples/demos/action/conda.toml conda.toml
 
       - name: Resolve two platforms
         id: native

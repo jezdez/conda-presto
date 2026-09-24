@@ -1,5 +1,7 @@
 # Parse and solve a workspace manifest
 
+Watch the {ref}`demo-workspace` demo or run its checked-in script.
+
 Discover the environments in a workspace, inspect their requirements and
 solve selected targets into a combined lock. Parse mode reads declarations
 without solving. Workspace parsing requires conda-workspaces 0.10.0 or later.

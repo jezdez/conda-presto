@@ -8,12 +8,12 @@ Two kinds of entry share the configured capacity:
 
 | Entry | Storage key | Meaning |
 |---|---|---|
-| Request lookup | `request-v1:<digest>` | Maps a normalized request and metadata state to a retained artifact |
+| Request lookup | `request-v1:<digest>` | Maps operation inputs and, for solves, metadata state to a retained artifact |
 | Artifact | `resolve-v1:<digest>` | Stores exact response bytes and media type for `/r/<digest>` |
 
 The artifact digest is SHA-256 over the UTF-8 media type, a NUL separator and the exact body. It is not the SHA-256 of the body alone. Artifact endpoints report a separate `sha256` when callers need that file digest. Two renders with different bytes, including different SBOM timestamps, receive different artifact keys.
 
-The request digest covers:
+For solves, the request digest covers:
 
 - normalized specs, ordered channels and platforms, and output selector
 - exporter callback identity and provider distribution versions
@@ -21,9 +21,13 @@ The request digest covers:
 - effective conda solve settings, pins and target virtual-package records
 - metadata source and local repodata file size, timestamps, device and inode
 
-Files are parsed before those inputs are assembled. Raw filenames and content are not direct key fields. Changed local metadata markers can cause another lookup even when a later render produces identical artifact bytes. Independent hosts can have different request keys.
+Ordinary input files are parsed before those inputs are assembled. Their raw filenames and content are not direct key fields. Workspace solve keys also include the selected environment/target requirements, effective virtual packages and workspace provider versions. Metadata inspection covers only the channel/subdir combinations used by those targets.
 
-A request lookup requires fresh, unchanged metadata markers. Publication requires a safe metadata transition across the solve. Missing metadata files, local file channels and ambiguous shard fallback prevent retention. Unidentifiable exporter providers also bypass result caching.
+Workspace lock identity includes a digest of the uploaded lock content, saved selections, parser provider versions and the companion manifest content digest and format when supplied. Locked export and SBOM keys combine this identity with the operation and exporter identity, without inspecting current repodata. Update request keys include the lock identity, selected dependency names, target solve identity and effective update settings. Changing uploaded lock or companion-manifest content therefore changes these request identities even when the parsed requirements are equivalent.
+
+Changed local metadata markers can cause another lookup even when a later render produces identical artifact bytes. Independent hosts can have different request keys.
+
+A solve request lookup requires fresh, unchanged metadata markers. Publication requires a safe metadata transition across the solve. Missing metadata files, local file channels and ambiguous shard fallback prevent solve-result retention. Unidentifiable exporter providers also bypass result caching.
 
 ## Retrieval and credentials
 

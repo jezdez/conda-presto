@@ -1,5 +1,7 @@
 # Resolve from the CLI
 
+Watch the {ref}`demo-cli` demo or run its checked-in script.
+
 Use the one-shot command when conda-presto is installed locally:
 
 ```bash

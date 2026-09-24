@@ -1,0 +1,27 @@
+
+Verify a public Sigstore fixture offline through Presto
+The expected signer and staging trust are fixed for this test fixture.
+
+$ python verify.py artifact.txt
+{
+  "signature_verified": true,
+  "artifact_verified": true,
+  "signer_verified": true,
+  "claims_checked": false
+}
+
+Changing one byte invalidates the artifact match
+
+$ cp artifact.txt tampered.txt
+
+$ bash -c 'printf "\n" >> tampered.txt'
+
+$ python verify.py tampered.txt --expect-error artifact-mismatch
+Rejected: artifact-mismatch
+
+A valid signature still requires the expected signer
+
+$ python verify.py artifact.txt --identity https://example.org/different-workflow --expect-error untrusted-identity
+Rejected: untrusted-identity
+
+No signing credentials or network access are needed. Provenance claims remain unchecked.

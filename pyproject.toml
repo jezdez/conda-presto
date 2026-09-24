@@ -127,6 +127,15 @@ uvicorn = ">=0.34"
 brotli-python = ">=1.1"
 redis-py = ">=5.0"
 
+[tool.pixi.feature.examples.dependencies]
+bash = ">=5.2"
+curl = ">=8"
+jq = ">=1.7"
+
+[tool.pixi.feature.demos.dependencies]
+# VHS 0.12 cancels the rendering context before writing videos and screenshots.
+vhs = ">=0.11,<0.12"
+
 [tool.pixi.feature.release.dependencies]
 hatch-vcs = ">=0.2.0"
 hatchling = ">=1.12.2"
@@ -141,6 +150,8 @@ prod = { features = ["server"], solve-group = "default" }
 redis = { features = ["server"], solve-group = "default" }
 cli = { solve-group = "default" }
 docs = { features = ["docs"], solve-group = "default" }
+examples = { features = ["server", "examples"], solve-group = "default" }
+demos = { features = ["server", "examples", "demos"], solve-group = "default" }
 release = { features = ["release"], no-default-feature = true }
 
 [tool.pixi.activation.env]
@@ -154,11 +165,17 @@ CONDA_JSON = "true"
 CONDA_SOLVER = "rattler"
 
 [tool.pixi.feature.docs.tasks]
-docs = "sphinx-build -b dirhtml docs docs/_build/dirhtml"
+docs = "sphinx-build -n -W --keep-going -b dirhtml docs docs/_build/dirhtml"
+
+[tool.pixi.feature.examples.tasks]
+examples-check = "bash examples/demos/check.sh"
+
+[tool.pixi.feature.demos.tasks]
+demos = "python examples/demos/record.py"
 
 [tool.pixi.tasks]
-lint = { cmd = "ruff check conda_presto tests", description = "Check code style" }
-format = { cmd = "ruff format conda_presto tests", description = "Auto-format code" }
+lint = { cmd = "ruff check conda_presto tests examples/demos", description = "Check code style" }
+format = { cmd = "ruff format conda_presto tests examples/demos", description = "Auto-format code" }
 test = { cmd = "pytest", description = "Run tests" }
 bench = { cmd = "pytest tests/test_benchmarks.py --benchmark-enable", description = "Run benchmarks" }
 serve = { cmd = "uvicorn conda_presto.app:app --reload --no-access-log", description = "Run dev server" }

@@ -10,6 +10,7 @@ configure-result-cache
 monitor-service
 troubleshoot
 deploy-securely
+sign-and-verify
 transcode-lockfiles
 extract-workspace-lock
 check-workspace-lock

@@ -6,6 +6,7 @@ conda-presto exposes conda operations through an HTTP service so other systems c
 
 - Resolve inline specs or supported environment files through conda-rattler-solver
 - Render native JSON or an installed conda exporter format
+- Discover and solve named workspace environments and targets, then check, update or extract their saved locks
 - Convert supported lockfiles over HTTP without solving or downloading packages
 - Generate CycloneDX SBOMs from resolved package records
 - Sign retained artifacts and verify supplied artifacts with Sigstore
@@ -59,6 +60,8 @@ The server image listens on port 8000 and uses a persistent worker. Call `/resol
 
 - [Quick start](https://jezdez.github.io/conda-presto/quickstart/)
 - [HTTP tutorial](https://jezdez.github.io/conda-presto/tutorials/http-api/)
+- [Workspace tutorial](https://jezdez.github.io/conda-presto/tutorials/workspaces/)
+- [Recorded demos and runnable examples](https://jezdez.github.io/conda-presto/demos/)
 - [How-to guides](https://jezdez.github.io/conda-presto/how-to/)
 - [API and configuration reference](https://jezdez.github.io/conda-presto/reference/)
 - [Architecture and operation](https://jezdez.github.io/conda-presto/explanation/)

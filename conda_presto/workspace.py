@@ -418,7 +418,10 @@ class WorkspaceInput:
                                     name=target.environment,
                                     platform=target.subdir,
                                     config=EnvironmentConfig(
-                                        channels=tuple(target.channels)
+                                        channels=tuple(
+                                            redact_channel_url(channel)
+                                            for channel in resolved.channels
+                                        )
                                     ),
                                     explicit_packages=records,
                                 )

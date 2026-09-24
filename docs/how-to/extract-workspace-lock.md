@@ -1,5 +1,7 @@
 # Extract a named environment from a saved lock
 
+Watch the {ref}`demo-locks` demo or run its checked-in script.
+
 Use a workspace `conda.lock` to recover exact saved package selections without solving again. Start with the combined lock produced by {doc}`parse-workspace`, containing `default` and `test` for `linux-64` and `osx-arm64`.
 
 ## Inspect and extract

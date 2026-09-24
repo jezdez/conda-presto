@@ -6,13 +6,17 @@ Integer settings use decimal strings. Boolean settings accept `1`, `true`, `yes`
 
 ## Channels and platforms
 
-HTTP requests use channels from the request, then the input file, then `CONDA_PRESTO_CHANNELS`. The CLI also considers conda's effective channels. The server checks channels against `CONDA_PRESTO_ALLOWED_CHANNELS` using resolved URLs.
+Ordinary HTTP solves use channels from the request, then the input file, then `CONDA_PRESTO_CHANNELS`. Ordinary CLI solves use conda's effective channels unless they are empty or only `defaults`, then use file channels or `CONDA_PRESTO_CHANNELS`. The server checks channels against `CONDA_PRESTO_ALLOWED_CHANNELS` using resolved URLs.
 
-Request platforms are explicit, or default to the native platform. `CONDA_PRESTO_PLATFORMS` only selects startup warmup targets. Target virtual-package overrides and other effective conda virtual records participate in result-cache identity.
+Ordinary solves use explicit platforms or default to conda's startup subdir. `CONDA_PRESTO_PLATFORMS` only selects startup warmup targets. Presto's OS-version settings provide virtual-package defaults for each target, including the native subdir. Conda virtual-package plugins and `CONDA_OVERRIDE_*` values can also affect these solves.
+
+Workspace solves use channels and requirements composed from the selected manifest environments and targets. They reject extra specs and channel overrides. Without selectors, they solve every declared environment and target. A manifest with no declared platforms requires an explicit conda subdir. A subdir selector must identify one declared target unambiguously when targets are declared.
+
+Workspace targets start with Presto's OS-version defaults, then apply manifest system requirements and suppress host virtual-package detections and ambient `CONDA_OVERRIDE_*` values for overridable plugins. Effective target virtual-package records participate in result-cache identity. See {doc}`/how-to/extract-workspace-lock` for saved target selection and {doc}`/tutorials/workspaces` for updates.
 
 ## Execution and storage
 
-`CONDA_PRESTO_CONCURRENCY` limits simultaneous foreground requests. `CONDA_PRESTO_WORKERS` controls processes within a multiplatform solve. Persistent mode reuses one worker and its indexes. The server image enables that mode with one foreground slot.
+`CONDA_PRESTO_CONCURRENCY` limits simultaneous foreground requests. `CONDA_PRESTO_WORKERS` controls processes within an ordinary multiplatform solve. Workspace solves process selected environment/target pairs sequentially. Persistent mode reuses one worker, including indexes from ordinary solves. The server image enables that mode with one foreground slot.
 
 When no backend is explicit, a Redis URL selects Redis, otherwise a configured directory selects file storage, otherwise memory is used. See {doc}`cache` for limits and freshness.
 
@@ -22,7 +26,7 @@ Standard installations and the server image include conda-sboms for SBOM generat
 
 Presto uses conda-sigstore's statement and verification APIs, which work with released conda. Conda-sigstore's separate package-install verification requires the unreleased conda hook proposed in [conda #16518](https://github.com/conda/conda/pull/16518). That hook is not needed by Presto's `/sign` or `/verify` endpoints.
 
-Signing is disabled by default. It requires explicit enablement, noninteractive identity credentials and a configured trust choice. A trust-file path alone does not enable signing. Verification receives the recipient's expected identity and issuer with the request. See {doc}`environment-variables` for exact settings and {doc}`http-api` for fields.
+Signing is disabled by default. It requires explicit enablement, noninteractive identity credentials and a configured trust choice. A trust-file path alone does not enable signing. Verification receives the recipient's expected identity and issuer with the request. Follow {doc}`/how-to/sign-and-verify` for an operator recipe, {doc}`environment-variables` for exact settings and {doc}`http-api` for fields.
 
 ## Source workspace
 

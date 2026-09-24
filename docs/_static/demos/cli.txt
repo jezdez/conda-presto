@@ -1,0 +1,56 @@
+
+Resolve inline specs as native JSON
+
+$ conda-presto -c conda-forge -p linux-64 zlib > specs.json
+
+$ jq '[.[] | {platform, packages: [.packages[].name], error}]' specs.json
+[
+  {
+    "platform": "linux-64",
+    "packages": [
+      "libzlib",
+      "zlib"
+    ],
+    "error": null
+  }
+]
+
+Resolve an environment file through the conda subcommand
+
+$ cat environment.yml
+name: presto-demo
+channels:
+  - conda-forge
+dependencies:
+  - zlib>=1.3,<2
+  - zstd>=1.5,<2
+
+$ conda presto -f environment.yml -p linux-64 > environment.json
+
+$ jq '[.[] | {platform, packages: [.packages[].name], error}]' environment.json
+[
+  {
+    "platform": "linux-64",
+    "packages": [
+      "libzlib",
+      "zlib",
+      "zstd"
+    ],
+    "error": null
+  }
+]
+
+Normalize declarations without solving
+
+$ conda-presto --export -f environment.yml --format requirements > requirements.txt
+
+$ cat requirements.txt
+# This file may be used to create an environment using:
+# $ conda create --name <env> --file <this file>
+# platform: osx-arm64
+# created-by: conda 26.5.3
+# Note: This is a conda requirements file (MatchSpec format)
+# Contains conda package specifications, not pip requirements
+
+zlib[version='>=1.3,<2']
+zstd[version='>=1.5,<2']

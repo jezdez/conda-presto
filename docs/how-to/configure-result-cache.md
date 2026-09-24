@@ -1,5 +1,7 @@
 # Configure result caching
 
+Watch the {ref}`demo-cache` demo or run its checked-in script.
+
 conda-presto caches successful `/resolve` responses in a bounded in-process cache. A file or Redis store can retain entries across service restarts. Retained entries are available through `/r/<hash>`.
 
 Persistent entries expire after 24 hours. Encoded values larger than 64 MiB are

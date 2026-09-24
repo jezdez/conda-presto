@@ -1,0 +1,32 @@
+name: Lock a workspace
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - conda.toml
+
+permissions:
+  contents: read
+
+jobs:
+  lock:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: jezdez/conda-presto@main
+        id: workspace
+        with:
+          endpoint: ${{ vars.CONDA_PRESTO_URL }}
+          file: conda.toml
+          environments: test
+          platforms: linux-64,osx-arm64
+          format: conda-workspaces-lock-v1
+          output: conda.lock
+
+      - uses: actions/upload-artifact@v4
+        if: steps.workspace.outputs.solved == 'true'
+        with:
+          name: conda-lock
+          path: conda.lock

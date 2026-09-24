@@ -1,5 +1,7 @@
 # Resolve and save an output
 
+Watch the {ref}`demo-http` demo or run its checked-in script.
+
 Follow {doc}`../quickstart` to install and start the server. This example resolves zlib for Linux, saves a lockfile and retrieves the same bytes from the cache.
 
 ```bash

@@ -1,5 +1,7 @@
 # Monitor the service
 
+Watch the {ref}`demo-operations` demo or run its checked-in script.
+
 Check readiness before sending solves:
 
 ```bash

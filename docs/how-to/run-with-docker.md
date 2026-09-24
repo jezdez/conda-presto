@@ -1,5 +1,7 @@
 # Run conda-presto with Docker
 
+Watch the {ref}`demo-docker` demo or run its checked-in script.
+
 Build current source with the canonical server recipe:
 
 ```bash

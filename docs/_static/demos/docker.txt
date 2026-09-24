@@ -1,0 +1,24 @@
+
+Use the server image built from this checkout before recording
+Image: conda-presto:docs-demo
+
+Run the container on a loopback-only random port
+$ docker run --detach --publish 127.0.0.1::8000 --cap-drop ALL --security-opt no-new-privileges --env CONDA_PRESTO_PLATFORMS=linux-64 conda-presto:docs-demo
+
+$ curl --fail --silent --show-error http://127.0.0.1:32769/health
+{"status":"ok"}
+$ curl --fail --silent --show-error 'http://127.0.0.1:32769/resolve?spec=zlib&channel=conda-forge&platform=linux-64' > result.json
+
+$ jq '[.[] | {platform, error, packages: [.packages[].name]}]' result.json
+[
+  {
+    "platform": "linux-64",
+    "error": null,
+    "packages": [
+      "libzlib",
+      "zlib"
+    ]
+  }
+]
+
+The container resolved the requested Linux environment

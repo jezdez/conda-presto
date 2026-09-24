@@ -1,27 +1,33 @@
 # Environment variable reference
 
 conda-presto reads these settings when its configuration module is imported.
-The scope column distinguishes direct solves and HTTP servers.
+The scope column identifies the operations affected by each setting.
 
-## Direct solve settings
+## Solve settings
 
-These settings affect `conda presto` and HTTP resolve operations.
+These settings affect `conda presto` and HTTP operations. Ordinary solves use inline specs or non-workspace input files. Workspace solves compose requirements from manifest environments and targets.
 
 | Variable | Default | Scope | Purpose |
 |---|---|---|---|
-| `CONDA_PRESTO_CHANNELS` | `conda-forge` | Direct CLI and HTTP | HTTP fallback when no request or input file supplies channels. CLI fallback when conda's effective channels are empty or only `defaults` and no file supplies channels. Also used for server startup warmup. |
-| `CONDA_PRESTO_WORKERS` | `min(4, cpu_count)` | Direct multi-platform solves | Process-pool size for platforms within one request. |
-| `CONDA_PRESTO_MAX_INDEX_CACHE_ENTRIES` | `128` | Direct solve processes | Maximum retained rattler indexes. Set to `0` to disable index retention. |
-| `CONDA_PRESTO_GLIBC_VERSION` | `2.17` | Direct Linux solves | Injected virtual `__glibc` version. |
-| `CONDA_PRESTO_LINUX_VERSION` | `5.15` | Direct Linux solves | Injected virtual `__linux` version. |
-| `CONDA_PRESTO_OSX_VERSION` | `11.0` | Direct macOS solves | Injected virtual `__osx` version. |
-| `CONDA_PRESTO_WIN_VERSION` | `0` | Direct Windows solves | Injected virtual `__win` version. |
+| `CONDA_PRESTO_CHANNELS` | `conda-forge` | Ordinary CLI and HTTP | HTTP fallback when no request or input file supplies channels. CLI fallback when conda's effective channels are empty or only `defaults` and no file supplies channels. Also used for server startup warmup. Workspace channels come from the manifest. |
+| `CONDA_PRESTO_WORKERS` | `min(4, cpu_count)` | Ordinary multi-platform solves | Process-pool size for platforms within one request. Workspace targets run sequentially. |
+| `CONDA_PRESTO_MAX_INDEX_CACHE_ENTRIES` | `128` | Ordinary solve processes | Maximum retained rattler indexes in Presto's direct solver path. Set to `0` to disable index retention. |
+| `CONDA_PRESTO_GLIBC_VERSION` | `2.17` | Linux targets | Default virtual `__glibc` version. |
+| `CONDA_PRESTO_LINUX_VERSION` | `5.15` | Linux targets | Default virtual `__linux` version. |
+| `CONDA_PRESTO_OSX_VERSION` | `11.0` | macOS targets | Default virtual `__osx` version. |
+| `CONDA_PRESTO_WIN_VERSION` | `0` | Windows targets | Default virtual `__win` version. |
 
-Direct CLI and public HTTP solves apply these target-model overrides for each
-requested Linux, macOS, or Windows target, including the host's native subdir.
+Ordinary CLI and HTTP solves apply these target-model defaults for each
+requested Linux, macOS, or Windows target, including conda's startup subdir.
 The resulting effective records can also include other virtual-package plugin
 detections or overrides, such as CUDA or architecture records. The public
 result-cache identity captures those effective records per requested platform.
+
+Workspace solves and lock updates apply manifest system requirements over these
+OS-version defaults. For overridable virtual-package plugins, they replace
+ambient `CONDA_OVERRIDE_*` values and suppress host detections for undeclared
+requirements. Workspace cache identity records the effective virtual packages
+for each selected logical target.
 
 ## HTTP server settings
 
@@ -33,9 +39,9 @@ result-cache identity captures those effective records per requested platform.
 | `CONDA_PRESTO_MAX_BODY_BYTES` | `1048576` | Maximum HTTP request body. Excess returns HTTP 413. |
 | `CONDA_PRESTO_MAX_SPECS` | `200` | Maximum specs in one request. |
 | `CONDA_PRESTO_MAX_CHANNELS` | `8` | Maximum channels in one request. |
-| `CONDA_PRESTO_MAX_PLATFORMS` | `8` | Maximum platforms in one request. |
-| `CONDA_PRESTO_SOLVE_TIMEOUT_S` | `60` | Solver deadline used by HTTP requests. Non-abandoned cache-state inspection can extend observed request duration. |
-| `CONDA_PRESTO_PARSE_TIMEOUT_S` | `10` | HTTP file-parse timeout. |
+| `CONDA_PRESTO_MAX_PLATFORMS` | `8` | Maximum platforms in an ordinary request, or selected environment/target pairs in a workspace request. |
+| `CONDA_PRESTO_SOLVE_TIMEOUT_S` | `60` | Deadline for HTTP solves and CLI `--update`, including its input parsing and worker startup. Non-abandoned HTTP cache-state inspection can extend observed request duration. |
+| `CONDA_PRESTO_PARSE_TIMEOUT_S` | `10` | Input-parse timeout for HTTP uploads and CLI `--parse`, `--export`, `--validate` and `--update`. CLI updates also remain subject to their shared solve deadline. |
 | `CONDA_PRESTO_HOST` | `127.0.0.1` | Default for the `--host` server flag. The Docker command fixes `0.0.0.0`. |
 | `CONDA_PRESTO_PORT` | `8000` | Default for the `--port` server flag. The Docker health check follows this setting. |
 | `CONDA_PRESTO_PERSISTENT_WORKER` | `false` | Route HTTP solves through one worker that retains loaded repodata and indexes. Set by Docker. |
@@ -68,10 +74,10 @@ retention behavior.
 |---|---|---|
 | `CONDA_PRESTO_SIGSTORE_SIGNING_ENABLED` | `false` | Enable signing service-produced artifacts with noninteractive credentials and a configured trust choice. |
 | `CONDA_PRESTO_SIGSTORE_ALLOW_PUBLIC_SIGNING` | `false` | Explicitly permit use of the public signing service. |
-| `CONDA_PRESTO_SIGSTORE_TRUST_CONFIG` | unset | Path to an operator-provided Sigstore trust configuration. A path alone does not enable signing. |
+| `CONDA_PRESTO_SIGSTORE_TRUST_CONFIG` | unset | Path to an operator-provided Sigstore `ClientTrustConfig` JSON file. Signing requires both its trusted root and signing configuration. A path alone does not enable signing. |
 | `CONDA_PRESTO_SIGSTORE_OFFLINE` | `false` | Select offline verification using the configured trust material. |
 
-Standard installations include SBOM generation, signing and verification support. Signing is disabled by default. Capability discovery reports configuration and provider availability, not a guarantee that signing credentials are currently usable. See {doc}`configuration` for the conda-sigstore requirements.
+Standard installations include SBOM generation, signing and verification support. Signing is disabled by default. Capability discovery reports configuration and provider availability, not a guarantee that signing credentials are currently usable. See {doc}`configuration` for the conda-sigstore requirements and {doc}`/how-to/sign-and-verify` for supported unattended credentials and request examples.
 
 ## Pixi activation settings
 
