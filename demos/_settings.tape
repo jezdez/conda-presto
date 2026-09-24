@@ -12,7 +12,7 @@ Set Margin 20
 Set MarginFill "#19191b"
 Set Padding 20
 Set Framerate 15
-Set TypingSpeed 40ms
+Set TypingSpeed 1ms
 Set WaitTimeout 5m
 Set Theme "Dark+"
 Env DEMO_PS1 "\[\e[1;38;2;67;176;42m\]$\[\e[0m\] "

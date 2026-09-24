@@ -1,14 +1,12 @@
 Source demos/_settings.tape
 Output demos/locks.gif
 Hide
-Set TypingSpeed 1ms
 Type `source demos/_setup.sh locks`
 Enter
 Wait+Line /\$$/
 Type `clear`
 Enter
 Wait+Line /\$$/
-Set TypingSpeed 40ms
 Show
 Type@60ms `# Inspect exact records from a saved workspace lock`
 Enter
@@ -21,14 +19,12 @@ Enter
 Wait+Line /\$$/
 Sleep 2s
 Hide
-Set TypingSpeed 1ms
 Type `mkdir extracted`
 Enter
 Wait+Line /\$$/
 Type `clear`
 Enter
 Wait+Line /\$$/
-Set TypingSpeed 40ms
 Show
 Type@60ms `# Extract only tools/cpu without solving again`
 Enter
@@ -44,14 +40,12 @@ Enter
 Wait+Line /\$$/
 Sleep 2s
 Hide
-Set TypingSpeed 1ms
 Type `jq -e '.environments == [{name: "tools", platforms: {cpu: "linux-64"}}]' extracted.json > /dev/null`
 Enter
 Wait+Line /\$$/
 Type `clear`
 Enter
 Wait+Line /\$$/
-Set TypingSpeed 40ms
 Show
 Type@60ms `# Render exact package URLs`
 Enter
@@ -64,11 +58,9 @@ Enter
 Wait+Line /\$$/
 Sleep 3s
 Hide
-Set TypingSpeed 1ms
 Type `clear`
 Enter
 Wait+Line /\$$/
-Set TypingSpeed 40ms
 Show
 Type@60ms `# Render a normalized manifest from saved records`
 Enter
@@ -81,11 +73,9 @@ Enter
 Wait+Line /\$$/
 Sleep 2s
 Hide
-Set TypingSpeed 1ms
 Type `clear`
 Enter
 Wait+Line /\$$/
-Set TypingSpeed 40ms
 Show
 Type@60ms `# Convert a generic lock without solving or downloading`
 Enter
@@ -98,11 +88,9 @@ Enter
 Wait+Line /\$$/
 Sleep 2s
 Hide
-Set TypingSpeed 1ms
 Type `clear`
 Enter
 Wait+Line /\$$/
-Set TypingSpeed 40ms
 Show
 Type@60ms `# Render a saved-lock SBOM with declared package roots`
 Enter
@@ -121,7 +109,6 @@ Sleep 2s
 Screenshot demos/locks.png
 Sleep 500ms
 Hide
-Set TypingSpeed 1ms
 Type `demo_finish`
 Enter
 Wait+Line /DEMO_COMPLETE\$$/

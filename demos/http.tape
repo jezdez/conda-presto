@@ -3,14 +3,12 @@ Source demos/_settings.tape
 Output demos/http.gif
 
 Hide
-Set TypingSpeed 1ms
 Type `source demos/_setup.sh http`
 Enter
 Wait+Line /\$$/
 Type `clear`
 Enter
 Wait+Line /\$$/
-Set TypingSpeed 40ms
 Show
 
 Type@60ms `# Discover the installed Pixi output formats`
@@ -27,14 +25,12 @@ Wait+Line /\$$/
 Sleep 2s
 
 Hide
-Set TypingSpeed 1ms
 Type `jq -e '.formats | index("pixi-lock-v6") != null' formats.json > /dev/null`
 Enter
 Wait+Line /\$$/
 Type `clear`
 Enter
 Wait+Line /\$$/
-Set TypingSpeed 40ms
 Show
 
 Type@60ms `# Solve inline requirements through the HTTP API`
@@ -55,14 +51,12 @@ Wait+Line /\$$/
 Sleep 2s
 
 Hide
-Set TypingSpeed 1ms
 Type `jq -e 'length == 1 and .[0].error == null and any(.[0].packages[]; .name == "zlib")' result.json > /dev/null`
 Enter
 Wait+Line /\$$/
 Type `clear`
 Enter
 Wait+Line /\$$/
-Set TypingSpeed 40ms
 Show
 
 Type@60ms `# Upload an environment file and save a Pixi lock`
@@ -90,14 +84,12 @@ Wait+Line /\$$/
 Sleep 2s
 
 Hide
-Set TypingSpeed 1ms
 Type `test -s pixi.lock`
 Enter
 Wait+Line /\$$/
 Type `clear`
 Enter
 Wait+Line /\$$/
-Set TypingSpeed 40ms
 Show
 
 Type@60ms `# Location points to the exact retained bytes`
@@ -126,7 +118,6 @@ Sleep 3s
 Screenshot demos/http.png
 Sleep 500ms
 Hide
-Set TypingSpeed 1ms
 Type `test -n "$location"`
 Enter
 Wait+Line /\$$/

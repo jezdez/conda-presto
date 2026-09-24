@@ -1,14 +1,12 @@
 Source demos/_settings.tape
 Output demos/workspace.gif
 Hide
-Set TypingSpeed 1ms
 Type `source demos/_setup.sh workspace`
 Enter
 Wait+Line /\$$/
 Type `clear`
 Enter
 Wait+Line /\$$/
-Set TypingSpeed 40ms
 Show
 Type@60ms `# Two environments and two named Linux targets`
 Enter
@@ -18,11 +16,9 @@ Enter
 Wait+Line /\$$/
 Sleep 3s
 Hide
-Set TypingSpeed 1ms
 Type `clear`
 Enter
 Wait+Line /\$$/
-Set TypingSpeed 40ms
 Show
 Type@60ms `# Discover without selecting the host platform`
 Enter
@@ -38,14 +34,12 @@ Enter
 Wait+Line /\$$/
 Sleep 2s
 Hide
-Set TypingSpeed 1ms
 Type `jq -e '.selected == [] and ([.environments[].name] | sort) == ["default", "tools"] and all(.environments[]; .platforms == {cpu: "linux-64", gpu: "linux-64"})' discovery.json > /dev/null`
 Enter
 Wait+Line /\$$/
 Type `clear`
 Enter
 Wait+Line /\$$/
-Set TypingSpeed 40ms
 Show
 Type@60ms `# Select tools/gpu with declared glibc and CUDA`
 Enter
@@ -58,14 +52,12 @@ Enter
 Wait+Line /\$$/
 Sleep 2s
 Hide
-Set TypingSpeed 1ms
 Type `jq -e '.selected | length == 1 and .[0].environment == "tools" and .[0].platform == "gpu" and .[0].subdir == "linux-64" and .[0].system_requirements.glibc == "2.28" and .[0].system_requirements.cuda == "12"' selected.json > /dev/null`
 Enter
 Wait+Line /\$$/
 Type `clear`
 Enter
 Wait+Line /\$$/
-Set TypingSpeed 40ms
 Show
 Type@60ms `# Solve and validate the complete four-target matrix`
 Enter
@@ -81,7 +73,6 @@ Enter
 Wait+Line /\$$/
 Sleep 2s
 Hide
-Set TypingSpeed 1ms
 Type `jq -e '.consistent and (.targets | length == 4) and all(.targets[]; .consistent and .subdir == "linux-64" and .reason == null) and ([.targets[] | [.environment, .platform]] | sort) == [["default", "cpu"], ["default", "gpu"], ["tools", "cpu"], ["tools", "gpu"]]' consistency.json > /dev/null`
 Enter
 Wait+Line /\$$/
@@ -94,7 +85,6 @@ Wait+Line /\$$/
 Type `clear`
 Enter
 Wait+Line /\$$/
-Set TypingSpeed 40ms
 Show
 Type@60ms `# Reject requirements that do not match the saved lock`
 Enter
@@ -110,7 +100,6 @@ Enter
 Wait+Line /\$$/
 Sleep 3s
 Hide
-Set TypingSpeed 1ms
 Type `test "$check_status" -eq 1`
 Enter
 Wait+Line /\$$/
@@ -123,7 +112,6 @@ Wait+Line /\$$/
 Type `clear`
 Enter
 Wait+Line /\$$/
-Set TypingSpeed 40ms
 Show
 Type@60ms `# Update tools/cpu and preserve the other three selections`
 Enter
@@ -136,14 +124,12 @@ Enter
 Wait+Line /\$$/
 Sleep 2s
 Hide
-Set TypingSpeed 1ms
 Type `cp updated.lock updated/conda.lock`
 Enter
 Wait+Line /\$$/
 Type `clear`
 Enter
 Wait+Line /\$$/
-Set TypingSpeed 40ms
 Show
 Type@60ms `# Validate the complete updated lock`
 Enter
@@ -158,7 +144,6 @@ Sleep 2s
 Screenshot demos/workspace.png
 Sleep 500ms
 Hide
-Set TypingSpeed 1ms
 Type `jq -e '.consistent and (.targets | length == 4)' updated-check.json > /dev/null`
 Enter
 Wait+Line /\$$/

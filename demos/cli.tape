@@ -1,14 +1,12 @@
 Source demos/_settings.tape
 Output demos/cli.gif
 Hide
-Set TypingSpeed 1ms
 Type `source demos/_setup.sh cli`
 Enter
 Wait+Line /\$$/
 Type `clear`
 Enter
 Wait+Line /\$$/
-Set TypingSpeed 40ms
 Show
 Type@60ms `# Solve inline requirements for Linux`
 Enter
@@ -21,14 +19,12 @@ Enter
 Wait+Line /\$$/
 Sleep 2s
 Hide
-Set TypingSpeed 1ms
 Type `jq -e 'length == 1 and .[0].platform == "linux-64" and .[0].error == null and any(.[0].packages[]; .name == "zlib")' specs.json > /dev/null`
 Enter
 Wait+Line /\$$/
 Type `clear`
 Enter
 Wait+Line /\$$/
-Set TypingSpeed 40ms
 Show
 Type@60ms `# Solve the same environment for Linux and macOS`
 Enter
@@ -45,14 +41,12 @@ Enter
 Wait+Line /\$$/
 Sleep 2s
 Hide
-Set TypingSpeed 1ms
 Type `jq -e 'length == 2 and ([.[].platform] | sort) == ["linux-64", "osx-arm64"] and all(.[]; .error == null and ([.packages[].name] | contains(["zlib", "zstd"])))' environment.json > /dev/null`
 Enter
 Wait+Line /\$$/
 Type `clear`
 Enter
 Wait+Line /\$$/
-Set TypingSpeed 40ms
 Show
 Type@60ms `# Merge two YAML files and an inline requirement`
 Enter
@@ -69,14 +63,12 @@ Enter
 Wait+Line /\$$/
 Sleep 2s
 Hide
-Set TypingSpeed 1ms
 Type `jq -e 'length == 1 and .[0].platform == "linux-64" and .[0].error == null and ([.[0].packages[].name] | contains(["zlib", "zstd", "xz", "bzip2"]))' merged.json > /dev/null`
 Enter
 Wait+Line /\$$/
 Type `clear`
 Enter
 Wait+Line /\$$/
-Set TypingSpeed 40ms
 Show
 Type@60ms `# Export exact package URLs for conda create --file`
 Enter
@@ -96,14 +88,12 @@ Enter
 Wait+Line /\$$/
 Sleep 2s
 Hide
-Set TypingSpeed 1ms
 Type `python -c 'from pathlib import Path; from urllib.parse import urlsplit; lines = Path("explicit.txt").read_text().splitlines(); assert "@EXPLICIT" in lines; urls = [line for line in lines if line and not line.startswith(("#", "@"))]; assert urls and all(urlsplit(url).scheme == "https" for url in urls); assert any("/zlib-" in url for url in urls); assert any("/zstd-" in url for url in urls)'`
 Enter
 Wait+Line /\$$/
 Type `clear`
 Enter
 Wait+Line /\$$/
-Set TypingSpeed 40ms
 Show
 Type@60ms `# Export declarations without solving`
 Enter
@@ -118,7 +108,6 @@ Sleep 2s
 Screenshot demos/cli.png
 Sleep 500ms
 Hide
-Set TypingSpeed 1ms
 Type `python -c 'from pathlib import Path; from conda.models.match_spec import MatchSpec; specs = [MatchSpec(line) for line in Path("requirements.txt").read_text().splitlines() if line and not line.startswith("#")]; assert {spec.name: str(spec.version) for spec in specs} == {"zlib": ">=1.3,<2", "zstd": ">=1.5,<2"}'`
 Enter
 Wait+Line /\$$/

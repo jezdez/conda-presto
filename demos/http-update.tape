@@ -3,14 +3,12 @@ Source demos/_settings.tape
 Output demos/http-update.gif
 
 Hide
-Set TypingSpeed 1ms
 Type `source demos/_setup.sh http-update`
 Enter
 Wait+Line /\$$/
 Type `clear`
 Enter
 Wait+Line /\$$/
-Set TypingSpeed 40ms
 Show
 
 Type@60ms `# Validate the saved lock against its complete manifest`
@@ -34,14 +32,12 @@ Wait+Line /\$$/
 Sleep 2s
 
 Hide
-Set TypingSpeed 1ms
 Type `jq -e '.consistent and (.targets | length == 4) and all(.targets[]; .consistent and .reason == null)' consistency.json > /dev/null`
 Enter
 Wait+Line /\$$/
 Type `clear`
 Enter
 Wait+Line /\$$/
-Set TypingSpeed 40ms
 Show
 
 Type@60ms `# A changed manifest returns a mismatch with HTTP 200`
@@ -63,14 +59,12 @@ Wait+Line /\$$/
 Sleep 3s
 
 Hide
-Set TypingSpeed 1ms
 Type `jq -e '.consistent == false and (.targets | length == 4) and all(.targets[]; .consistent == false and (.reason | length > 0))' mismatch.json > /dev/null`
 Enter
 Wait+Line /\$$/
 Type `clear`
 Enter
 Wait+Line /\$$/
-Set TypingSpeed 40ms
 Show
 
 Type@60ms `# Update tools/cpu from the original consistent baseline`
@@ -92,11 +86,9 @@ Wait+Line /\$$/
 Sleep 3s
 
 Hide
-Set TypingSpeed 1ms
 Type `clear`
 Enter
 Wait+Line /\$$/
-Set TypingSpeed 40ms
 Show
 
 Type@60ms `# Validate all four targets in the returned lock`
@@ -118,7 +110,6 @@ Sleep 3s
 Screenshot demos/http-update.png
 Sleep 500ms
 Hide
-Set TypingSpeed 1ms
 Type `jq -e '.consistent and (.targets | length == 4) and all(.targets[]; .consistent)' updated-check.json > /dev/null`
 Enter
 Wait+Line /\$$/

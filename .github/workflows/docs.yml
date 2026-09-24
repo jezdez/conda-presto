@@ -10,10 +10,6 @@ on:
       - "conda_presto/**"
       - "docs/**"
       - "demos/**"
-      - "action.yml"
-      - "Dockerfile"
-      - "entrypoint.sh"
-      - "tests/fixtures/sigstore/**"
       - "pyproject.toml"
       - "pixi.lock"
   pull_request:
@@ -23,10 +19,6 @@ on:
       - "CHANGELOG.md"
       - "docs/**"
       - "demos/**"
-      - "action.yml"
-      - "Dockerfile"
-      - "entrypoint.sh"
-      - "tests/fixtures/sigstore/**"
       - "pyproject.toml"
       - "pixi.lock"
   workflow_dispatch:

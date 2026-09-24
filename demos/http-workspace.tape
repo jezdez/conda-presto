@@ -3,14 +3,12 @@ Source demos/_settings.tape
 Output demos/http-workspace.gif
 
 Hide
-Set TypingSpeed 1ms
 Type `source demos/_setup.sh http-workspace`
 Enter
 Wait+Line /\$$/
 Type `clear`
 Enter
 Wait+Line /\$$/
-Set TypingSpeed 40ms
 Show
 
 Type@60ms `# Discover workspace environments without solving`
@@ -35,14 +33,12 @@ Wait+Line /\$$/
 Sleep 2s
 
 Hide
-Set TypingSpeed 1ms
 Type `jq -e '.selected == [] and ([.environments[].name] | sort) == ["default", "tools"] and all(.environments[]; .platforms == {cpu: "linux-64", gpu: "linux-64"})' discovery.json > /dev/null`
 Enter
 Wait+Line /\$$/
 Type `clear`
 Enter
 Wait+Line /\$$/
-Set TypingSpeed 40ms
 Show
 
 Type@60ms `# Select tools/gpu with declared glibc and CUDA`
@@ -64,14 +60,12 @@ Wait+Line /\$$/
 Sleep 2s
 
 Hide
-Set TypingSpeed 1ms
 Type `jq -e '.selected | length == 1 and .[0].environment == "tools" and .[0].platform == "gpu" and .[0].subdir == "linux-64" and .[0].system_requirements.glibc == "2.28" and .[0].system_requirements.cuda == "12"' selected-result.json > /dev/null`
 Enter
 Wait+Line /\$$/
 Type `clear`
 Enter
 Wait+Line /\$$/
-Set TypingSpeed 40ms
 Show
 
 Type@60ms `# Export selected declarations without solving`
@@ -90,14 +84,12 @@ Wait+Line /\$$/
 Sleep 3s
 
 Hide
-Set TypingSpeed 1ms
 Type `python -c 'from pathlib import Path; from conda.models.match_spec import MatchSpec; specs = [MatchSpec(line) for line in Path("requirements.txt").read_text().splitlines() if line and not line.startswith("#")]; assert {spec.name: str(spec.version) for spec in specs} == {"zlib": ">=1.3,<2", "zstd": ">=1.5,<2"}'`
 Enter
 Wait+Line /\$$/
 Type `clear`
 Enter
 Wait+Line /\$$/
-Set TypingSpeed 40ms
 Show
 
 Type@60ms `# Solve the complete workspace into one lock`
@@ -130,7 +122,6 @@ Sleep 2s
 Screenshot demos/http-workspace.png
 Sleep 500ms
 Hide
-Set TypingSpeed 1ms
 Type `jq -e '.format == "conda-workspaces-lock-v1" and .selected == [] and ([.environments[].name] | sort) == ["default", "tools"] and all(.environments[]; .platforms == {cpu: "linux-64", gpu: "linux-64"})' saved.json > /dev/null`
 Enter
 Wait+Line /\$$/
