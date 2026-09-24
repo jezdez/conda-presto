@@ -9,6 +9,7 @@ from pathlib import Path
 import msgspec
 import pytest
 from conda.base.context import context
+from conda.core.index import Index
 from conda.exceptions import PackagesNotFoundError
 from conda.models.match_spec import MatchSpec
 from conda.models.records import PackageRecord
@@ -73,6 +74,11 @@ def workspace_solver(monkeypatch):
                 "solver": context.solver,
                 "json": context.json,
                 "overrides": dict(context.override_virtual_packages),
+                "virtual_packages": {
+                    record.name: record.version
+                    for record in Index().system_packages
+                    if record.name in {"__cuda", "__glibc"}
+                },
             }
         )
         if (self.name, target) in failing:
@@ -103,6 +109,20 @@ def workspace_solver(monkeypatch):
 
     monkeypatch.setattr(ResolvedEnvironment, "solve_for_platform", solve)
     return calls, failing
+
+
+@pytest.fixture(params=["99", None], ids=["overridden", "unset"])
+def inherited_virtual_packages(monkeypatch, request):
+    variables = ("CONDA_OVERRIDE_CUDA", "CONDA_OVERRIDE_GLIBC")
+    for name in variables:
+        if request.param is None:
+            monkeypatch.delenv(name, raising=False)
+        else:
+            monkeypatch.setenv(name, request.param)
+    yield
+    assert {name: os.environ.get(name) for name in variables} == dict.fromkeys(
+        variables, request.param
+    )
 
 
 @pytest.fixture
@@ -425,7 +445,7 @@ def test_workspace_registry_rejects_unknown_filename(manifest):
 
 
 def test_workspace_combined_lock_preserves_named_targets_and_package_metadata(
-    rich_manifest, workspace_solver, restore_solver_context
+    rich_manifest, workspace_solver, restore_solver_context, inherited_virtual_packages
 ):
     parsed = WorkspaceInput.from_path(rich_manifest).select(platforms=["cpu", "gpu"])
     body, media_type = parsed.solve("conda-workspaces-lock-v1")
@@ -484,14 +504,22 @@ def test_workspace_combined_lock_preserves_named_targets_and_package_metadata(
         if call["target"][1] == "cpu":
             assert call["overrides"]["glibc"] == "2.28"
             assert "cuda" not in call["overrides"]
+            assert call["virtual_packages"] == {"__glibc": "2.28"}
         else:
             assert call["overrides"]["cuda"] == "12"
+            assert call["virtual_packages"]["__cuda"] == "12"
+            assert call["virtual_packages"]["__glibc"] != "99"
         assert "win" not in call["overrides"]
 
 
 @pytest.mark.parametrize("format_name", [None, "conda-workspaces-lock-v1"])
 def test_workspace_failure_restores_target_state_and_never_exports_partial_lock(
-    rich_manifest, workspace_solver, restore_solver_context, monkeypatch, format_name
+    rich_manifest,
+    workspace_solver,
+    restore_solver_context,
+    inherited_virtual_packages,
+    monkeypatch,
+    format_name,
 ):
     calls, failing = workspace_solver
     failing.add(("test", "gpu"))
@@ -515,12 +543,15 @@ def test_workspace_failure_restores_target_state_and_never_exports_partial_lock(
         assert {package.name for package in results[1].packages} == {"python", "pytest"}
         assert calls[1]["overrides"]["glibc"] == "2.28"
         assert "cuda" not in calls[1]["overrides"]
+        assert calls[1]["virtual_packages"] == {"__glibc": "2.28"}
     else:
         with pytest.raises(WorkspaceSolveError, match="missing-package") as exc:
             parsed.solve(format_name)
         assert (exc.value.environment, exc.value.platform) == ("test", "gpu")
         assert len(calls) == 1
     assert calls[0]["overrides"]["cuda"] == "12"
+    assert calls[0]["virtual_packages"]["__cuda"] == "12"
+    assert calls[0]["virtual_packages"]["__glibc"] != "99"
     assert all(not call["prefix"].parent.exists() for call in calls)
 
 
@@ -573,6 +604,23 @@ def test_workspace_cache_identity_includes_named_target_solve_settings(
     )
     assert changed.cache_identity() != identity
     assert original.cache_identity() == identity
+
+
+@pytest.mark.parametrize("platform", ["cpu", "gpu"])
+def test_workspace_cache_identity_ignores_inherited_virtual_packages(
+    rich_manifest, restore_solver_context, monkeypatch, platform
+):
+    parsed = WorkspaceInput.from_path(
+        rich_manifest, environments=["test"], platforms=[platform]
+    )
+    identities = []
+    for version in ("99", "1"):
+        monkeypatch.setenv("CONDA_OVERRIDE_CUDA", version)
+        monkeypatch.setenv("CONDA_OVERRIDE_GLIBC", version)
+        identities.append(parsed.cache_identity())
+        assert os.environ["CONDA_OVERRIDE_CUDA"] == version
+        assert os.environ["CONDA_OVERRIDE_GLIBC"] == version
+    assert identities[0] == identities[1]
 
 
 @pytest.mark.parametrize("format_name", [None, "conda-workspaces-lock-v1"])

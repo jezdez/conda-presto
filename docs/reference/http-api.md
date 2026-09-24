@@ -58,6 +58,8 @@ HTTP lockfile parsing reads embedded metadata without downloading packages. `/re
 
 For workspace manifests, omitted environments select all environments and omitted platforms select each environment's declared targets. Omitting both solves the whole declared selection. This differs from `/parse`, where omitting both selectors performs discovery. An environment without declared platforms requires an explicit platform selection. Empty selectors, unknown names and ambiguous platform selections are rejected.
 
+Workspace solves and cache identities use the selected target's system requirements and platform defaults. Service host hardware and inherited `CONDA_OVERRIDE_*` settings do not change those virtual packages.
+
 Use `?format=conda-workspaces-lock-v1` for one combined `conda.lock` containing every selected environment and target. Any failed pair prevents a successful incomplete lock response. Native JSON returns one entry per pair, adding `environment` and `subdir`, with `platform` preserving the logical target name.
 
 The `conda-toml`, `pixi-toml` and `pyproject-toml` formats produce normalized dependency declarations for one selected environment. Selected targets must have distinct concrete subdirectories and the same ordered channels. See {doc}`output-formats` for what these exports preserve.
