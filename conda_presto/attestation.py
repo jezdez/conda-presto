@@ -1,4 +1,4 @@
-"""Optional signing and verification of exact service output bytes.
+"""Signing and verification of exact service output bytes.
 
 The standard in-toto Link records an output-signing step, not solve provenance.
 Sigstore's public signing API is used directly because conda-sigstore 0.1.2's
@@ -106,7 +106,7 @@ class AttestationService:
 
     @staticmethod
     def available() -> bool:
-        """Check the optional provider API without loading trust or credentials."""
+        """Check the provider API without loading trust or credentials."""
         try:
             from conda_sigstore.statements import InTotoStatement
             from conda_sigstore.verification import SigstoreVerifier
@@ -171,7 +171,7 @@ class AttestationService:
             from sigstore.verify import Verifier
         except ImportError:
             raise AttestationError(
-                "provider-unavailable", "Install the conda-sigstore integration"
+                "provider-unavailable", "Sigstore provider API is unavailable"
             ) from None
 
         try:
@@ -266,7 +266,7 @@ class AttestationService:
             from conda_sigstore.verification import SigstoreVerifier
         except ImportError:
             raise AttestationError(
-                "provider-unavailable", "Install the conda-sigstore integration"
+                "provider-unavailable", "Sigstore provider API is unavailable"
             ) from None
 
         try:

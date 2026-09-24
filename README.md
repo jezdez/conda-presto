@@ -7,11 +7,13 @@ conda-presto exposes conda operations through an HTTP service so other systems c
 - Resolve inline specs or supported environment files through conda-rattler-solver
 - Render native JSON or an installed conda exporter format
 - Convert supported lockfiles over HTTP without solving or downloading packages
+- Generate CycloneDX SBOMs from resolved package records
+- Sign retained artifacts and verify supplied artifacts with Sigstore
 - Retrieve retained results through `/r/<hash>` with memory, file or Redis storage
 - Run isolated solver workers with deadlines, readiness and recovery
 - Call the service from the GitHub Action using an explicit endpoint
 
-The package also includes the `conda presto` one-shot CLI and server launcher. Optional SBOM and artifact-signing providers extend the HTTP service. See the [service scope](https://jezdez.github.io/conda-presto/proposals/) for the current work and deferred construction-evidence design.
+The package also includes the `conda presto` one-shot CLI and server launcher. Signing is disabled by default and requires an operator identity and trust configuration. See the [service scope](https://jezdez.github.io/conda-presto/proposals/) for the current work and deferred construction-evidence design.
 
 ## Quick start
 

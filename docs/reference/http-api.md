@@ -15,7 +15,7 @@ Start the service with `conda presto --serve`. `/openapi.json` and `/` return th
 | POST | `/verify` | Check supplied bytes, a bundle and an expected signer |
 | GET | `/r/{key}` | Retrieve an exact retained output |
 | GET | `/formats` | Installed exporter names and aliases |
-| GET | `/capabilities` | Availability of optional SBOM and Sigstore adapters |
+| GET | `/capabilities` | Available operations and signing configuration |
 | GET | `/platforms` | Known conda platform subdirectories |
 | GET | `/version` | Installed component versions |
 | GET | `/health` | Worker readiness |
@@ -149,9 +149,9 @@ Successful eligible solves and workspace lock exports return a relative `Locatio
 
 A new `/resolve` request checks freshness before reusing a solve. Missing or evicted outputs return HTTP 404. An absent `Location` means the response was not retained. This can happen with credential-bearing requests or outputs, storage limits, or failed publication to shared storage. The cache is not an archive. See {doc}`cache`.
 
-## Optional SBOM generation
+## SBOM generation
 
-`POST /sbom` accepts JSON and delegates rendering to conda-sboms' `cyclonedx-json-v1.7` exporter. Ordinary resolve fields retain their solve-based behavior, with at least one explicit platform:
+`POST /sbom` accepts JSON and delegates rendering to conda-sboms' `cyclonedx-json-v1.7` exporter, included in standard installations. Ordinary resolve fields retain their solve-based behavior, with at least one explicit platform:
 
 ```json
 {"sboms":[{"platform":"linux-64","content":"...exact CycloneDX JSON text...","sha256":"...","location":"/r/..."}]}
@@ -229,7 +229,7 @@ Success returns HTTP 200 with one complete `conda-workspaces-lock-v1` YAML docum
 
 Eligible successful output uses the existing `/r/` retention mechanism. Cache identity includes both uploaded contents, selected root names, the environment and logical target, provider versions, repodata state and effective solve settings. The solve deadline starts before parsing and includes parsing, cache access and worker execution. Parsing also retains its own shorter timeout. See {doc}`../tutorials/http-api` for an update example.
 
-## Optional signing
+## Signing
 
 `POST /sign` accepts only `{"key":"..."}`, using the key from a retained output's `/r/` location. It does not accept caller-authored artifacts or statements.
 
@@ -241,7 +241,7 @@ The bundle binds the exact saved bytes to an authenticated signer. Its standard 
 
 Signing is disabled by default. Operators must enable it and choose a trust configuration or deliberately allow public Sigstore. Unavailable credentials cause an error without interactive login. Save the artifact and bundle together. Detailed solve construction evidence remains {doc}`deferred <../proposals>`.
 
-## Optional verification
+## Verification
 
 `POST /verify` accepts:
 
@@ -259,7 +259,7 @@ Success returns `signature_verified`, `artifact_verified` and `signer_verified` 
 
 ## Availability, limits and errors
 
-`GET /capabilities` returns booleans named `export`, `sbom`, `sign`, `verify`, `workspace_parse`, `workspace_solve`, `workspace_lock_parse`, `workspace_lock_export`, `workspace_lock_sbom`, `workspace_lock_check` and `workspace_lock_update`. `export` reports the no-solve export operation, subject to the input and format restrictions above. The lock capabilities report workspace lock inspection, selection and exact-record export support. `workspace_lock_sbom` requires the installed CycloneDX exporter and reports support for named locked-environment collections. `workspace_lock_check` reports whole-workspace manifest–lock consistency checking. `workspace_lock_update` reports selective direct dependency updates from a complete consistent baseline. `workspace_parse` and `workspace_solve` report workspace discovery, selection and solving support. `sign` reports installed support and enabled configuration, not a guarantee that credentials or remote signing services are currently available. Provider versions, including conda-workspaces, appear in `/version` when installed.
+`GET /capabilities` returns booleans named `export`, `sbom`, `sign`, `verify`, `workspace_parse`, `workspace_solve`, `workspace_lock_parse`, `workspace_lock_export`, `workspace_lock_sbom`, `workspace_lock_check` and `workspace_lock_update`. `export` reports the no-solve export operation, subject to the input and format restrictions above. The lock capabilities report workspace lock inspection, selection and exact-record export support. `workspace_lock_sbom` requires the installed CycloneDX exporter and reports support for named locked-environment collections. A standard installation returns `{"export":true,"sbom":true,"sign":false,"verify":true,"workspace_parse":true,"workspace_solve":true,"workspace_lock_parse":true,"workspace_lock_export":true,"workspace_lock_sbom":true,"workspace_lock_check":true,"workspace_lock_update":true}` before signing is enabled. `workspace_lock_check` reports whole-workspace manifest–lock consistency checking. `workspace_lock_update` reports selective direct dependency updates from a complete consistent baseline. `workspace_parse` and `workspace_solve` report workspace discovery, selection and solving support. `sign` reports installed support and enabled configuration, not a guarantee that credentials or remote signing services are currently available. Provider versions, including conda-workspaces, appear in `/version`.
 
 `GET /health` returns HTTP 200 with `{"status":"ok"}` when the configured persistent worker is ready. A stopped worker produces HTTP 503 with `{"status":"unavailable"}` while recovery begins. Without persistent-worker mode, the probe reports HTTP 200.
 

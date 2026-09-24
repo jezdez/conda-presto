@@ -1,22 +1,18 @@
 FROM ghcr.io/prefix-dev/pixi:0.81.0@sha256:788ae451641666e2d1f79d3dbe35392dfc7e9b394b16a3acb75c347f3badb2ab AS build
 
-ARG PIXI_ENVIRONMENT=prod
-
 WORKDIR /app
 COPY pyproject.toml pixi.lock README.md ./
 COPY conda_presto/ conda_presto/
 ARG CONDA_PRESTO_VERSION=0.0.0
 ENV SETUPTOOLS_SCM_PRETEND_VERSION_FOR_CONDA_PRESTO=${CONDA_PRESTO_VERSION}
 
-RUN pixi install --locked -e "${PIXI_ENVIRONMENT}"
-RUN pixi shell-hook -e "${PIXI_ENVIRONMENT}" -s bash > /shell-hook
+RUN pixi install --locked -e prod
+RUN pixi shell-hook -e prod -s bash > /shell-hook
 RUN echo '#!/bin/bash' > /app/entrypoint.sh \
     && cat /shell-hook >> /app/entrypoint.sh \
     && echo 'exec "$@"' >> /app/entrypoint.sh
 
 FROM debian:bookworm-slim@sha256:88200866dfff7ea7f5cbcb6ec7c8a701889efe6fe859fe64d6990e4b07ea4171 AS production
-
-ARG PIXI_ENVIRONMENT=prod
 
 # The base image predates the PCRE2 security update.
 RUN apt-get update \
@@ -27,12 +23,12 @@ RUN groupadd --gid 10001 app \
     && useradd --uid 10001 --gid app --shell /usr/sbin/nologin --no-create-home app
 
 WORKDIR /app
-COPY --from=build /app/.pixi/envs/${PIXI_ENVIRONMENT} /app/.pixi/envs/${PIXI_ENVIRONMENT}
+COPY --from=build /app/.pixi/envs/prod /app/.pixi/envs/prod
 COPY --from=build --chmod=0755 /app/entrypoint.sh /app/entrypoint.sh
 COPY conda_presto/ /app/conda_presto/
 
-RUN mkdir -p /app/.pixi/envs/${PIXI_ENVIRONMENT}/pkgs/cache /home/app/.conda/pkgs \
-    && chown -R app:app /app/.pixi/envs/${PIXI_ENVIRONMENT}/pkgs /home/app \
+RUN mkdir -p /app/.pixi/envs/prod/pkgs/cache /home/app/.conda/pkgs \
+    && chown -R app:app /app/.pixi/envs/prod/pkgs /home/app \
     && find / -xdev -type f -perm /6000 -exec chmod a-s {} + \
     && chmod -R a-w /app/conda_presto \
     && chmod a-w /app/entrypoint.sh
