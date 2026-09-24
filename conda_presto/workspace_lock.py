@@ -4,21 +4,31 @@ from __future__ import annotations
 
 import hashlib
 import io
+import os
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
 import msgspec
+from conda.base.context import context
 from conda.common.serialize.yaml import dump as yaml_dump
 from conda.models.channel import Channel
 from conda.models.environment import Environment
-from conda_workspaces.lockfile import FORMAT, CondaLockLoader, load_lockfile_data
+from conda.models.match_spec import MatchSpec
+from conda_workspaces.lockfile import (
+    FORMAT,
+    CondaLockLoader,
+    check_lockfile_satisfiability,
+    load_lockfile_data,
+)
 from conda_workspaces.manifests import PARSER_BY_FILENAME
-from conda_workspaces.models import has_url_credentials_in_data
+from conda_workspaces.models import LockfileStatus, has_url_credentials_in_data
 from conda_workspaces.resolver import resolve_environment
 
 from .config import MAX_CHANNELS, MAX_PLATFORMS
+from .exceptions import redact_safe_error
 from .exporter import OutputFormat
+from .resolve import VIRTUAL_PACKAGES, platform_lock
 from .workspace import WorkspaceInput
 
 
@@ -54,6 +64,23 @@ class WorkspaceLockExport(msgspec.Struct):
     content: str
 
 
+class WorkspaceLockTargetCheck(msgspec.Struct):
+    """Provider consistency result for one declared environment and target."""
+
+    environment: str
+    platform: str
+    subdir: str
+    consistent: bool
+    reason: str | None
+
+
+class WorkspaceLockCheckResult(msgspec.Struct):
+    """Whether every declared environment and target satisfies the manifest."""
+
+    consistent: bool
+    targets: list[WorkspaceLockTargetCheck]
+
+
 @dataclass(frozen=True)
 class WorkspaceLockInput:
     """Adapt Workspaces lock selection to Presto requests and exporters."""
@@ -62,6 +89,7 @@ class WorkspaceLockInput:
     result: WorkspaceLockParseResult
     source_digest: str
     channels: list[str]
+    source_data: dict[str, Any]
     manifest: WorkspaceInput | None = None
     manifest_digest: str | None = None
 
@@ -73,16 +101,18 @@ class WorkspaceLockInput:
         environments: list[str] | tuple[str, ...] | None = None,
         platforms: list[str] | tuple[str, ...] | None = None,
         select_all: bool = False,
+        allow_empty: bool = False,
     ) -> WorkspaceLockInput:
         """Read lock data with Workspaces and select request-owned targets."""
         content = path.read_bytes()
         data = load_lockfile_data(content)
         if has_url_credentials_in_data(data):
             raise ValueError("Workspace lock input cannot contain URL credentials")
+        data = CondaLockLoader.redact_data_urls(data)
         loader = CondaLockLoader(path, data=data)
         available = loader.available_environments
         names = list(dict.fromkeys(available if environments is None else environments))
-        if not names or platforms == [] or platforms == ():
+        if (not names and not allow_empty) or platforms == [] or platforms == ():
             raise ValueError("Select at least one lockfile environment and target")
 
         selections = {}
@@ -116,7 +146,19 @@ class WorkspaceLockInput:
                 f"Too many lockfile targets: limit {MAX_PLATFORMS} "
                 "(CONDA_PRESTO_MAX_PLATFORMS)"
             )
-        selected_data = loader.select(selections)
+        if allow_empty:
+            # Missing saved targets are consistency mismatches, so validate
+            # the records that exist without requiring a nonempty selection.
+            nonempty = {
+                name: targets for name, targets in selections.items() if targets
+            }
+            if nonempty:
+                loader.select(nonempty)
+            else:
+                loader.package_records_by_url()
+            selected_data = data
+        else:
+            selected_data = loader.select(selections)
         channels = list(
             dict.fromkeys(
                 entry["url"]
@@ -152,6 +194,7 @@ class WorkspaceLockInput:
             WorkspaceLockParseResult(FORMAT, discovery, selected),
             hashlib.sha256(content).hexdigest(),
             channels,
+            data,
         )
 
     def with_manifest(self, content: str, filename: str) -> WorkspaceLockInput:
@@ -224,6 +267,89 @@ class WorkspaceLockInput:
             if include_requested_packages:
                 env.requested_packages = requested_packages
         return env
+
+    def check_consistency(self) -> WorkspaceLockCheckResult:
+        """Check every declared pair with target virtuals and upstream matching."""
+        if self.manifest is None:
+            raise ValueError("Lock consistency requires a companion manifest")
+        targets = self.manifest.select().result.selected
+        if not targets:
+            raise ValueError("Declare at least one workspace environment and target")
+        if any(target.pypi_dependencies for target in targets):
+            raise ValueError("Lock consistency does not support PyPI dependencies")
+        if any(
+            name.removeprefix("__") == "archspec"
+            for target in targets
+            for name in target.system_requirements
+        ):
+            raise ValueError(
+                "Lock consistency does not support archspec system requirements"
+            )
+        records = (
+            record
+            for environment in self.result.environments
+            for platform in environment.platforms
+            for record in self.loader.package_records_for_env_data(
+                self.source_data, environment.name, platform
+            )
+        )
+        # Invalid dependency syntax is an input error, rather than an unmet
+        # requirement in the provider's consistency report.
+        for record in records:
+            for spec in (*record.depends, *record.constrains):
+                MatchSpec(spec)
+        checks = []
+        for target in targets:
+            resolved = resolve_environment(
+                self.manifest.config, target.environment, target.platform
+            )
+            with platform_lock, context._override("_subdir", target.subdir):
+                overrides = {
+                    package.name: ""
+                    for package in context.plugin_manager.get_hook_results(
+                        "virtual_packages"
+                    )
+                    if package.override_entity
+                }
+                overrides.update(
+                    VIRTUAL_PACKAGES.get(target.subdir.split("-", 1)[0], {})
+                )
+                for name in overrides:
+                    if version := resolved.system_requirement_version(name):
+                        overrides[name] = version
+                variables = {
+                    f"CONDA_OVERRIDE_{name.upper()}": value
+                    for name, value in overrides.items()
+                }
+                saved = {name: os.environ.get(name) for name in variables}
+                # Environment overrides take precedence over conda context and
+                # prevent the provider from detecting the service host's hardware.
+                os.environ.update(variables)
+                try:
+                    status = check_lockfile_satisfiability(
+                        self.manifest.config,
+                        self.source_data,
+                        target.platform,
+                        environment=target.environment,
+                    )
+                finally:
+                    for name, value in saved.items():
+                        if value is None:
+                            os.environ.pop(name, None)
+                        else:
+                            os.environ[name] = value
+            checks.append(
+                WorkspaceLockTargetCheck(
+                    target.environment,
+                    target.platform,
+                    target.subdir,
+                    status.status == LockfileStatus.UP_TO_DATE,
+                    redact_safe_error(status.reason) if status.reason else None,
+                )
+            )
+        return WorkspaceLockCheckResult(
+            all(check.consistent for check in checks), checks
+        )
 
     def render(self, format_name: str) -> str:
         """Extract source entries or export metadata-only conda environments."""

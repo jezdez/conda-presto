@@ -12,6 +12,7 @@ troubleshoot
 deploy-securely
 transcode-lockfiles
 extract-workspace-lock
+check-workspace-lock
 parse-workspace
 resolve-from-cli
 benchmark-performance

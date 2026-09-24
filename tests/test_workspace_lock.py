@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import tomllib
 
 import msgspec
 import pytest
+from conda.base.context import context
 from conda.common.serialize.yaml import dumps as yaml_dumps
 from conda.core.package_cache_data import PackageCacheData, ProgressiveFetchExtract
 from conda.exceptions import CondaError
@@ -26,6 +28,208 @@ def offline_lock_operations(monkeypatch):
     monkeypatch.setattr(ResolvedEnvironment, "solve_for_platform", fail)
     monkeypatch.setattr(ProgressiveFetchExtract, "execute", fail)
     monkeypatch.setattr(PackageCacheData, "query_all", fail)
+
+
+@pytest.fixture
+def workspace_lock_check(
+    workspace_consistent_lock_path, workspace_consistent_manifest_text
+):
+    return WorkspaceLockInput.from_path(workspace_consistent_lock_path).with_manifest(
+        workspace_consistent_manifest_text, "conda.toml"
+    )
+
+
+def test_consistency_checks_every_named_target_without_fetching(
+    workspace_lock_check, offline_lock_operations
+):
+    before = workspace_lock_check.loader.path.read_bytes()
+    result = workspace_lock_check.check_consistency()
+    assert result.consistent
+    assert [(target.environment, target.platform) for target in result.targets] == [
+        (name, target)
+        for name in ("default", "test")
+        for target in ("cpu", "gpu", "osx-arm64")
+    ]
+    assert all(target.consistent and target.reason is None for target in result.targets)
+    assert workspace_lock_check.loader.path.read_bytes() == before
+
+
+@pytest.mark.parametrize(
+    "field,requirement,consistent,reason",
+    [
+        ("depends", "missing-dependency >=1", False, "missing-dependency"),
+        ("constrains", "probe >=2", False, "constrains"),
+        ("constrains", "absent >=2", True, None),
+        ("depends", "__glibc >=2.29", False, "__glibc"),
+        ("depends", "__glibc >=2.28", True, None),
+    ],
+)
+def test_consistency_keeps_provider_dependency_constraint_and_virtual_results(
+    workspace_lock_check,
+    offline_lock_operations,
+    field,
+    requirement,
+    consistent,
+    reason,
+):
+    workspace_lock_check.source_data["packages"][0][field] = [requirement]
+    result = workspace_lock_check.check_consistency()
+    assert result.consistent is consistent
+    for target in result.targets:
+        assert target.consistent is (consistent or target.platform != "cpu")
+        if not target.consistent:
+            assert reason in target.reason
+
+
+@pytest.mark.parametrize(
+    "missing", ["all-environments", "environment", "platform", "all-platforms"]
+)
+def test_missing_lock_declarations_are_mismatches(
+    workspace_consistent_lock_path,
+    workspace_consistent_lock_data,
+    workspace_consistent_manifest_text,
+    offline_lock_operations,
+    missing,
+):
+    data = workspace_consistent_lock_data
+    if missing == "all-environments":
+        data["environments"] = {}
+    elif missing == "environment":
+        del data["environments"]["test"]
+    elif missing == "platform":
+        del data["environments"]["test"]["packages"]["gpu"]
+    else:
+        data["environments"]["test"]["packages"] = {}
+    workspace_consistent_lock_path.write_text(yaml_dumps(data))
+    parsed = WorkspaceLockInput.from_path(
+        workspace_consistent_lock_path, allow_empty=True
+    )
+    result = parsed.with_manifest(
+        workspace_consistent_manifest_text, "conda.toml"
+    ).check_consistency()
+    assert not result.consistent
+    assert len(result.targets) == 6
+    assert all("missing" in target.reason for target in result.targets)
+
+
+@pytest.mark.parametrize(
+    "change,reason",
+    [
+        ('probe = "==1.0"', "probe"),
+        ('channels = ["conda-forge"]', "Channel mismatch"),
+        ("test = []", "not declared"),
+    ],
+)
+def test_changed_manifest_returns_provider_mismatch(
+    workspace_consistent_lock_path,
+    workspace_consistent_manifest_text,
+    offline_lock_operations,
+    change,
+    reason,
+):
+    replacement = {
+        'probe = "==1.0"': 'probe = ">=2"',
+        'channels = ["conda-forge"]': 'channels = ["other", "conda-forge"]',
+        "test = []": "",
+    }[change]
+    manifest = workspace_consistent_manifest_text.replace(change, replacement)
+    result = (
+        WorkspaceLockInput.from_path(workspace_consistent_lock_path)
+        .with_manifest(manifest, "conda.toml")
+        .check_consistency()
+    )
+    assert not result.consistent
+    assert any(reason in target.reason for target in result.targets if target.reason)
+
+
+@pytest.mark.parametrize("requirement", ["__cuda >=12", "__archspec 1 x86_64_v3"])
+def test_check_disables_host_gpu_and_cpu_detection(
+    monkeypatch, workspace_lock_check, offline_lock_operations, requirement
+):
+    monkeypatch.setenv("CONDA_OVERRIDE_CUDA", "99")
+    monkeypatch.setenv("CONDA_OVERRIDE_ARCHSPEC", "x86_64_v3")
+    workspace_lock_check.source_data["packages"][0]["depends"] = [requirement]
+    result = workspace_lock_check.check_consistency()
+    assert not result.consistent
+    assert all(
+        not target.consistent for target in result.targets if target.platform == "cpu"
+    )
+    assert os.environ["CONDA_OVERRIDE_CUDA"] == "99"
+    assert os.environ["CONDA_OVERRIDE_ARCHSPEC"] == "x86_64_v3"
+
+
+def test_check_uses_each_environments_system_requirements(
+    monkeypatch,
+    workspace_consistent_lock_path,
+    workspace_consistent_lock_data,
+    offline_lock_operations,
+):
+    data = workspace_consistent_lock_data
+    for env in data["environments"].values():
+        env["packages"] = {"linux-64": env["packages"]["cpu"]}
+    data["packages"][0]["depends"] = ["__glibc >=2.35"]
+    workspace_consistent_lock_path.write_text(yaml_dumps(data))
+    manifest = """\
+[workspace]
+channels = ["conda-forge"]
+platforms = ["linux-64"]
+[dependencies]
+probe = "==1.0"
+[system-requirements]
+libc = "2.28"
+[feature.new.system-requirements]
+libc = "2.40"
+[environments]
+test = ["new"]
+"""
+    monkeypatch.setenv("CONDA_OVERRIDE_GLIBC", "99")
+    result = (
+        WorkspaceLockInput.from_path(workspace_consistent_lock_path)
+        .with_manifest(manifest, "conda.toml")
+        .check_consistency()
+    )
+    assert [(target.environment, target.consistent) for target in result.targets] == [
+        ("default", False),
+        ("test", True),
+    ]
+    assert os.environ["CONDA_OVERRIDE_GLIBC"] == "99"
+
+
+def test_check_restores_virtual_context_after_provider_failure(
+    monkeypatch, workspace_lock_check
+):
+    monkeypatch.setenv("CONDA_OVERRIDE_CUDA", "99")
+    before = dict(os.environ)
+    original_subdir = context.subdir
+
+    def fail(*args, **kwargs):
+        raise RuntimeError("provider failed")
+
+    monkeypatch.setattr(workspace_lock, "check_lockfile_satisfiability", fail)
+    with pytest.raises(RuntimeError, match="provider failed"):
+        workspace_lock_check.check_consistency()
+    assert dict(os.environ) == before
+    assert context.subdir == original_subdir
+
+
+@pytest.mark.parametrize(
+    "declaration,reason",
+    [
+        ('[target.gpu.pypi-dependencies]\nrequests = "*"\n', "PyPI"),
+        ('[system-requirements]\narchspec = "x86_64_v3"\n', "archspec"),
+    ],
+)
+def test_check_rejects_requirements_the_provider_cannot_check(
+    workspace_consistent_lock_path,
+    workspace_consistent_manifest_text,
+    declaration,
+    reason,
+):
+    parsed = WorkspaceLockInput.from_path(workspace_consistent_lock_path).with_manifest(
+        workspace_consistent_manifest_text + declaration, "conda.toml"
+    )
+    with pytest.raises(ValueError, match=reason):
+        parsed.check_consistency()
 
 
 def test_lock_discovery_preserves_names_without_selecting_host(

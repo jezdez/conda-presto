@@ -61,6 +61,47 @@ def workspace_lock_text(workspace_lock_data):
 
 
 @pytest.fixture
+def workspace_consistent_manifest_text():
+    return """\
+[workspace]
+name = "example"
+channels = ["conda-forge"]
+platforms = [
+    { name = "cpu", platform = "linux-64", libc = "2.28" },
+    { name = "gpu", platform = "linux-64", cuda = "12" },
+    "osx-arm64",
+]
+[target.cpu.dependencies]
+probe = "==1.0"
+[target.gpu.dependencies]
+gpu-probe = "==1.0"
+[target.osx-arm64.dependencies]
+probe = "==1.0"
+[environments]
+test = []
+"""
+
+
+@pytest.fixture
+def workspace_consistent_lock_data(workspace_lock_data):
+    for environment in workspace_lock_data["environments"].values():
+        environment["channels"] = [{"url": "https://conda.anaconda.org/conda-forge"}]
+    return workspace_lock_data
+
+
+@pytest.fixture
+def workspace_consistent_lock_text(workspace_consistent_lock_data):
+    return yaml_dumps(workspace_consistent_lock_data)
+
+
+@pytest.fixture
+def workspace_consistent_lock_path(tmp_path, workspace_consistent_lock_text):
+    path = tmp_path / "conda.lock"
+    path.write_text(workspace_consistent_lock_text)
+    return path
+
+
+@pytest.fixture
 def workspace_lock_path(tmp_path, workspace_lock_text):
     path = tmp_path / "conda.lock"
     path.write_text(workspace_lock_text, encoding="utf-8")

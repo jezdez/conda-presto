@@ -48,6 +48,37 @@ jq -j '.sboms[0].content' sboms.json > environment.cdx.json
 
 The document describes selected package records. It does not establish which files a downstream product ships. Multiple requested platforms produce separate documents. This request solves the supplied requirements and reuses the registered SBOM exporter. To render selected workspace `conda.lock` records without solving, follow the {doc}`saved-lock SBOM workflow <../how-to/extract-workspace-lock>`.
 
+## Check a lock after changing its manifest
+
+Start with the matching `conda.toml` and workspace `conda.lock` from {doc}`../how-to/parse-workspace`. Upload both files:
+
+```bash
+jq -n --rawfile file conda.lock --rawfile manifest conda.toml \
+  '{file: $file, filename: "conda.lock", manifest: $manifest, manifest_filename: "conda.toml"}' |
+  curl --fail-with-body "$CONDA_PRESTO_URL/validate" \
+    --header 'Content-Type: application/json' --data-binary @- \
+    --output consistency.json
+jq '.consistent' consistency.json
+```
+
+The result is `true` when every declared environment and target passes. Checking uses saved metadata without solving or downloading packages. It includes named variants on the same conda platform, independently of the server host.
+
+The example manifest requires Python 3.13. Create a changed copy that instead requires Python 3.12 and check it against the same lock:
+
+```bash
+sed 's/3\.13\.\*/3.12.*/' conda.toml > changed-conda.toml
+jq -n --rawfile file conda.lock --rawfile manifest changed-conda.toml \
+  '{file: $file, filename: "conda.lock", manifest: $manifest, manifest_filename: "conda.toml"}' |
+  curl --fail-with-body "$CONDA_PRESTO_URL/validate" \
+    --header 'Content-Type: application/json' --data-binary @- \
+    --output mismatch.json
+jq '.targets[] | select(.consistent == false)' mismatch.json
+```
+
+The response reports `consistent: false` and a reason for each affected target. HTTP 200 means the check completed, so automation should inspect `.consistent` rather than rely only on the HTTP status. For example, `jq -e '.consistent' consistency.json` succeeds only for a consistent result. Malformed or unsupported files produce HTTP 400, and a parser timeout produces HTTP 504.
+
+This operation checks the complete workspace and does not accept environment or platform selectors. It does not check repository freshness, download or verify archives, or evaluate vulnerability policy. The response is not retained in the artifact cache.
+
 ## Sign and verify the saved bytes
 
 On a deployment with signing deliberately enabled and noninteractive credentials configured:

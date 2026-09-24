@@ -94,7 +94,7 @@ from .resolve import (
 from .storage import StoreOperationCoordinator
 from .worker import PersistentSolveWorker
 from .workspace import WorkspaceInput
-from .workspace_lock import WorkspaceLockParseResult
+from .workspace_lock import WorkspaceLockCheckResult, WorkspaceLockParseResult
 
 log = logging.getLogger(__name__)
 
@@ -668,6 +668,15 @@ class ParseRequest(msgspec.Struct, forbid_unknown_fields=True):
     platforms: list[str] | None = None
 
 
+class ValidateRequest(msgspec.Struct, forbid_unknown_fields=True):
+    """A complete workspace lock and its manifest for consistency checking."""
+
+    file: str
+    filename: str
+    manifest: str
+    manifest_filename: str
+
+
 class ValidationErrorResponse(msgspec.Struct, omit_defaults=True):
     """Litestar's request validation error payload."""
 
@@ -791,6 +800,7 @@ async def parse_input_for_request(
     export_each: bool = False,
     manifest_content: str | None = None,
     manifest_filename: str | None = None,
+    check_lock: bool = False,
 ) -> ParsedInputFile | Response:
     """Parse input off the event loop with a bounded wall-clock time."""
     capacity = request.app.state.solver_limiter
@@ -810,6 +820,7 @@ async def parse_input_for_request(
                     export_each=export_each,
                     manifest_content=manifest_content,
                     manifest_filename=manifest_filename,
+                    check_lock=check_lock,
                 ),
                 limiter=capacity,
                 abandon_on_cancel=False,
@@ -1355,6 +1366,60 @@ async def result_get(request: Request, key: FromPath[str]) -> Response:
     return cached_response
 
 
+@post(
+    "/validate",
+    status_code=200,
+    responses={
+        200: ResponseSpec(
+            data_container=WorkspaceLockCheckResult,
+            description="Workspace lock consistency for every declared target",
+        ),
+        HTTP_400_BAD_REQUEST: ResponseSpec(
+            data_container=ErrorResponse | ValidationErrorResponse,
+            description="Malformed or unsupported input",
+        ),
+        HTTP_504_GATEWAY_TIMEOUT: ResponseSpec(
+            data_container=ErrorResponse,
+            description="Workspace lock checking timed out",
+        ),
+    },
+)
+async def validate_post(request: Request, data: ValidateRequest) -> Response:
+    """Check the whole workspace lock against the supplied manifest."""
+    if request.content_type[0] != "application/json":
+        return Response(
+            ErrorResponse(error="POST /validate requires application/json"),
+            status_code=HTTP_400_BAD_REQUEST,
+            headers={"Cache-Control": "no-store"},
+        )
+    if request.query_params:
+        return Response(
+            ErrorResponse(error="POST /validate does not accept query parameters"),
+            status_code=HTTP_400_BAD_REQUEST,
+            headers={"Cache-Control": "no-store"},
+        )
+    if not all((data.file, data.filename, data.manifest, data.manifest_filename)):
+        return Response(
+            ErrorResponse(
+                error="Provide file, filename, manifest and manifest_filename"
+            ),
+            status_code=HTTP_400_BAD_REQUEST,
+            headers={"Cache-Control": "no-store"},
+        )
+    parsed = await parse_input_for_request(
+        request,
+        data.file,
+        data.filename,
+        manifest_content=data.manifest,
+        manifest_filename=data.manifest_filename,
+        check_lock=True,
+    )
+    if isinstance(parsed, Response):
+        parsed.headers["Cache-Control"] = "no-store"
+        return parsed
+    return Response(parsed.lock_check, headers={"Cache-Control": "no-store"})
+
+
 @post("/sbom", status_code=200)
 async def sbom_post(request: Request, data: SbomRequest) -> Response:
     """Return CycloneDX documents from new solves or selected workspace lock records."""
@@ -1518,6 +1583,7 @@ async def capabilities() -> dict[str, bool]:
         "workspace_solve": True,
         "workspace_lock_parse": True,
         "workspace_lock_export": True,
+        "workspace_lock_check": True,
         "workspace_lock_sbom": "cyclonedx-json-v1.7" in OutputFormat.available(),
         "export": True,
         "sbom": "cyclonedx-json-v1.7" in OutputFormat.available(),
@@ -1743,6 +1809,7 @@ app = Litestar(
         resolve_post,
         transcode_post,
         export_post,
+        validate_post,
         sbom_post,
         sign_post,
         verify_post,
