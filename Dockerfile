@@ -6,7 +6,7 @@ WORKDIR /app
 COPY pyproject.toml pixi.lock README.md ./
 COPY conda_presto/ conda_presto/
 ARG CONDA_PRESTO_VERSION=0.0.0
-ENV SETUPTOOLS_SCM_PRETEND_VERSION=${CONDA_PRESTO_VERSION}
+ENV SETUPTOOLS_SCM_PRETEND_VERSION_FOR_CONDA_PRESTO=${CONDA_PRESTO_VERSION}
 
 RUN pixi install --locked -e "${PIXI_ENVIRONMENT}"
 RUN pixi shell-hook -e "${PIXI_ENVIRONMENT}" -s bash > /shell-hook

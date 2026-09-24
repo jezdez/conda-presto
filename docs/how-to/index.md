@@ -11,6 +11,7 @@ monitor-service
 troubleshoot
 deploy-securely
 transcode-lockfiles
+parse-workspace
 resolve-from-cli
 benchmark-performance
 ```

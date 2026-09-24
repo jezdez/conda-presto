@@ -11,6 +11,7 @@ from contextlib import redirect_stderr, redirect_stdout
 from dataclasses import dataclass
 from pathlib import Path
 
+import msgspec
 from conda.base.context import context
 from conda.exceptions import CondaError
 from conda.models.environment import Environment
@@ -21,14 +22,22 @@ from ruamel.yaml.events import AliasEvent, NodeEvent
 
 from .exceptions import CredentialRedactionFilter, redact_safe_error
 from .lockfile_transcode import CondaLockfilesTranscoder
+from .workspace import WorkspaceInput, WorkspaceParseResult
 
 ALLOWED_EXTENSIONS = {".yml", ".yaml", ".txt", ".lock", ".toml", ".json"}
 HTTP_INPUT_MAX_NODES = 10_000
 
 
+class ParseResult(msgspec.Struct):
+    """Specs and channels parsed from an ordinary input file."""
+
+    specs: list[str]
+    channels: list[str]
+
+
 @dataclass(frozen=True)
 class ParsedInputFile:
-    """Parsed conda input file with optional lockfile results."""
+    """Parsed input with optional lockfile results or workspace configuration."""
 
     specs: list[str]
     channels: list[str]
@@ -37,6 +46,15 @@ class ParsedInputFile:
     available_platforms: tuple[str, ...] = ()
     environments: tuple[Environment, ...] = ()
     transcoded_content: str | None = None
+    workspace: WorkspaceInput | None = None
+
+    @property
+    def parse_result(self) -> ParseResult | WorkspaceParseResult:
+        return (
+            self.workspace.result
+            if self.workspace is not None
+            else ParseResult(self.specs, self.channels)
+        )
 
     @property
     def is_lockfile(self) -> bool:
@@ -51,11 +69,13 @@ class ParsedInputFile:
         specifier_name: str | None = None,
         materialize_lockfiles: bool = True,
         transcode_format: str | None = None,
+        target_environments: list[str] | tuple[str, ...] | None = None,
     ) -> ParsedInputFile:
-        """Parse an input file through conda's plugin registry.
+        """Preserve workspace configuration or parse through conda's registry.
 
         ``specifier_name`` selects one installed parser without content
-        autodetection. ``target_platforms`` is only used for lockfiles. When every
+        autodetection for ordinary inputs. Workspace selectors compose explicit
+        environment and target requirements without solving. For lockfiles, when every
         target platform is present and ``materialize_lockfiles`` is true,
         ``environments`` contains the corresponding parsed ``Environment``
         objects. When ``transcode_format`` is set, a supporting lockfile adapter
@@ -63,6 +83,21 @@ class ParsedInputFile:
         records. Disabled materialization and missing targets leave both results
         empty.
         """
+        if Path(path).name in WorkspaceInput.filenames():
+            workspace = WorkspaceInput.from_path(
+                Path(path),
+                environments=target_environments,
+                platforms=target_platforms,
+            )
+            return cls(
+                specs=[],
+                channels=[],
+                environment_format=EnvironmentFormat.environment,
+                source_format=workspace.result.format,
+                workspace=workspace,
+            )
+        if target_environments is not None:
+            raise ValueError("Environment selection requires a workspace manifest")
         path_str = str(path)
         specifier = context.plugin_manager.get_environment_specifier(
             source=path_str,
@@ -75,7 +110,9 @@ class ParsedInputFile:
         environment_format = specifier.environment_format
         if environment_format == EnvironmentFormat.lockfile:
             available = tuple(getattr(spec, "available_platforms", ()) or ())
-            targets = tuple(target_platforms or ())
+            targets = tuple(
+                target_platforms or ((context.subdir,) if materialize_lockfiles else ())
+            )
             envs: tuple[Environment, ...] = ()
             transcoded_content = None
             if targets and available and set(targets).issubset(available):
@@ -128,6 +165,7 @@ class ParsedInputFile:
         deadline: float,
         *,
         transcode_format: str | None = None,
+        target_environments: list[str] | tuple[str, ...] | None = None,
     ) -> ParsedInputFile:
         """Parse content in an isolated process before an absolute deadline."""
         if deadline <= time.monotonic():
@@ -168,6 +206,7 @@ class ParsedInputFile:
                         target_platforms,
                         deadline,
                         transcode_format,
+                        target_environments,
                     ),
                 )
                 process.start()
@@ -214,6 +253,7 @@ class ParsedInputFile:
         target_platforms: list[str] | tuple[str, ...] | None,
         deadline: float,
         transcode_format: str | None = None,
+        target_environments: list[str] | tuple[str, ...] | None = None,
     ) -> None:
         """Send an input parse result from an isolated process."""
         CredentialRedactionFilter.install()
@@ -295,6 +335,7 @@ class ParsedInputFile:
                         ),
                         materialize_lockfiles=False,
                         transcode_format=transcode_format,
+                        target_environments=target_environments,
                     )
             sender.send(("ok", parsed))
         except TimeoutError:

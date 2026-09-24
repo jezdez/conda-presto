@@ -26,6 +26,7 @@ maintainers = [{ name = "Jannis Leidel", email = "jannis@leidel.info" }]
 requires-python = ">=3.13"
 dependencies = [
     # conda and conda-rattler-solver are supplied by the active conda environment.
+    "conda-workspaces>=0.10.0",
     "msgspec>=0.19",
 ]
 dynamic = ["version"]
@@ -51,6 +52,9 @@ conda-presto = "conda_presto.cli:main"
 
 [tool.hatch.version]
 source = "vcs"
+
+[tool.hatch.version.raw-options]
+dist_name = "conda-presto"
 
 [tool.hatch.build.hooks.vcs]
 version-file = "conda_presto/_version.py"

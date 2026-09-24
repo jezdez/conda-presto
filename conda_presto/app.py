@@ -77,7 +77,7 @@ from .config import (
 )
 from .exceptions import CredentialRedactionFilter, UnknownFormatError
 from .exporter import ExporterCacheIdentity, OutputFormat
-from .inputs import ParsedInputFile
+from .inputs import ParsedInputFile, ParseResult, WorkspaceParseResult
 from .resolve import (
     NATIVE_SUBDIR,
     RepodataSnapshot,
@@ -213,11 +213,21 @@ class ResolveRequest:
 
         if file_content is not None:
             parsed = await parse_input_for_request(
-                request, file_content, file_name, platforms or [NATIVE_SUBDIR]
+                request, file_content, file_name, platforms or None
             )
             if isinstance(parsed, Response):
                 return parsed
             parsed_file = parsed
+            if parsed_file.workspace is not None:
+                return Response(
+                    ErrorResponse(
+                        error=(
+                            "Workspace solving is not supported yet. "
+                            "Use /parse to inspect workspace inputs."
+                        )
+                    ),
+                    status_code=HTTP_400_BAD_REQUEST,
+                )
             if parsed_file.is_lockfile and not allow_lockfile:
                 return Response(
                     ErrorResponse(
@@ -298,13 +308,8 @@ class ParseRequest(msgspec.Struct, forbid_unknown_fields=True):
 
     file: str
     filename: str | None = None
-
-
-class ParseResult(msgspec.Struct):
-    """Specs and channels parsed from an input file."""
-
-    specs: list[str]
-    channels: list[str]
+    environments: list[str] | None = None
+    platforms: list[str] | None = None
 
 
 class ValidationErrorResponse(msgspec.Struct, omit_defaults=True):
@@ -425,6 +430,7 @@ async def parse_input_for_request(
     target_platforms: list[str] | None = None,
     *,
     transcode_format: str | None = None,
+    target_environments: list[str] | None = None,
 ) -> ParsedInputFile | Response:
     """Parse input off the event loop with a bounded wall-clock time."""
     capacity = request.app.state.solver_limiter
@@ -439,6 +445,7 @@ async def parse_input_for_request(
                     target_platforms,
                     deadline,
                     transcode_format=transcode_format,
+                    target_environments=target_environments,
                 ),
                 limiter=capacity,
                 abandon_on_cancel=False,
@@ -1203,6 +1210,8 @@ async def capabilities() -> dict[str, bool]:
     """Report installed optional adapters and deliberate signing configuration."""
     available = AttestationService.available()
     return {
+        "workspace_parse": True,
+        "workspace_solve": False,
         "sbom": "cyclonedx-json-v1.7" in OutputFormat.available(),
         "verify": available,
         "sign": available
@@ -1234,6 +1243,7 @@ async def version() -> dict[str, str]:
     for pkg in (
         "conda-rattler-solver",
         "conda-lockfiles",
+        "conda-workspaces",
         "conda-sboms",
         "conda-sigstore",
     ):
@@ -1249,8 +1259,8 @@ async def version() -> dict[str, str]:
     status_code=200,
     responses={
         200: ResponseSpec(
-            data_container=ParseResult,
-            description="Specs and channels extracted from an input file",
+            data_container=ParseResult | WorkspaceParseResult,
+            description="Parsed requirements or workspace discovery and selection",
         ),
         HTTP_400_BAD_REQUEST: ResponseSpec(
             data_container=ErrorResponse | ValidationErrorResponse,
@@ -1263,19 +1273,37 @@ async def version() -> dict[str, str]:
     },
 )
 async def parse(request: Request, data: ParseRequest) -> Response:
-    """Parse an input file and return its specs and channels."""
+    """Inspect input requirements or select workspace environments and targets."""
     if not data.file:
         return Response(
             ErrorResponse(error="Field 'file' is required"),
             status_code=HTTP_400_BAD_REQUEST,
         )
-    parsed = await parse_input_for_request(request, data.file, data.filename)
+    parsed = await parse_input_for_request(
+        request,
+        data.file,
+        data.filename,
+        data.platforms,
+        target_environments=data.environments,
+    )
     if isinstance(parsed, Response):
         return parsed
     parsed_file = parsed
+    if parsed_file.workspace is not None:
+        for target in parsed_file.workspace.result.selected:
+            if cap_error := validate_caps(
+                target.specs, target.channels, [target.subdir]
+            ):
+                return cap_error
+        return Response(parsed_file.parse_result)
+    if data.platforms is not None:
+        return Response(
+            ErrorResponse(error="Platform selection requires a workspace manifest"),
+            status_code=HTTP_400_BAD_REQUEST,
+        )
     if cap_error := validate_caps(parsed_file.specs, parsed_file.channels, []):
         return cap_error
-    return Response(ParseResult(parsed_file.specs, parsed_file.channels))
+    return Response(parsed_file.parse_result)
 
 
 @get(
