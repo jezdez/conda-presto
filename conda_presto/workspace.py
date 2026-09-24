@@ -331,6 +331,22 @@ class WorkspaceInput:
             "repodata": self.repodata_options(),
         }
 
+    def export(self, format_name: str) -> tuple[str, str]:
+        """Render selected declarations through the Workspaces and conda APIs."""
+        workspace = self if self.result.selected else self.select()
+        output = OutputFormat.named(format_name)
+        output.validate_declared_input(len(workspace.result.selected))
+        workspace.validate_output(format_name)
+        environments = []
+        for target in workspace.result.selected:
+            with target.solver_context():
+                environments.extend(
+                    WorkspaceContext(workspace.config).envs_from_manifest(
+                        target.environment, requested_platforms=(target.platform,)
+                    )
+                )
+        return output.render(environments)
+
     @staticmethod
     def repodata_options() -> dict[str, bool]:
         """Match the metadata sources used by the public rattler solver."""

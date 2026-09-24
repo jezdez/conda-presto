@@ -13,6 +13,8 @@ import pytest
 import yaml
 from conda.base.context import context
 from conda.exceptions import PackagesNotFoundError
+from conda.models.match_spec import MatchSpec
+from conda.plugins.types import EnvironmentFormat
 
 from conda_presto.cli import (
     cmd_serve,
@@ -118,6 +120,46 @@ def test_parse_workspace_matches_bounded_parser(
         pytest.param(
             ["--parse", "--serve"], "not allowed with argument", 2, id="serve"
         ),
+        pytest.param(["--export"], "exactly one --file", 1, id="export-missing-file"),
+        pytest.param(
+            ["--export", "-f", "one", "-f", "two", "--format", "explicit"],
+            "exactly one --file",
+            1,
+            id="export-multiple-files",
+        ),
+        pytest.param(
+            ["--export", "-f", "one", "zlib", "--format", "explicit"],
+            "inline package specs",
+            1,
+            id="export-inline-specs",
+        ),
+        pytest.param(
+            ["--export", "-f", "one", "-c", "defaults", "--format", "explicit"],
+            "channel overrides",
+            1,
+            id="export-channel",
+        ),
+        pytest.param(
+            ["--export", "-f", "one", "--override-channels", "--format", "explicit"],
+            "channel overrides",
+            1,
+            id="export-override-channels",
+        ),
+        pytest.param(
+            ["--export", "-f", "one", "--use-local", "--format", "explicit"],
+            "channel overrides",
+            1,
+            id="export-local-channel",
+        ),
+        pytest.param(
+            ["--export", "-f", "one"], "requires --format", 1, id="export-format"
+        ),
+        pytest.param(
+            ["--export", "--parse"], "not allowed with argument", 2, id="export-parse"
+        ),
+        pytest.param(
+            ["--export", "--serve"], "not allowed with argument", 2, id="export-serve"
+        ),
         pytest.param(
             ["--environment", "test", "zlib"],
             "Environment selection requires a workspace manifest",
@@ -135,12 +177,13 @@ def test_parse_rejects_incompatible_arguments(
     assert message in capsys.readouterr().err
 
 
+@pytest.mark.parametrize("mode", [("--parse",), ("--export", "--format", "explicit")])
 def test_parse_timeout_exits_cleanly(
-    run_cli, workspace_manifest_path, monkeypatch, capsys
+    run_cli, workspace_manifest_path, monkeypatch, capsys, mode
 ):
     monkeypatch.setattr("conda_presto.cli.PARSE_TIMEOUT_S", 0)
     with pytest.raises(SystemExit, match="1"):
-        run_cli("--parse", "-f", str(workspace_manifest_path))
+        run_cli(*mode, "-f", str(workspace_manifest_path))
     assert "Parse exceeded 0s timeout" in capsys.readouterr().err
 
 
@@ -154,18 +197,182 @@ def test_parse_timeout_exits_cleanly(
         pytest.param("missing.toml", None, "Cannot read input file", id="missing-file"),
     ],
 )
+@pytest.mark.parametrize("mode", [("--parse",), ("--export", "--format", "explicit")])
 def test_parse_reports_file_errors(
-    run_cli, tmp_path, capsys, filename, content, message
+    run_cli, tmp_path, capsys, filename, content, message, mode
 ):
     path = tmp_path / filename
     if content is not None:
         path.write_bytes(content if isinstance(content, bytes) else content.encode())
     with pytest.raises(SystemExit, match="1"):
-        run_cli("--parse", "-f", str(path))
+        run_cli(*mode, "-f", str(path))
     error = capsys.readouterr().err
     assert message in error
     assert str(tmp_path) not in error
     assert "Traceback" not in error
+
+
+def test_export_preserves_rendered_bytes_and_passes_selection(
+    run_cli, tmp_path, monkeypatch
+):
+    path = tmp_path / "conda.lock"
+    path.write_text("source lockfile")
+    rendered = '# exact export\n  package: "\u03bb"  \n\n'
+
+    def parse(content, filename, platforms, deadline, **kwargs):
+        assert content == "source lockfile"
+        assert filename == "conda.lock"
+        assert platforms == ["gpu"]
+        assert deadline > time.monotonic()
+        assert kwargs == {
+            "export_format": "conda-workspaces-lock-v1",
+            "target_environments": ["test"],
+        }
+        return ParsedInputFile(
+            specs=[],
+            channels=[],
+            environment_format=EnvironmentFormat.lockfile,
+            source_format="conda-workspaces-lock-v1",
+            exported_content=rendered,
+        )
+
+    monkeypatch.setattr(ParsedInputFile, "from_content_until", parse)
+    assert (
+        run_cli(
+            "--export",
+            "-f",
+            str(path),
+            "-e",
+            "test",
+            "-p",
+            "gpu",
+            "--format",
+            "conda-workspaces-lock-v1",
+        )
+        == rendered
+    )
+
+
+def test_export_rejects_unresolved_explicit_output(
+    run_cli, environment_yml_path, capsys
+):
+    with pytest.raises(SystemExit, match="1"):
+        run_cli("--export", "-f", str(environment_yml_path), "--format", "explicit")
+    assert "requires solved package records" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize(
+    "filename", ["environment.yml", "requirements.txt", "conda.toml"]
+)
+def test_export_declarations_preserves_requirements(run_cli, tmp_path, filename):
+    path = tmp_path / filename
+    content = {
+        "environment.yml": "channels: [conda-forge]\ndependencies: ['zlib >=1']\n",
+        "requirements.txt": "zlib >=1\n",
+        "conda.toml": (
+            '[workspace]\nchannels = ["conda-forge"]\nplatforms = ["linux-64"]\n'
+            '[dependencies]\nzlib = ">=1"\n'
+        ),
+    }[filename]
+    path.write_text(content)
+    exported = json.loads(
+        run_cli("--export", "-f", str(path), "--format", "environment-json")
+    )
+    assert [MatchSpec(spec) for spec in exported["dependencies"]] == [
+        MatchSpec("zlib >=1")
+    ]
+
+
+def test_export_reports_unknown_format(run_cli, environment_yml_path, capsys):
+    with pytest.raises(SystemExit, match="1"):
+        run_cli("--export", "-f", str(environment_yml_path), "--format", "unknown")
+    assert "Unknown format 'unknown'" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize(
+    "selectors,selected",
+    [
+        pytest.param([], [], id="discover"),
+        pytest.param(
+            ["-e", "test", "-p", "cpu"],
+            [{"environment": "test", "platform": "cpu", "subdir": "linux-64"}],
+            id="select-logical-target",
+        ),
+    ],
+)
+def test_parse_workspace_lock_discovers_named_targets(
+    run_cli, workspace_lock_path, selectors, selected
+):
+    result = json.loads(run_cli("--parse", "-f", str(workspace_lock_path), *selectors))
+    assert result["format"] == "conda-workspaces-lock-v1"
+    assert {environment["name"] for environment in result["environments"]} == {
+        "default",
+        "test",
+    }
+    assert result["selected"] == selected
+    assert str(workspace_lock_path.parent) not in json.dumps(result)
+
+
+@pytest.mark.parametrize("format_name", ["conda-workspaces-lock-v1", "workspace-lock"])
+@pytest.mark.parametrize("selectors", [(), ("-e", "test", "-p", "cpu")])
+def test_export_workspace_lock_preserves_selected_records(
+    run_cli, workspace_lock_path, workspace_lock_data, format_name, selectors
+):
+    output = run_cli(
+        "--export",
+        "-f",
+        str(workspace_lock_path),
+        *selectors,
+        "--format",
+        format_name,
+    )
+    lock = yaml.safe_load(output)
+    if not selectors:
+        assert lock == workspace_lock_data
+    else:
+        assert set(lock["environments"]) == {"test"}
+        expected = workspace_lock_data["environments"]["test"]
+        assert lock["environments"]["test"] == {
+            **expected,
+            "packages": {"cpu": expected["packages"]["cpu"]},
+        }
+        assert lock["packages"] == workspace_lock_data["packages"][:1]
+        assert lock["metadata"] == workspace_lock_data["metadata"]
+
+
+def test_export_workspace_lock_uses_explicit_exporter(
+    run_cli, workspace_lock_path, workspace_lock_data
+):
+    output = run_cli(
+        "--export",
+        "-f",
+        str(workspace_lock_path),
+        "-e",
+        "test",
+        "-p",
+        "cpu",
+        "--format",
+        "explicit",
+    )
+    assert "@EXPLICIT" in output.splitlines()
+    assert output.split("@EXPLICIT\n", 1)[1].splitlines() == [
+        reference["conda"]
+        for reference in workspace_lock_data["environments"]["test"]["packages"]["cpu"]
+    ]
+
+
+@pytest.mark.parametrize("arguments", [[], ["--format", "conda-workspaces-lock-v1"]])
+def test_workspace_lock_requires_explicit_export_mode(
+    run_cli, workspace_lock_path, monkeypatch, capsys, arguments
+):
+    def unexpected_solve(*args, **kwargs):
+        pytest.fail("Workspace lockfile reached the solver")
+
+    monkeypatch.setattr("conda_presto.cli.solve", unexpected_solve)
+    monkeypatch.setattr("conda_presto.cli.solve_environments", unexpected_solve)
+    with pytest.raises(SystemExit, match="1"):
+        run_cli("-f", str(workspace_lock_path), *arguments)
+    assert "--export with --format" in capsys.readouterr().err
 
 
 @pytest.mark.parametrize(
@@ -431,8 +638,15 @@ def test_convert_environment_yml_structural(
     assert package_marker in out
 
 
+@pytest.mark.parametrize(
+    "mode,output_format",
+    [
+        pytest.param((), "conda-lock-v1", id="legacy-transcode"),
+        pytest.param(("--export",), "pixi-lock-v6", id="explicit-export-mode"),
+    ],
+)
 def test_lockfile_to_lockfile_transcodes_without_solver(
-    run_cli, tmp_path, monkeypatch, pixi_lock_v6_text
+    run_cli, tmp_path, monkeypatch, pixi_lock_v6_text, mode, output_format
 ):
     lock = tmp_path / "pixi.lock"
     lock.write_text(pixi_lock_v6_text)
@@ -441,12 +655,18 @@ def test_lockfile_to_lockfile_transcodes_without_solver(
         raise AssertionError("solver should not run")
 
     monkeypatch.setattr("conda_presto.cli.solve_environments", fail_solve)
-    out = run_cli("-f", str(lock), "-p", "linux-64", "--format", "conda-lock-v1")
+    out = run_cli(*mode, "-f", str(lock), "-p", "linux-64", "--format", output_format)
 
     data = yaml.safe_load(out)
-    assert data["version"] == 1
-    assert data["metadata"]["platforms"] == ["linux-64"]
-    assert {pkg["name"] for pkg in data["package"]} == {"libzlib", "zlib"}
+    if output_format == "conda-lock-v1":
+        assert data["version"] == 1
+        assert data["metadata"]["platforms"] == ["linux-64"]
+        assert {pkg["name"] for pkg in data["package"]} == {"libzlib", "zlib"}
+    else:
+        original = yaml.safe_load(pixi_lock_v6_text)
+        assert data["version"] == 6
+        assert set(data["environments"]["default"]["packages"]) == {"linux-64"}
+        assert data["packages"] == original["packages"]
 
 
 def test_pipeline_environment_yml_to_conda_env_create(tmp_path):

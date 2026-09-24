@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import pytest
+from conda.common.serialize.yaml import dumps as yaml_dumps
 from conda.models.channel import Channel
 from conda.models.records import PackageRecord
 from litestar.stores.file import FileStore
@@ -10,6 +11,60 @@ from litestar.stores.memory import MemoryStore
 from litestar.stores.redis import RedisStore
 
 from conda_presto.resolve import RepodataSnapshot, ResolvedPackage, SolveResult
+
+
+@pytest.fixture
+def workspace_lock_data():
+    records = [
+        {
+            "conda": (
+                "https://conda.anaconda.org/conda-forge/"
+                f"{subdir}/{name}-1.0-h123_0.conda"
+            ),
+            "sha256": "a" * 64,
+            "md5": "b" * 32,
+            "depends": [],
+            "build_number": 7,
+            "license": "BSD-3-Clause",
+            "timestamp": 123456,
+            "source_metadata": {"origin": "saved-lock"},
+        }
+        for subdir, name in (
+            ("linux-64", "probe"),
+            ("linux-64", "gpu-probe"),
+            ("osx-arm64", "probe"),
+        )
+    ]
+    return {
+        "version": 1,
+        "metadata": {"description": "source lock metadata"},
+        "environments": {
+            name: {
+                "channels": [{"url": "conda-forge"}],
+                "source_metadata": {"environment": name},
+                "packages": {
+                    target: [{"conda": record["conda"]}]
+                    for target, record in zip(
+                        ("cpu", "gpu", "osx-arm64"), records, strict=True
+                    )
+                },
+            }
+            for name in ("default", "test")
+        },
+        "packages": records,
+    }
+
+
+@pytest.fixture
+def workspace_lock_text(workspace_lock_data):
+    return yaml_dumps(workspace_lock_data)
+
+
+@pytest.fixture
+def workspace_lock_path(tmp_path, workspace_lock_text):
+    path = tmp_path / "conda.lock"
+    path.write_text(workspace_lock_text, encoding="utf-8")
+    return path
 
 
 @pytest.fixture(params=["memory", "file", "redis"])
