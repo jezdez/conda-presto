@@ -22,7 +22,7 @@ from conda_presto.cli import (
     load_parsed_files,
     main,
 )
-from conda_presto.config import PARSE_TIMEOUT_S
+from conda_presto.config import PARSE_TIMEOUT_S, SOLVE_TIMEOUT_S
 from conda_presto.exceptions import WorkspaceSolveError
 from conda_presto.inputs import ParsedInputFile
 from conda_presto.workspace import WorkspaceInput
@@ -243,8 +243,243 @@ def test_parse_rejects_incompatible_arguments(
 
 
 @pytest.mark.parametrize(
+    "arguments,message",
+    [
+        pytest.param([], "exactly one --file", id="missing-file"),
+        pytest.param(["-f", "one", "-f", "two"], "exactly one --file", id="files"),
+        pytest.param(["-f", "conda.lock"], "requires --manifest", id="manifest"),
+        pytest.param(
+            ["-f", "conda.lock", "--manifest", "conda.toml"],
+            "exactly one --environment",
+            id="environment",
+        ),
+        pytest.param(
+            ["-f", "conda.lock", "--manifest", "conda.toml", "-e", "test"],
+            "exactly one --platform",
+            id="platform",
+        ),
+        *[
+            pytest.param(
+                [
+                    "-f",
+                    "conda.lock",
+                    "--manifest",
+                    "conda.toml",
+                    "-e",
+                    "test",
+                    "-p",
+                    "cpu",
+                    *options,
+                ],
+                message,
+                id=name,
+            )
+            for name, options, message in (
+                ("roots", [], "requires direct conda dependency names"),
+                (
+                    "environments",
+                    ["-e", "default", "probe"],
+                    "exactly one --environment",
+                ),
+                ("platforms", ["-p", "gpu", "probe"], "exactly one --platform"),
+                ("channel", ["-c", "defaults", "probe"], "channel overrides"),
+                (
+                    "override-channels",
+                    ["--override-channels", "probe"],
+                    "channel overrides",
+                ),
+                ("local", ["--use-local", "probe"], "channel overrides"),
+                (
+                    "format",
+                    ["--format", "explicit", "probe"],
+                    "does not accept --format",
+                ),
+                ("parse", ["--parse"], "not allowed with argument"),
+                ("export", ["--export"], "not allowed with argument"),
+                ("validate", ["--validate"], "not allowed with argument"),
+                ("serve", ["--serve"], "not allowed with argument"),
+            )
+        ],
+    ],
+)
+def test_update_requires_explicit_compatible_arguments(
+    run_cli, capsys, arguments, message
+):
+    with pytest.raises(SystemExit) as exc:
+        run_cli("--update", *arguments)
+    output = capsys.readouterr()
+    assert exc.value.code == 2
+    assert message in output.err
+    assert output.out == ""
+
+
+@pytest.fixture
+def update_cli_inputs(
+    tmp_path, workspace_consistent_lock_path, workspace_consistent_manifest_text
+):
+    manifest = tmp_path / "conda.toml"
+    manifest.write_text(workspace_consistent_manifest_text)
+    return workspace_consistent_lock_path, manifest
+
+
+@pytest.fixture
+def update_worker(monkeypatch, workspace_consistent_lock_text):
+    state = {
+        "calls": [],
+        "result": workspace_consistent_lock_text,
+        "error": None,
+        "shutdown": True,
+    }
+
+    class RecordingWorker:
+        def __init__(self, channels, platforms, *, startup_timeout_s):
+            state["calls"].append(("init", channels, platforms, startup_timeout_s))
+
+        def start(self):
+            state["calls"].append(("start",))
+
+        def solve(self, channels, specs, platforms, format_name, deadline, workspace):
+            state["calls"].append(
+                ("solve", channels, specs, platforms, format_name, deadline, workspace)
+            )
+            if state["error"]:
+                raise state["error"]
+            return state["result"], "application/yaml"
+
+        def shutdown(self):
+            state["calls"].append(("shutdown",))
+            return state["shutdown"]
+
+    monkeypatch.setattr("conda_presto.worker.PersistentSolveWorker", RecordingWorker)
+    return state
+
+
+def test_update_uses_bounded_worker_and_preserves_input_files(
+    run_cli, update_cli_inputs, update_worker
+):
+    lock, manifest = update_cli_inputs
+    before = lock.read_bytes(), manifest.read_bytes()
+    started = time.monotonic()
+    output = run_cli(
+        "--update",
+        "-f",
+        str(lock),
+        "--manifest",
+        str(manifest),
+        "-e",
+        "test",
+        "-p",
+        "cpu",
+        "--offline",
+        "probe",
+    )
+    assert output == update_worker["result"]
+    calls = update_worker["calls"]
+    assert [call[0] for call in calls] == ["init", "start", "solve", "shutdown"]
+    assert calls[0][1:3] == ([], [])
+    assert 0 < calls[0][3] <= SOLVE_TIMEOUT_S
+    assert calls[2][1:5] == ([], [], None, "conda-workspaces-lock-v1")
+    assert started < calls[2][5] <= time.monotonic() + SOLVE_TIMEOUT_S
+    update = calls[2][6]
+    assert (update.target.environment, update.target.platform) == ("test", "cpu")
+    assert update.packages == ("probe",)
+    assert update.settings["offline"] is True
+    assert (lock.read_bytes(), manifest.read_bytes()) == before
+
+
+@pytest.mark.parametrize(
+    "error,message",
+    [
+        pytest.param(TimeoutError(), "exceeded", id="timeout"),
+        pytest.param(RuntimeError("private detail"), "worker failed", id="worker"),
+        pytest.param(
+            WorkspaceSolveError("test", "cpu", "No compatible packages"),
+            "No compatible packages",
+            id="solver",
+        ),
+    ],
+)
+def test_update_failure_stops_worker_without_emitting_lock(
+    run_cli, update_cli_inputs, update_worker, capsys, error, message
+):
+    lock, manifest = update_cli_inputs
+    before = lock.read_bytes(), manifest.read_bytes()
+    update_worker["error"] = error
+    with pytest.raises(SystemExit) as exc:
+        run_cli(
+            "--update",
+            "-f",
+            str(lock),
+            "--manifest",
+            str(manifest),
+            "-e",
+            "test",
+            "-p",
+            "cpu",
+            "probe",
+        )
+    output = capsys.readouterr()
+    assert exc.value.code == 1
+    assert output.out == ""
+    assert message in output.err
+    assert "private detail" not in output.err
+    assert update_worker["calls"][-1] == ("shutdown",)
+    assert (lock.read_bytes(), manifest.read_bytes()) == before
+
+
+@pytest.mark.parametrize("root", ["missing", "probe>=1", "pro*", " probe "])
+def test_update_rejects_nonexact_roots_before_starting_worker(
+    run_cli, update_cli_inputs, update_worker, capsys, root
+):
+    lock, manifest = update_cli_inputs
+    with pytest.raises(SystemExit) as exc:
+        run_cli(
+            "--update",
+            "-f",
+            str(lock),
+            "--manifest",
+            str(manifest),
+            "-e",
+            "test",
+            "-p",
+            "cpu",
+            root,
+        )
+    output = capsys.readouterr()
+    assert exc.value.code == 2
+    assert "Input error:" in output.err
+    assert output.out == ""
+    assert update_worker["calls"] == []
+
+
+def test_update_rejects_inconsistent_baseline_before_starting_worker(
+    run_cli, update_cli_inputs, update_worker, capsys
+):
+    lock, manifest = update_cli_inputs
+    manifest.write_text(manifest.read_text().replace("==1.0", "==2.0"))
+    with pytest.raises(SystemExit) as exc:
+        run_cli(
+            "--update",
+            "-f",
+            str(lock),
+            "--manifest",
+            str(manifest),
+            "-e",
+            "test",
+            "-p",
+            "cpu",
+            "probe",
+        )
+    output = capsys.readouterr()
+    assert exc.value.code == 2
+    assert "Input error:" in output.err
+    assert output.out == ""
+    assert update_worker["calls"] == []
+
+
+@pytest.mark.parametrize(
     "mode,exit_code",
-    [("--parse", 1), ("--export", 1), ("--validate", 2)],
+    [("--parse", 1), ("--export", 1), ("--validate", 2), ("--update", 2)],
 )
 def test_parse_timeout_exits_cleanly(
     run_cli,
@@ -258,15 +493,22 @@ def test_parse_timeout_exits_cleanly(
     monkeypatch.setattr("conda_presto.cli.PARSE_TIMEOUT_S", 0)
     extra = (
         ["--manifest", str(workspace_manifest_path)]
-        if mode == "--validate"
+        if mode in ("--validate", "--update")
         else ["--format", "explicit"]
         if mode == "--export"
         else []
     )
+    if mode == "--update":
+        extra.extend(["-e", "test", "-p", "cpu", "probe"])
     with pytest.raises(SystemExit) as exc:
         run_cli(mode, "-f", str(workspace_lock_path), *extra)
     assert exc.value.code == exit_code
-    assert "Parse exceeded 0s timeout" in capsys.readouterr().err
+    message = (
+        "input parsing exceeded its deadline"
+        if mode == "--update"
+        else "Parse exceeded 0s timeout"
+    )
+    assert message in capsys.readouterr().err
 
 
 @pytest.mark.parametrize(
@@ -281,7 +523,7 @@ def test_parse_timeout_exits_cleanly(
 )
 @pytest.mark.parametrize(
     "mode,exit_code",
-    [("--parse", 1), ("--export", 1), ("--validate", 2)],
+    [("--parse", 1), ("--export", 1), ("--validate", 2), ("--update", 2)],
 )
 def test_parse_reports_file_errors(
     run_cli,
@@ -299,11 +541,13 @@ def test_parse_reports_file_errors(
         path.write_bytes(content if isinstance(content, bytes) else content.encode())
     extra = (
         ["--manifest", str(workspace_manifest_path)]
-        if mode == "--validate"
+        if mode in ("--validate", "--update")
         else ["--format", "explicit"]
         if mode == "--export"
         else []
     )
+    if mode == "--update":
+        extra.extend(["-e", "test", "-p", "cpu", "probe"])
     with pytest.raises(SystemExit) as exc:
         run_cli(mode, "-f", str(path), *extra)
     assert exc.value.code == exit_code

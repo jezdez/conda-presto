@@ -12,9 +12,10 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from types import SimpleNamespace
 
 import anyio
-import conda_lockfiles.load_yaml as lockfile_yaml
+import conda.common.serialize.yaml as conda_yaml
 import pytest
 import yaml
+from conda.common.serialize.yaml import dumps as yaml_dumps
 from conda.models.environment import Environment
 from conda.models.match_spec import MatchSpec
 from httpx import ASGITransport, AsyncClient
@@ -42,6 +43,7 @@ from conda_presto.app import (
     sign_post,
     solver_resources_lifespan,
     transcode_post,
+    update_post,
     validate_post,
     verify_post,
     version,
@@ -52,6 +54,7 @@ from conda_presto.inputs import ParsedInputFile
 from conda_presto.resolve import RepodataSnapshot, SolveResult
 from conda_presto.storage import StoreOperationCoordinator
 from conda_presto.workspace import WorkspaceInput, WorkspaceSolveResult
+from conda_presto.workspace_lock import WorkspaceLockUpdate
 
 
 @pytest.fixture()
@@ -64,6 +67,7 @@ def test_app():
             export_post,
             transcode_post,
             validate_post,
+            update_post,
             sbom_post,
             sign_post,
             verify_post,
@@ -2159,6 +2163,7 @@ async def test_openapi_schema(client):
     )
     assert "/parse" in data["paths"]
     assert "/validate" in data["paths"]
+    assert "/update" in data["paths"]
     assert "/r/{key}" in data["paths"]
     assert "/health" in data["paths"]
     assert "/solver/v1" not in data["paths"]
@@ -2192,6 +2197,10 @@ async def test_openapi_schema(client):
         "$ref"
     ].endswith("/WorkspaceLockCheckResult")
     assert {"400", "504"} <= check_operation["responses"].keys()
+    update_operation = data["paths"]["/update"]["post"]
+    assert update_operation["requestBody"]["content"]["application/json"]["schema"][
+        "$ref"
+    ].endswith("/UpdateRequest")
     assert {"file", "environments", "platforms", "manifest", "manifest_filename"} <= (
         data["components"]["schemas"]["SbomRequest"]["properties"].keys()
     )
@@ -3139,7 +3148,7 @@ def test_http_text_parser_does_not_load_yaml(
         raise AssertionError("Text uploads must not reach a YAML loader")
 
     monkeypatch.setattr(inputs_module.os, "environ", {})
-    monkeypatch.setattr(lockfile_yaml, "yaml_safe_load", reject_yaml)
+    monkeypatch.setattr(conda_yaml, "load", reject_yaml)
 
     ParsedInputFile._from_path_process(
         sender,
@@ -3491,6 +3500,270 @@ async def test_check_lock_uses_the_bounded_parser(
 
 
 @pytest.fixture()
+def update_request(check_lock_request):
+    return {
+        **check_lock_request,
+        "environment": "test",
+        "platform": "cpu",
+        "packages": ["probe"],
+    }
+
+
+@pytest.fixture()
+def update_worker(monkeypatch, fresh_repodata_snapshot):
+    calls = []
+
+    def solve(update, format_name=None):
+        assert format_name == "conda-workspaces-lock-v1"
+        calls.append(update)
+        return yaml_dumps(update.lock.source_data), "application/yaml"
+
+    monkeypatch.setattr(WorkspaceLockUpdate, "solve", solve)
+    monkeypatch.setattr(
+        RepodataSnapshot, "capture", lambda *args, **kwargs: fresh_repodata_snapshot
+    )
+    return calls
+
+
+@pytest.mark.anyio
+async def test_update_retains_complete_lock_and_caches_each_uploaded_input(
+    client, update_request, update_worker
+):
+    first = await client.post("/update", json=update_request)
+    second = await client.post("/update", json=update_request)
+    assert first.status_code == second.status_code == 200, first.text
+    assert first.headers["content-type"].startswith("application/yaml")
+    assert len(update_worker) == 1
+    assert update_worker[0].target.environment == "test"
+    assert update_worker[0].target.platform == "cpu"
+    assert yaml.safe_load(first.content) == yaml.safe_load(update_request["file"])
+    retained = await client.get(first.headers["location"])
+    assert first.content == second.content == retained.content
+    for field in ("file", "manifest"):
+        response = await client.post(
+            "/update", json={**update_request, field: update_request[field] + "\n"}
+        )
+        assert response.status_code == 200, response.text
+    other_target = await client.post(
+        "/update",
+        json={**update_request, "platform": "gpu", "packages": ["gpu-probe"]},
+    )
+    assert other_target.status_code == 200, other_target.text
+    assert len(update_worker) == 4
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    "fields",
+    [
+        pytest.param({"environment": ""}, id="empty-environment"),
+        pytest.param({"environment": "missing"}, id="unknown-environment"),
+        pytest.param({"platform": ""}, id="empty-target"),
+        pytest.param({"platform": "linux-64"}, id="ambiguous-target"),
+        pytest.param({"platform": "missing"}, id="unknown-target"),
+        pytest.param({"packages": []}, id="no-roots"),
+        pytest.param({"packages": [""]}, id="empty-root"),
+        pytest.param({"packages": ["missing"]}, id="unknown-root"),
+        pytest.param({"packages": ["probe>=1"]}, id="constraint"),
+        pytest.param({"packages": ["probe*"]}, id="wildcard"),
+        pytest.param({"packages": "probe"}, id="root-string"),
+        pytest.param({"environments": ["test", "default"]}, id="environment-array"),
+        pytest.param({"platforms": ["cpu", "gpu"]}, id="target-array"),
+        pytest.param({"channels": []}, id="channel-override"),
+        pytest.param({"format": "explicit"}, id="alternate-output"),
+        pytest.param({"specs": []}, id="extra-specs"),
+    ],
+)
+async def test_update_rejects_invalid_selection_before_solving(
+    client, update_request, update_worker, fields
+):
+    response = await client.post("/update", json={**update_request, **fields})
+    assert response.status_code == 400, response.text
+    assert "location" not in response.headers
+    assert not update_worker
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    "field",
+    [
+        "file",
+        "filename",
+        "manifest",
+        "manifest_filename",
+        "environment",
+        "platform",
+        "packages",
+    ],
+)
+async def test_update_requires_complete_request(client, update_request, field):
+    del update_request[field]
+    response = await client.post("/update", json=update_request)
+    assert response.status_code == 400, response.text
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    "content_type, query", [("text/plain", ""), ("application/json", "?platform=cpu")]
+)
+async def test_update_rejects_media_type_and_query_overrides(
+    client, update_request, update_worker, content_type, query
+):
+    response = await client.post(
+        "/update" + query,
+        content=json.dumps(update_request),
+        headers={"Content-Type": content_type},
+    )
+    assert response.status_code == 400, response.text
+    assert not update_worker
+
+
+@pytest.mark.anyio
+async def test_update_rejects_an_inconsistent_unselected_target(
+    client, update_request, update_worker, workspace_consistent_lock_data
+):
+    workspace_consistent_lock_data["packages"][2]["depends"] = ["missing >=1"]
+    update_request["file"] = yaml.safe_dump(workspace_consistent_lock_data)
+    response = await client.post("/update", json=update_request)
+    assert response.status_code == 400, response.text
+    assert response.headers["cache-control"] == "no-store"
+    assert not update_worker
+
+
+@pytest.mark.anyio
+async def test_update_checks_channel_allowlist_before_solving(
+    client, monkeypatch, update_request, update_worker
+):
+    monkeypatch.setattr(app_module, "CHANNEL_ALLOWLIST", ["other"])
+    response = await client.post("/update", json=update_request)
+    assert response.status_code == 400, response.text
+    assert "Unsupported channel" in response.json()["error"]
+    assert not update_worker
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("allowed", [False, True], ids=["blocked", "allowed"])
+async def test_update_checks_dependency_channels_and_tracks_their_metadata(
+    client, monkeypatch, update_request, update_worker, fresh_repodata_snapshot, allowed
+):
+    dependency_channel = "https://conda.anaconda.org/conda-forge/linux-64/other"
+    update_request["manifest"] = update_request["manifest"].replace(
+        'probe = "==1.0"',
+        f'probe = {{ version = "==1.0", channel = "{dependency_channel}" }}',
+        1,
+    )
+    update_request["file"] = update_request["file"].replace(
+        "https://conda.anaconda.org/conda-forge/linux-64/probe-",
+        f"{dependency_channel}/linux-64/probe-",
+    )
+    channels = [
+        "https://conda.anaconda.org/conda-forge",
+        "https://conda.anaconda.org/conda-forge/other",
+    ]
+    monkeypatch.setattr(
+        app_module, "CHANNEL_ALLOWLIST", channels if allowed else ["conda-forge"]
+    )
+    captured = []
+
+    def capture(channels, platforms, **kwargs):
+        captured.append(channels)
+        return fresh_repodata_snapshot
+
+    monkeypatch.setattr(RepodataSnapshot, "capture", capture)
+    response = await client.post("/update", json=update_request)
+    if allowed:
+        assert response.status_code == 200, response.text
+        assert len(update_worker) == 1
+        assert captured and all(value == channels for value in captured)
+    else:
+        assert response.status_code == 400, response.text
+        assert "Unsupported channel" in response.json()["error"]
+        assert response.headers["cache-control"] == "no-store"
+        assert not update_worker
+        assert not captured
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    "failure, status",
+    [(TimeoutError(), 504), (WorkspaceSolveError("test", "cpu", "update failed"), 500)],
+)
+async def test_update_failures_do_not_replace_retained_outputs(
+    client, monkeypatch, update_request, update_worker, failure, status
+):
+    successful = await client.post("/update", json=update_request)
+    assert successful.status_code == 200, successful.text
+
+    def fail(*args, **kwargs):
+        raise failure
+
+    monkeypatch.setattr(WorkspaceLockUpdate, "solve", fail)
+    response = await client.post(
+        "/update", json={**update_request, "file": update_request["file"] + "\n"}
+    )
+    assert response.status_code == status, response.text
+    assert "location" not in response.headers
+    retained = await client.get(successful.headers["location"])
+    assert retained.content == successful.content
+
+
+@pytest.mark.anyio
+async def test_update_does_not_reset_expired_deadline_after_parsing(
+    client,
+    monkeypatch,
+    update_request,
+    update_worker,
+    workspace_consistent_lock_path,
+    workspace_consistent_manifest_text,
+):
+    parsed = ParsedInputFile.from_path(
+        workspace_consistent_lock_path,
+        manifest_content=workspace_consistent_manifest_text,
+        manifest_filename="conda.toml",
+        update=("test", "cpu", ("probe",)),
+    )
+
+    async def delayed_parse(*args, **kwargs):
+        await anyio.sleep(0.04)
+        assert time.monotonic() > kwargs["deadline"]
+        return parsed
+
+    monkeypatch.setattr(app_module, "SOLVE_TIMEOUT_S", 0.02)
+    monkeypatch.setattr(app_module, "parse_input_for_request", delayed_parse)
+    response = await client.post("/update", json=update_request)
+    assert response.status_code == 504, response.text
+    assert response.headers["cache-control"] == "no-store"
+    assert not update_worker
+
+
+@pytest.mark.anyio
+async def test_update_worker_uses_the_deadline_from_before_parsing(
+    client, monkeypatch, test_app, update_request, update_worker
+):
+    deadlines = []
+    parse_input = app_module.parse_input_for_request
+
+    async def parse(*args, **kwargs):
+        deadlines.append(kwargs["deadline"])
+        parsed = await parse_input(*args, **kwargs)
+        await anyio.sleep(0.05)
+        return parsed
+
+    def solve(channels, specs, platforms, format_name, deadline, *, workspace):
+        deadlines.append(deadline)
+        assert isinstance(workspace, WorkspaceLockUpdate)
+        assert platforms == [workspace.target.subdir]
+        return workspace.solve(format_name)
+
+    monkeypatch.setattr(app_module, "parse_input_for_request", parse)
+    test_app.state.solve_worker = SimpleNamespace(solve=solve)
+    response = await client.post("/update", json=update_request)
+    assert response.status_code == 200, response.text
+    assert len(deadlines) == 2
+    assert abs(deadlines[1] - deadlines[0]) < 0.01
+
+
+@pytest.fixture()
 def inline_attestation(monkeypatch):
     def run_until(service, operation, *, deadline, **kwargs):
         if operation == "verify":
@@ -3737,6 +4010,7 @@ async def test_capabilities_separates_provider_and_signing_configuration(
         "workspace_lock_parse": True,
         "workspace_lock_export": True,
         "workspace_lock_check": True,
+        "workspace_lock_update": True,
         "workspace_lock_sbom": True,
         "export": True,
         "sbom": True,

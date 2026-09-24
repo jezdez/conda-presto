@@ -22,7 +22,7 @@ jobs:
           persist-credentials: false
       - uses: prefix-dev/setup-pixi@d3f436a425481402e6a95a1d1fc10331c708cd9e # v0.10.2
         with:
-          pixi-version: v0.70.1
+          pixi-version: v0.80.0
           environments: dev
           cache: true
       - run: pixi run -e dev lint
@@ -37,7 +37,7 @@ jobs:
           persist-credentials: false
       - uses: prefix-dev/setup-pixi@d3f436a425481402e6a95a1d1fc10331c708cd9e # v0.10.2
         with:
-          pixi-version: v0.70.1
+          pixi-version: v0.80.0
           environments: test
           cache: true
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
@@ -68,7 +68,7 @@ jobs:
           persist-credentials: false
       - uses: prefix-dev/setup-pixi@d3f436a425481402e6a95a1d1fc10331c708cd9e # v0.10.2
         with:
-          pixi-version: v0.70.1
+          pixi-version: v0.80.0
           environments: test
           cache: true
       - run: pixi run -e test python tests/integration_service.py --redis-url redis://127.0.0.1:6379/0

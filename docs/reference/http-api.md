@@ -10,6 +10,7 @@ Start the service with `conda presto --serve`. `/openapi.json` and `/` return th
 | POST | `/transcode` | Convert supported lockfiles through the lock-to-lock compatibility operation |
 | POST | `/sbom` | Export separate SBOMs from solved requirements or selected workspace lock entries |
 | POST | `/validate` | Check a complete workspace lock against its manifest without solving |
+| POST | `/update` | Update direct dependencies in one target and return the complete workspace lock |
 | POST | `/sign` | Sign a retained output using the service identity |
 | POST | `/verify` | Check supplied bytes, a bundle and an expected signer |
 | GET | `/r/{key}` | Retrieve an exact retained output |
@@ -206,6 +207,28 @@ Both a consistent lock and a supported mismatch return HTTP 200:
 
 Checking runs in the bounded parser process without solving, fetching repodata, downloading archives, installing packages or executing tasks. Check results use `Cache-Control: no-store` and are not retained. Consistency does not establish package freshness, archive integrity, vulnerability policy or whether the lock is the newest possible solution. See {doc}`../tutorials/http-api` for an example with a changed manifest.
 
+## Update selected workspace dependencies
+
+`POST /update` accepts a JSON envelope with `file`, `filename`, `manifest` and `manifest_filename`, using the same complete baseline lock and manifest inputs as `/validate`. It also requires:
+
+| Field | Type | Meaning |
+|---|---|---|
+| `environment` | String | One declared environment name |
+| `platform` | String | One declared logical target name |
+| `packages` | Array of strings | Nonempty selection of exact direct conda dependency names |
+
+For example, `"environment": "test", "platform": "linux-64", "packages": ["numpy"]` makes the declared `numpy` root eligible for updating in that pair. Names include direct requirements composed from the environment's features and target settings. Version constraints, wildcard names, transitive-only packages, unknown roots and missing or ambiguous targets are rejected. Manifest constraints remain unchanged.
+
+Each request selects exactly one environment and target. Plural `environments` and `platforms` arrays, extra `specs`, channel overrides, alternate `format` values and all query parameters are rejected. The selected target's declared channels and any dependency-specific channels on the selected update roots must satisfy the deployment's channel allowlist.
+
+Before updating, Presto checks the entire baseline against the submitted manifest through `/validate`'s shared implementation, including unselected targets. Inconsistent, incomplete, malformed or unsupported input returns HTTP 400 before solving. A failed preflight never falls back to a complete relock. The same conda-only and system-requirement restrictions apply as for validation.
+
+The isolated worker calls conda-workspaces' `render_lockfile()` with the supplied baseline and selected update roots. Workspaces uses temporary prefix metadata to guide the solve and preserves saved selections for unselected environments and targets. Dependencies within the selected target can also change. This operation does not guarantee that every selected root reaches the newest available version. It does not edit the manifest, install an environment or replace uploaded files.
+
+Success returns HTTP 200 with one complete `conda-workspaces-lock-v1` YAML document, after the resulting lock passes whole-workspace consistency checking. Serialization can be canonicalized. Worker failures return HTTP 500, and deadline expiry returns HTTP 504. Neither returns a partial lock or replaces previously retained artifacts.
+
+Eligible successful output uses the existing `/r/` retention mechanism. Cache identity includes both uploaded contents, selected root names, the environment and logical target, provider versions, repodata state and effective solve settings. The solve deadline starts before parsing and includes parsing, cache access and worker execution. Parsing also retains its own shorter timeout. See {doc}`../tutorials/http-api` for an update example.
+
 ## Optional signing
 
 `POST /sign` accepts only `{"key":"..."}`, using the key from a retained output's `/r/` location. It does not accept caller-authored artifacts or statements.
@@ -236,7 +259,7 @@ Success returns `signature_verified`, `artifact_verified` and `signer_verified` 
 
 ## Availability, limits and errors
 
-`GET /capabilities` returns booleans named `export`, `sbom`, `sign`, `verify`, `workspace_parse`, `workspace_solve`, `workspace_lock_parse`, `workspace_lock_export`, `workspace_lock_sbom` and `workspace_lock_check`. `export` reports the no-solve export operation, subject to the input and format restrictions above. The lock capabilities report workspace lock inspection, selection and exact-record export support. `workspace_lock_sbom` requires the installed CycloneDX exporter and reports support for named locked-environment collections. `workspace_lock_check` reports whole-workspace manifest–lock consistency checking. `workspace_parse` and `workspace_solve` report workspace discovery, selection and solving support. `sign` reports installed support and enabled configuration, not a guarantee that credentials or remote signing services are currently available. Provider versions, including conda-workspaces, appear in `/version` when installed.
+`GET /capabilities` returns booleans named `export`, `sbom`, `sign`, `verify`, `workspace_parse`, `workspace_solve`, `workspace_lock_parse`, `workspace_lock_export`, `workspace_lock_sbom`, `workspace_lock_check` and `workspace_lock_update`. `export` reports the no-solve export operation, subject to the input and format restrictions above. The lock capabilities report workspace lock inspection, selection and exact-record export support. `workspace_lock_sbom` requires the installed CycloneDX exporter and reports support for named locked-environment collections. `workspace_lock_check` reports whole-workspace manifest–lock consistency checking. `workspace_lock_update` reports selective direct dependency updates from a complete consistent baseline. `workspace_parse` and `workspace_solve` report workspace discovery, selection and solving support. `sign` reports installed support and enabled configuration, not a guarantee that credentials or remote signing services are currently available. Provider versions, including conda-workspaces, appear in `/version` when installed.
 
 `GET /health` returns HTTP 200 with `{"status":"ok"}` when the configured persistent worker is ready. A stopped worker produces HTTP 503 with `{"status":"unavailable"}` while recovery begins. Without persistent-worker mode, the probe reports HTTP 200.
 

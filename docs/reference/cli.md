@@ -11,7 +11,7 @@ conda presto [OPTIONS] [SPECS...]
 ```
 
 Resolve package specs or environment files to fully pinned package lists
-without installing anything. Use `--parse` to inspect declarations or saved workspace locks, `--export` to render declarations or saved records, and `--validate` to compare a workspace manifest with its lock without solving.
+without installing anything. Use `--parse` to inspect declarations or saved workspace locks, `--export` to render declarations or saved records, `--validate` to compare a workspace manifest with its lock without solving, and `--update` to update selected dependencies in a saved lock.
 
 ## Positional arguments
 
@@ -19,6 +19,8 @@ without installing anything. Use `--parse` to inspect declarations or saved work
 : One or more conda match specs, e.g. `python=3.12 numpy`. These are
   combined with ordinary environment files passed via `--file`.
   Workspace manifests do not accept additional inline specs.
+  With `--update`, supply exact declared direct conda dependency names instead
+  of match specs. Versions, wildcards and PyPI dependency names are rejected.
 
 ## Options
 
@@ -65,7 +67,7 @@ without installing anything. Use `--parse` to inspect declarations or saved work
   ```
 
 `-e`, `--environment`
-: Select a workspace environment for parsing, solving or export. Can be repeated.
+: Select a workspace environment for parsing, solving, export or update. Can be repeated except with `--update`, which requires exactly one environment.
   Workspace solves default to all environments. This option is rejected
   for ordinary inputs.
 
@@ -76,7 +78,7 @@ without installing anything. Use `--parse` to inspect declarations or saved work
 
   For workspace locks, use `conda-workspaces-lock-v1` to extract source entries with their package URLs, hashes and metadata. Other formats require one selected environment. Exporters without a multiplatform callback require one target. Targets sharing a concrete subdir cannot be combined outside workspace lock output. Normalized formats do not preserve all source metadata, comments, tasks or feature composition.
 
-  Export mode rejects additional specs, multiple input files and channel overrides. Workspace locks require `--parse`, `--export` or `--validate`, they are not solve inputs. Existing conda-lockfiles lock-to-lock conversion remains available with its supported formats and restrictions. See {doc}`../how-to/extract-workspace-lock`.
+  Export mode rejects additional specs, multiple input files and channel overrides. Workspace locks require `--parse`, `--export`, `--validate` or `--update`. Existing conda-lockfiles lock-to-lock conversion remains available with its supported formats and restrictions. See {doc}`../how-to/extract-workspace-lock`.
 
   ```bash
   conda presto --export -f environment.yml --format requirements
@@ -90,14 +92,26 @@ without installing anything. Use `--parse` to inspect declarations or saved work
 
   Output is JSON with `consistent` and a `targets` list. Each target reports its `environment`, logical `platform`, concrete `subdir`, `consistent` result and a mismatch `reason`, or `null` when consistent. Workspace-wide declaration mismatches can appear in several target results and name another affected environment. Exit status is 0 when all targets agree, 1 for a completed check with mismatches, and 2 for invalid or unsupported input, unreadable files or a parser timeout. Invalid input writes an error to stderr without a JSON report.
 
-  This mode rejects additional specs, channel overrides, `--format`, `--platform` and `--environment`. It is mutually exclusive with `--parse`, `--export` and `--serve`. PyPI dependencies, external package references and `archspec` system requirements are unsupported. The check compares saved records with the supplied declarations. It does not assess newer package versions, package payloads or vulnerabilities. See {doc}`../how-to/check-workspace-lock`.
+  This mode rejects additional specs, channel overrides, `--format`, `--platform` and `--environment`. It is mutually exclusive with `--parse`, `--export`, `--update` and `--serve`. PyPI dependencies, external package references and `archspec` system requirements are unsupported. The check compares saved records with the supplied declarations. It does not assess newer package versions, package payloads or vulnerabilities. See {doc}`../how-to/check-workspace-lock`.
 
   ```bash
   conda presto --validate -f conda.lock --manifest conda.toml
   ```
 
+`--update`
+: Update exact direct conda dependency names in one saved workspace environment and logical target. Require exactly one `--file`, a companion `--manifest`, one `--environment`, one `--platform` and at least one positional dependency name. The target selector must name a declared logical target. No environment or target is inferred.
+
+  The complete baseline must satisfy the unchanged manifest before solving. Presto calls conda-workspaces' selective update API in an isolated worker, then checks the complete result before writing the updated `conda.lock` YAML to stdout. Unselected environment and target package selections remain unchanged. Serialization may canonicalize the lock. Updated targets follow the provider's selective solve behavior, which may change transitive dependencies and does not promise the newest version of every requested root.
+
+  This mode rejects channel overrides, `--format`, version constraints, wildcards, unknown roots, and unsupported baseline records. It is mutually exclusive with `--parse`, `--export`, `--validate` and `--serve`. PyPI dependencies, external package references and `archspec` system requirements are unsupported. Input errors exit with status 2. Solver or worker failures exit with status 1. No lock content is written to stdout on failure, and Presto does not modify either input file. The shared update deadline is `CONDA_PRESTO_SOLVE_TIMEOUT_S`, with input parsing additionally capped by `CONDA_PRESTO_PARSE_TIMEOUT_S`.
+
+  ```bash
+  conda presto --update -f conda.lock --manifest conda.toml \
+    -e test -p cpu numpy > updated.lock
+  ```
+
 `--manifest`
-: Companion workspace manifest for `--export` or `--validate` of a workspace lock. The file must be named `conda.toml`, `pixi.toml` or `pyproject.toml`. For export, the selected environment, target, concrete platform, ordered channels and direct requirements must agree with the saved records. This supplies declared roots to exporters such as conda-sboms. PyPI declarations are unsupported.
+: Companion workspace manifest for `--export`, `--validate` or `--update` of a workspace lock. The file must be named `conda.toml`, `pixi.toml` or `pyproject.toml`. For export, the selected environment, target, concrete platform, ordered channels and direct requirements must agree with the saved records. This supplies declared roots to exporters such as conda-sboms. PyPI declarations are unsupported.
 
   Without this option, SBOM roots are inferred from the saved dependency graph. Manifest context is rejected for parse, solve and serve modes, ordinary inputs and source workspace-lock extraction.
 
@@ -262,8 +276,8 @@ conda presto --serve --host 0.0.0.0 --port 9000
 | Code | Meaning |
 |---:|---|
 | 0 | Command completed. `--validate` found all targets consistent. Default solve JSON output may still contain per-platform `error` fields. |
-| 1 | `--validate` completed with mismatches. In other modes, invalid input, unknown format, or solver failure on an exporter-format path. |
-| 2 | Argument parsing error from `argparse`, or invalid input, unsupported input or a timeout in `--validate` mode. |
+| 1 | `--validate` completed with mismatches. `--update` failed during solving or worker execution. In other modes, invalid input, unknown format, or solver failure on an exporter-format path. |
+| 2 | Argument parsing error from `argparse`, or invalid input, unsupported input or a parser timeout in `--validate` or `--update` mode. |
 
 ## See also
 
