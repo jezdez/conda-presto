@@ -228,15 +228,20 @@ async def test_workspace_dependency_channel_is_rejected_before_cache(
 
 
 @pytest.mark.parametrize(
-    "channel",
+    "channel,expected",
     [
-        "https://elsewhere.example.test/team",
-        "file:///tmp/channel",
+        ("https://elsewhere.example.test/team", "https://elsewhere.example.test/team"),
+        ("file:///tmp/channel", "file:///tmp/channel"),
+        (
+            "https://elsewhere.example.test/team/linux-64",
+            "https://elsewhere.example.test/team",
+        ),
+        ("conda-forge", "https://conda.anaconda.org/conda-forge"),
     ],
-    ids=["remote", "local"],
+    ids=["remote", "local", "subdir", "duplicate"],
 )
 def test_workspace_effective_channels_preserve_sources_and_declared_order(
-    channel_manifest, channel
+    channel_manifest, channel, expected
 ):
     parsed = WorkspaceInput.from_path(
         channel_manifest(channel), environments=["default"]
@@ -245,8 +250,9 @@ def test_workspace_effective_channels_preserve_sources_and_declared_order(
     assert target.channels == ["conda-forge"]
     assert target.channel_priority == "strict"
     effective = parsed.solve_channels(target)
-    assert effective[-1] == channel
-    assert len(effective) == 2
+    assert effective == list(
+        dict.fromkeys(["https://conda.anaconda.org/conda-forge", expected])
+    )
     assert target.channels == ["conda-forge"]
 
 

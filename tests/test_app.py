@@ -2579,7 +2579,7 @@ async def test_workspace_solve_selectors_reach_worker(
         (target.environment, target.platform) for target in workspace.result.selected
     ] == expected
     assert "zlib" in specs
-    assert channels == ["conda-forge"]
+    assert channels == ["https://conda.anaconda.org/conda-forge"]
     assert platforms == [expected[0][1]]
     assert format_name == "conda-workspaces-lock-v1"
 

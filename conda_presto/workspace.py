@@ -21,7 +21,7 @@ from conda.models.environment import Environment, EnvironmentConfig
 from conda.models.version import VersionOrder
 from conda_workspaces.context import WorkspaceContext
 from conda_workspaces.manifests import PARSER_BY_FILENAME
-from conda_workspaces.models import redact_channel_name, redact_channel_url
+from conda_workspaces.models import redact_channel_name
 from conda_workspaces.resolver import resolve_environment
 from packaging.specifiers import SpecifierSet
 from packaging.utils import canonicalize_name
@@ -282,7 +282,7 @@ class WorkspaceInput:
     ) -> list[str]:
         """Include channels requested by dependencies without changing declarations."""
         resolved = resolve_environment(self.config, target.environment, target.platform)
-        channels = list(target.channels)
+        channels = list(resolved.channels)
         for name, dependency in resolved.conda_dependencies.items():
             if packages is not None and name not in packages:
                 continue
@@ -291,8 +291,14 @@ class WorkspaceInput:
                 original = dependency.original_spec_str
                 if original and original.startswith("file://"):
                     channel = Channel(original.split("::")[0])
-                channels.append(redact_channel_url(channel))
-        return list(dict.fromkeys(channels))
+                channels.append(channel)
+        return list(
+            dict.fromkeys(
+                redact_channel_name(url)
+                for channel in channels
+                for url in channel.base_urls
+            )
+        )
 
     def cache_identity(self) -> dict[str, Any]:
         """Describe selected requirements, virtual packages and their providers."""
