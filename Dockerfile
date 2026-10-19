@@ -1,4 +1,4 @@
-FROM ghcr.io/prefix-dev/pixi:0.81.0@sha256:788ae451641666e2d1f79d3dbe35392dfc7e9b394b16a3acb75c347f3badb2ab AS build
+FROM ghcr.io/prefix-dev/pixi:0.82.0@sha256:e6cca082e52de275f4e6fb4e6648522f30e4ed334fed37378cde393e07405200 AS build
 
 WORKDIR /app
 COPY pyproject.toml pixi.lock README.md ./
